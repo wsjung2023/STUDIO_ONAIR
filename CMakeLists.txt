@@ -45,6 +45,35 @@ add_subdirectory(src/fakes)
 # above this line).
 add_subdirectory(src/app)
 
+qt_add_executable(creator_studio
+    src/main.cpp
+)
+
+qt_add_qml_module(creator_studio
+    URI CreatorStudio
+    VERSION 1.0
+    QML_FILES
+        qml/Main.qml
+        qml/HomePage.qml
+        qml/StudioPage.qml
+        qml/EditorPage.qml
+        qml/TestPattern.qml
+)
+
+target_link_libraries(creator_studio
+    PRIVATE
+        cs_app
+        Qt6::Quick
+        Qt6::QuickControls2
+)
+
+cs_apply_warnings(creator_studio)
+
+install(TARGETS creator_studio
+    BUNDLE DESTINATION .
+    RUNTIME DESTINATION bin
+)
+
 if(CS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

@@ -2,14 +2,18 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+// Application shell. Owns nothing but navigation: every page reaches the
+// application layer through studioController, never through this file.
 ApplicationWindow {
+    id: window
+
     width: 1440
     height: 900
     visible: true
-    title: "Creator Studio"
+    title: qsTr("Creator Studio")
 
+    readonly property var pages: ["Home", "Studio", "Editor"]
     property string currentPage: "Home"
-    property bool recording: false
 
     header: ToolBar {
         RowLayout {
@@ -17,118 +21,55 @@ ApplicationWindow {
             spacing: 12
 
             Label {
-                text: "Creator Studio"
+                text: qsTr("Creator Studio")
                 font.pixelSize: 20
                 font.bold: true
             }
 
-            ToolButton { text: "Home"; onClicked: currentPage = "Home" }
-            ToolButton { text: "Studio"; onClicked: currentPage = "Studio" }
-            ToolButton { text: "Editor"; onClicked: currentPage = "Editor" }
+            Repeater {
+                model: window.pages
+
+                ToolButton {
+                    required property string modelData
+                    text: modelData
+                    checked: window.currentPage === modelData
+                    // Navigating away mid-take would leave the Record and Stop
+                    // buttons unreachable while a session is still running.
+                    enabled: !studioController.recording
+                    onClicked: window.currentPage = modelData
+                }
+            }
 
             Item { Layout.fillWidth: true }
 
+            Label {
+                visible: window.currentPage === "Studio"
+                text: studioController.takeDuration
+                font.family: "monospace"
+                font.pixelSize: 16
+            }
+
             Button {
-                visible: currentPage === "Studio"
-                text: recording ? "Stop" : "Record"
-                onClicked: recording = !recording
+                visible: window.currentPage === "Studio"
+                text: studioController.recording ? qsTr("Stop") : qsTr("Record")
+                highlighted: studioController.recording
+                onClicked: studioController.recording
+                           ? studioController.stopRecording()
+                           : studioController.startRecording()
             }
         }
     }
 
     StackLayout {
         anchors.fill: parent
-        currentIndex: currentPage === "Home" ? 0 : currentPage === "Studio" ? 1 : 2
+        currentIndex: window.pages.indexOf(window.currentPage)
 
-        Pane {
-            ColumnLayout {
-                anchors.centerIn: parent
-                spacing: 16
-                Label { text: "화면·카메라·아바타를 편집 가능한 프로젝트로"; font.pixelSize: 30 }
-                Button { text: "새 녹화"; onClicked: currentPage = "Studio" }
-                Button { text: "새 편집"; onClicked: currentPage = "Editor" }
-            }
+        HomePage {
+            onNavigateTo: (page) => window.currentPage = page
         }
 
-        Item {
-            RowLayout {
-                anchors.fill: parent
-                spacing: 1
+        StudioPage {}
 
-                Pane {
-                    Layout.preferredWidth: 250
-                    Layout.fillHeight: true
-                    ColumnLayout {
-                        anchors.fill: parent
-                        Label { text: "Scenes"; font.bold: true }
-                        ListView {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            model: ["강의", "화면 전체", "카메라 중심"]
-                            delegate: ItemDelegate { required property string modelData; width: ListView.view.width; text: modelData }
-                        }
-                        Label { text: "Sources"; font.bold: true }
-                        Repeater {
-                            model: ["Screen", "Camera", "Microphone", "System Audio"]
-                            CheckBox { required property string modelData; text: modelData; checked: true }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    color: "#1f2228"
-                    border.color: "#3a3f49"
-                    Text {
-                        anchors.centerIn: parent
-                        text: recording ? "● Recording — Test Pattern" : "Preview — Test Pattern"
-                        color: recording ? "#ff6b6b" : "white"
-                        font.pixelSize: 24
-                    }
-                }
-
-                Pane {
-                    Layout.preferredWidth: 300
-                    Layout.fillHeight: true
-                    ColumnLayout {
-                        anchors.fill: parent
-                        Label { text: "Inspector"; font.bold: true }
-                        Label { text: "Position / Crop / Mask / Tracking"; wrapMode: Text.WordWrap }
-                        Slider { from: 0; to: 1; value: 1 }
-                    }
-                }
-            }
-        }
-
-        Item {
-            ColumnLayout {
-                anchors.fill: parent
-                spacing: 1
-                RowLayout {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Pane { Layout.preferredWidth: 260; Layout.fillHeight: true; Label { text: "Media / Transcript" } }
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        color: "#1f2228"
-                        Text { anchors.centerIn: parent; text: "Editor Preview"; color: "white"; font.pixelSize: 24 }
-                    }
-                    Pane { Layout.preferredWidth: 300; Layout.fillHeight: true; Label { text: "Inspector / Effects" } }
-                }
-                Pane {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 300
-                    Column {
-                        Label { text: "V3  Titles" }
-                        Label { text: "V2  Camera" }
-                        Label { text: "V1  Screen" }
-                        Label { text: "A2  System Audio" }
-                        Label { text: "A1  Microphone" }
-                    }
-                }
-            }
-        }
+        EditorPage {}
     }
 }
