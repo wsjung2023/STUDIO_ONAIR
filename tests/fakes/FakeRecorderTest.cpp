@@ -173,7 +173,18 @@ TEST(FakeRecorderTest, RejectsInvalidSegmentDuration) {
 
 TEST(FakeRecorderTest, CanRecordASecondTake) {
     FakeRecorder recorder;
+    FakeCaptureSource source{SourceId::create("screen-1").value(), "Fake Screen"};
     ASSERT_TRUE(recorder.start(makeConfig(), at(0)).hasValue());
+    ASSERT_TRUE(source.start(CaptureConfig{}).hasValue());
+
+    // Feed the first take, or the counter assertion below cannot tell "reset on
+    // start" from "no reset logic at all" - both leave it at zero.
+    for (int frame = 0; frame < 30; ++frame) {
+        const auto produced = source.tick();
+        ASSERT_TRUE(produced.hasValue());
+        ASSERT_TRUE(recorder.accept(produced.value()).hasValue());
+    }
+    ASSERT_EQ(recorder.stats().framesAccepted, 30u);
     ASSERT_TRUE(recorder.stop(at(2)).hasValue());
 
     RecorderConfig second = makeConfig();
@@ -184,7 +195,8 @@ TEST(FakeRecorderTest, CanRecordASecondTake) {
     ASSERT_TRUE(session.hasValue());
     EXPECT_EQ(session.value().id().value(), "session-2");
     EXPECT_EQ(session.value().duration(), DurationNs{std::chrono::seconds{2}});
-    // Counters are per-take, not cumulative.
+    // Counters are per-take, not cumulative. This is only a real check because
+    // the first take pushed framesAccepted to 30 above.
     EXPECT_EQ(recorder.stats().framesAccepted, 0u);
 }
 
