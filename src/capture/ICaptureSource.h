@@ -40,6 +40,20 @@ struct CaptureStats final {
 /// captured goes through an application service (CLAUDE.md 6); a source that
 /// reaches into the DB makes the capture layer untestable and couples it to
 /// storage.
+///
+/// Frame delivery is deliberately not on this interface yet. Real OS capture
+/// pushes - ScreenCaptureKit and Windows.Graphics.Capture call us when a frame
+/// is ready - so a push source needs some way to hand frames onward, and this
+/// port does not define one. IPullCaptureSource covers the pull path, which is
+/// all R0-01 needs.
+///
+/// The shape is left open on purpose rather than guessed at: designing a
+/// callback without the real SCK/WGC APIs in front of us would be speculation,
+/// and R0-01 is explicitly barred from implementing either. R0-03 decides it,
+/// with two candidates already visible - constructor-injecting a sink into the
+/// concrete source (keeps the port minimal), or adding sink registration here
+/// (makes delivery part of the contract). Whoever picks: the layers above must
+/// not have to know which kind of source they hold.
 class ICaptureSource {
 public:
     virtual ~ICaptureSource() = default;

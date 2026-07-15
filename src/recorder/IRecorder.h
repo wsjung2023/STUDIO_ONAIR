@@ -31,6 +31,7 @@ struct RecorderStats final {
     std::uint64_t segmentsWritten{0};
     std::uint64_t framesAccepted{0};
     std::uint64_t framesDropped{0};
+    std::uint64_t blocksAccepted{0};
 };
 
 /// Writes one source's frames to segment files and maintains the segment index.
@@ -59,6 +60,17 @@ public:
     /// reports. It means the recorder is still healthy.
     [[nodiscard]] virtual creator::core::Result<void> accept(
         const creator::media::VideoFrame& frame) = 0;
+
+    /// Hands an audio block to the recorder. Same contract as the video
+    /// overload: ok() means the recorder is healthy, not that the block was
+    /// written.
+    ///
+    /// Audio is the master stream for synchronisation (ARCHITECTURE.md 5.2) and
+    /// audio loss must never be silently ignored (CLAUDE.md 5), so a recorder
+    /// that cannot keep up with audio reports an error here rather than
+    /// dropping and counting the way it may for video.
+    [[nodiscard]] virtual creator::core::Result<void> accept(
+        const creator::media::AudioBlock& block) = 0;
 
     /// Finalises the take and returns its session, segment index included.
     /// Fails with InvalidState if not recording.

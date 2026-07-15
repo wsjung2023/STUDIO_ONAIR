@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <string>
 #include <type_traits>
 
 namespace {
@@ -51,6 +52,34 @@ static_assert(!std::is_move_assignable_v<IRecorder>);
 static_assert(!std::is_copy_assignable_v<IProjectStore>,
               "project stores own file handles and must not be copied");
 static_assert(!std::is_move_assignable_v<IProjectStore>);
+
+// Assignment and construction are different special members: deleting one
+// does not guarantee the other is gone, and "a copy double-closes the OS
+// handle" is triggered by copy-construction at least as much as by
+// assignment. The abstract types themselves cannot answer this -
+// is_copy_constructible_v is false for any abstract class whether or not the
+// constructor is deleted, which is what made the original assertions here
+// vacuous (see above). A concrete stub can answer it - the base's deleted
+// copy constructor propagates, leaving the stub's own implicitly deleted.
+class StubCaptureSource final : public creator::capture::ICaptureSource {
+public:
+    [[nodiscard]] creator::domain::SourceId id() const override {
+        return creator::domain::SourceId::create("stub").value();
+    }
+    [[nodiscard]] std::string displayName() const override { return "stub"; }
+    [[nodiscard]] creator::core::Result<void> start(
+        const creator::capture::CaptureConfig&) override {
+        return creator::core::ok();
+    }
+    [[nodiscard]] creator::core::Result<void> stop() override { return creator::core::ok(); }
+    [[nodiscard]] creator::capture::CaptureStats stats() const noexcept override { return {}; }
+};
+
+static_assert(!std::is_abstract_v<StubCaptureSource>,
+              "the stub must be concrete or it proves nothing");
+static_assert(!std::is_copy_constructible_v<StubCaptureSource>,
+              "a copied capture source would double-close its OS handle");
+static_assert(!std::is_move_constructible_v<StubCaptureSource>);
 
 // Destroyed through a base pointer, so the destructor must be virtual or the
 // derived class's handles never get released.
