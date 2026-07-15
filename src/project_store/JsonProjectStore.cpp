@@ -37,7 +37,14 @@ using domain::ProjectManifest;
 /// write. Real durability needs fsync/FlushFileBuffers, which is platform code
 /// this task does not open. Atomicity is what protects us here, and it holds.
 Result<void> writeFileAtomically(const fs::path& target, const std::string& contents) {
-    const fs::path temporary = target.string() + ".part";
+    // += on a path, NOT target.string() + ".part". On Windows fs::path holds
+    // UTF-16 natively and .string() converts it through the process ANSI
+    // codepage, which is lossy for anything outside it - this machine's is 949,
+    // so a package directory containing Japanese, Chinese or emoji comes back
+    // with '?' in it, and '?' is not even a legal path character. Appending
+    // ASCII to the path object touches none of that.
+    fs::path temporary = target;
+    temporary += ".part";
 
     {
         std::ofstream out{temporary, std::ios::binary | std::ios::trunc};
@@ -106,6 +113,22 @@ nlohmann::json toJson(const ProjectManifest& manifest) {
           {"logs", manifest.directories.logs}}},
         {"requiredFeatures", manifest.requiredFeatures},
     };
+}
+
+/// Serialises a manifest to JSON text.
+///
+/// dump() defaults to strict UTF-8 handling and throws on a malformed byte
+/// sequence. validate() counts lead bytes for the length limit but never
+/// checks well-formedness, so a bad sequence reaches here intact. Catch it:
+/// an exception escaping this adapter is exactly what CLAUDE.md 4 forbids.
+Result<std::string> serialiseManifest(const ProjectManifest& manifest) {
+    try {
+        return toJson(manifest).dump(2);
+    } catch (const nlohmann::json::exception& error) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "manifest contains text that is not valid UTF-8: " +
+                            std::string{error.what()}};
+    }
 }
 
 /// Reads a required field, reporting a missing key and a wrong type the same
@@ -279,6 +302,16 @@ Result<ProjectManifest> JsonProjectStore::create(const fs::path& packageDirector
     if (auto valid = domain::validate(manifest); !valid.hasValue()) {
         return valid.error();
     }
+    // Serialise before touching the disk too: validate() only counts UTF-8
+    // lead bytes for the length limit (see domain::utf8Length), so a name that
+    // is a malformed byte sequence passes it and is only caught when dump()
+    // rejects it inside serialiseManifest. This must happen before
+    // create_directories below, or a rejected name leaves a directory tree
+    // behind - the same property the validate() call above protects.
+    auto serialised = serialiseManifest(manifest);
+    if (!serialised.hasValue()) {
+        return serialised.error();
+    }
 
     fs::create_directories(packageDirectory, ec);
     if (ec) {
@@ -297,7 +330,7 @@ Result<ProjectManifest> JsonProjectStore::create(const fs::path& packageDirector
         }
     }
 
-    if (auto written = writeFileAtomically(manifestPath, toJson(manifest).dump(2));
+    if (auto written = writeFileAtomically(manifestPath, serialised.value());
         !written.hasValue()) {
         return written.error();
     }
@@ -328,7 +361,11 @@ Result<void> JsonProjectStore::save(const fs::path& packageDirectory,
     if (auto valid = domain::validate(manifest); !valid.hasValue()) {
         return valid.error();
     }
-    return writeFileAtomically(packageDirectory / kManifestFileName, toJson(manifest).dump(2));
+    auto serialised = serialiseManifest(manifest);
+    if (!serialised.hasValue()) {
+        return serialised.error();
+    }
+    return writeFileAtomically(packageDirectory / kManifestFileName, serialised.value());
 }
 
 }  // namespace creator::project_store

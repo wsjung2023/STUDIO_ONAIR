@@ -121,6 +121,33 @@ TEST_F(JsonProjectStoreTest, RoundTripsUnicodeName) {
     EXPECT_EQ(loaded.value().name, "회사 교육 영상");
 }
 
+TEST_F(JsonProjectStoreTest, RoundTripsThroughNonAsciiPath) {
+    // The path, not the content. A package directory outside the process ANSI
+    // codepage must still work - this is a Korean-first product and users will
+    // have Korean, Japanese and emoji in their folder names.
+    //
+    // Built with the char8_t (u8"...") overload of fs::path's constructor, not
+    // L"...". On Windows, fs::path's *native* representation is wchar_t, so a
+    // wide literal happens to work there too - but the C++20 standard defines
+    // char8_t sources as always UTF-8, converted to each platform's native
+    // encoding without going through any codepage or locale. That is not
+    // guaranteed for wchar_t on POSIX, where the wide-to-native-narrow
+    // conversion is implementation-defined. char8_t is the one construction
+    // that is portable by standard, not by platform coincidence - see the
+    // report for why this matters for macOS, where CI runs.
+    const fs::path unicodeDir = packageDir_ / fs::path{u8"프로젝트_日本語_🎬"};
+
+    const auto created = store_.create(unicodeDir, "MyTutorial");
+
+    ASSERT_TRUE(created.hasValue()) << created.error().message();
+    const auto loaded = store_.load(unicodeDir);
+    ASSERT_TRUE(loaded.hasValue()) << loaded.error().message();
+    EXPECT_EQ(loaded.value(), created.value());
+
+    std::error_code ec;
+    fs::remove_all(unicodeDir, ec);
+}
+
 TEST_F(JsonProjectStoreTest, SaveIsAtomicAndLeavesNoPartFile) {
     const auto created = store_.create(packageDir_, "MyTutorial");
     ASSERT_TRUE(created.hasValue());
@@ -151,6 +178,19 @@ TEST_F(JsonProjectStoreTest, CreateRejectsInvalidName) {
 
     ASSERT_FALSE(created.hasValue());
     EXPECT_EQ(created.error().code(), ErrorCode::InvalidArgument);
+}
+
+TEST_F(JsonProjectStoreTest, RejectsMalformedUtf8Name) {
+    // A lone continuation byte: valid as far as validate()'s lead-byte count is
+    // concerned, but not valid UTF-8, and nlohmann's dump() throws on it.
+    const std::string malformed = std::string{"bad"} + '\x80' + "name";
+
+    const auto created = store_.create(packageDir_, malformed);
+
+    ASSERT_FALSE(created.hasValue());
+    EXPECT_EQ(created.error().code(), ErrorCode::InvalidArgument);
+    // Nothing may be left behind by a rejected create.
+    EXPECT_FALSE(fs::exists(packageDir_ / JsonProjectStore::kManifestFileName));
 }
 
 TEST_F(JsonProjectStoreTest, LoadReportsMissingManifest) {
