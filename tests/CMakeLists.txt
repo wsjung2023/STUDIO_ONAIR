@@ -23,11 +23,13 @@ add_executable(cs_tests
     core/TimebaseTest.cpp
     core/UuidTest.cpp
     core/UtcTest.cpp
+    domain/IdentifiersTest.cpp
 )
 
 target_link_libraries(cs_tests
     PRIVATE
         cs_core
+        cs_domain
         GTest::gtest_main
 )
 

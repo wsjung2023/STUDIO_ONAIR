@@ -17,6 +17,7 @@ qt_standard_project_setup(REQUIRES 6.8)
 
 # Layers below the application boundary. None of these link Qt.
 add_subdirectory(src/core)
+add_subdirectory(src/domain)
 
 if(CS_BUILD_TESTS)
     enable_testing()
