@@ -6,38 +6,19 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2)
+option(CS_BUILD_TESTS "Build unit tests" ON)
+option(CS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+include(CreatorStudioTargets)
+
+find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2)
 qt_standard_project_setup(REQUIRES 6.8)
 
-qt_add_executable(creator_studio
-    src/main.cpp
-    src/core/Timebase.h
-    src/domain/Identifiers.h
-    src/capture/ICaptureSource.h
-    src/media/MediaTypes.h
-)
+# Layers below the application boundary. None of these link Qt.
+add_subdirectory(src/core)
 
-qt_add_qml_module(creator_studio
-    URI CreatorStudio
-    VERSION 1.0
-    QML_FILES
-        qml/Main.qml
-)
-
-target_link_libraries(creator_studio
-    PRIVATE
-        Qt6::Quick
-        Qt6::QuickControls2
-)
-
-if(MSVC)
-    target_compile_options(creator_studio PRIVATE /W4 /permissive-)
-else()
-    target_compile_options(creator_studio PRIVATE -Wall -Wextra -Wpedantic)
+if(CS_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
-
-install(TARGETS creator_studio
-    BUNDLE DESTINATION .
-    RUNTIME DESTINATION bin
-)

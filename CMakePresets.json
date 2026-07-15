@@ -1,0 +1,70 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CS_BUILD_TESTS": "ON",
+        "CS_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows Debug (MSVC + Ninja)",
+      "description": "Run from a Developer PowerShell, or source vcvars64.bat first.",
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows Release (MSVC + Ninja)",
+      "description": "Run from a Developer PowerShell, or source vcvars64.bat first.",
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "macos-debug",
+      "displayName": "macOS Debug (AppleClang + Ninja)",
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0"
+      }
+    },
+    {
+      "name": "macos-release",
+      "displayName": "macOS Release (AppleClang + Ninja)",
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-debug", "configurePreset": "windows-debug" },
+    { "name": "windows-release", "configurePreset": "windows-release" },
+    { "name": "macos-debug", "configurePreset": "macos-debug" },
+    { "name": "macos-release", "configurePreset": "macos-release" }
+  ],
+  "testPresets": [
+    {
+      "name": "test-base",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    },
+    { "name": "windows-debug", "inherits": "test-base", "configurePreset": "windows-debug" },
+    { "name": "windows-release", "inherits": "test-base", "configurePreset": "windows-release" },
+    { "name": "macos-debug", "inherits": "test-base", "configurePreset": "macos-debug" },
+    { "name": "macos-release", "inherits": "test-base", "configurePreset": "macos-release" }
+  ]
+}
