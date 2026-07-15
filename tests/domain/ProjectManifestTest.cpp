@@ -32,16 +32,12 @@ ProjectManifest makeValidManifest() {
     };
 }
 
-TEST(ProjectManifestTest, DefaultsMatchSchema) {
-    const ProjectManifest manifest = makeValidManifest();
-
-    EXPECT_EQ(manifest.schemaVersion, 1);
-    EXPECT_EQ(manifest.database, "project.db");
-    EXPECT_EQ(manifest.canvas.width, 1920);
-    EXPECT_EQ(manifest.canvas.height, 1080);
-    EXPECT_EQ(manifest.canvas.frameRateNumerator, 60);
-    EXPECT_EQ(manifest.canvas.frameRateDenominator, 1);
-    EXPECT_EQ(manifest.canvas.colorSpace, ManifestColorSpace::Rec709Sdr);
+TEST(ProjectManifestTest, DatabaseNameMatchesSchemaConst) {
+    // The only default the schema actually fixes: project.schema.json declares
+    // database as {"const": "project.db"}. The canvas numbers are ours to pick -
+    // the schema only bounds them - so asserting them here would just read back
+    // an initialiser we wrote, which is worth nothing.
+    EXPECT_EQ(makeValidManifest().database, "project.db");
 }
 
 TEST(ProjectManifestTest, DefaultDirectoriesMatchPackageLayout) {
@@ -155,13 +151,20 @@ TEST(ProjectManifestTest, AcceptsCanvasAtSchemaBounds) {
 }
 
 TEST(ProjectManifestTest, RejectsNonPositiveFrameRate) {
-    ProjectManifest manifest = makeValidManifest();
-    manifest.canvas.frameRateDenominator = 0;
+    for (const auto [numerator, denominator] :
+         {std::pair<std::int64_t, std::int64_t>{60, 0},
+          std::pair<std::int64_t, std::int64_t>{0, 1},
+          std::pair<std::int64_t, std::int64_t>{-60, 1},
+          std::pair<std::int64_t, std::int64_t>{60, -1}}) {
+        ProjectManifest manifest = makeValidManifest();
+        manifest.canvas.frameRateNumerator = numerator;
+        manifest.canvas.frameRateDenominator = denominator;
 
-    const auto result = validate(manifest);
+        const auto result = validate(manifest);
 
-    ASSERT_FALSE(result.hasValue());
-    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+        ASSERT_FALSE(result.hasValue()) << numerator << "/" << denominator;
+        EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    }
 }
 
 TEST(ProjectManifestTest, RejectsEmptyDirectoryName) {

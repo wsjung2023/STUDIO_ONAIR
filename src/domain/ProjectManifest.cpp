@@ -53,6 +53,12 @@ Result<void> validate(const ProjectManifest& manifest) {
                         "project was written by a newer version of Creator Studio"};
     }
 
+    // Stricter than the schema on purpose. project.schema.json says
+    // {"format": "uuid"}, which admits any RFC 4122 version, but we only ever
+    // generate v4 (core/Uuid.h) and a non-v4 id would mean the manifest came
+    // from something that is not this product. Rejecting it here is a
+    // compatibility decision, not an oversight: if we ever need to open
+    // projects written by another tool, this is the line to revisit.
     if (!core::isUuidV4(manifest.projectId.value())) {
         return AppError{ErrorCode::InvalidArgument, "projectId must be a v4 UUID"};
     }
