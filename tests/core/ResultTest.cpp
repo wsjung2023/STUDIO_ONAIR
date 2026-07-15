@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <string>
 
 namespace {
@@ -41,11 +42,20 @@ TEST(ResultTest, ValueOrReturnsValueOnSuccess) {
 }
 
 TEST(ResultTest, MovesNonCopyableValues) {
-    Result<std::string> result{std::string{"segment_000001.mkv"}};
+    Result<std::unique_ptr<int>> result{std::make_unique<int>(42)};
 
     ASSERT_TRUE(result.hasValue());
-    const std::string taken = std::move(result).value();
-    EXPECT_EQ(taken, "segment_000001.mkv");
+    const std::unique_ptr<int> taken = std::move(result).value();
+    ASSERT_NE(taken, nullptr);
+    EXPECT_EQ(*taken, 42);
+}
+
+TEST(ResultTest, ExposesMutableValue) {
+    Result<std::string> result{std::string{"segment"}};
+
+    ASSERT_TRUE(result.hasValue());
+    result.value() += "_000001.mkv";
+    EXPECT_EQ(result.value(), "segment_000001.mkv");
 }
 
 TEST(ResultVoidTest, DefaultIsSuccess) {

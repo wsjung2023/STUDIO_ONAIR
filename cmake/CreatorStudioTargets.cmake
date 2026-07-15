@@ -3,7 +3,11 @@
 
 function(cs_apply_warnings target)
     if(MSVC)
-        target_compile_options(${target} PRIVATE /W4 /permissive-)
+        # MSVC otherwise interprets source files using the active system codepage,
+        # so a non-ASCII comment (e.g. Korean text) without a byte-order mark trips
+        # C4819, which /WX below escalates to a hard error. GCC and Clang already
+        # default to UTF-8, so this option only needs to be set for MSVC.
+        target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8)
         if(CS_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE /WX)
         endif()
