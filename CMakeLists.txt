@@ -12,7 +12,7 @@ option(CS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(CreatorStudioTargets)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Test)
 qt_standard_project_setup(REQUIRES 6.8)
 
 include(FetchContent)
@@ -39,6 +39,11 @@ add_subdirectory(src/capture)
 add_subdirectory(src/recorder)
 add_subdirectory(src/project_store)
 add_subdirectory(src/fakes)
+
+# The application boundary: cs_app is the first, and only, library allowed to
+# link Qt (this file's own comment above is the enforcement for everything
+# above this line).
+add_subdirectory(src/app)
 
 if(CS_BUILD_TESTS)
     enable_testing()

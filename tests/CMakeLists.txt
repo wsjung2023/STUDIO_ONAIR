@@ -49,3 +49,26 @@ target_link_libraries(cs_tests
 cs_apply_warnings(cs_tests)
 
 gtest_discover_tests(cs_tests)
+
+# Separate binary: these need a QCoreApplication, so they cannot use
+# gtest_main. Keeping them apart also keeps cs_tests Qt-free, which is a
+# standing check that the layers below the application really do build without
+# Qt on the include path.
+add_executable(cs_app_tests
+    app/StudioControllerTest.cpp
+)
+
+target_link_libraries(cs_app_tests
+    PRIVATE
+        cs_app
+        cs_fakes
+        # QSignalSpy lives in QtTest, not QtCore; cs_app itself only needs
+        # Qt6::Core, so the test binary requests Test for itself rather than
+        # widening what the shipped library links.
+        Qt6::Test
+        GTest::gtest
+)
+
+cs_apply_warnings(cs_app_tests)
+
+gtest_discover_tests(cs_app_tests)

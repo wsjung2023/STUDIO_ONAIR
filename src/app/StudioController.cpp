@@ -1,0 +1,197 @@
+#include "app/StudioController.h"
+
+#include "core/Timebase.h"
+#include "domain/Identifiers.h"
+#include "fakes/FakeCaptureSource.h"
+#include "fakes/FakeRecorder.h"
+#include "recorder/IRecorder.h"
+
+#include <chrono>
+#include <utility>
+
+namespace creator::app {
+namespace {
+
+using core::DurationNs;
+
+/// 60fps. The fake computes timestamps from frame indices, so this interval
+/// only sets how fast the preview updates - it cannot make the take's recorded
+/// duration wrong.
+constexpr int kCaptureIntervalMs = 16;
+
+/// The capture geometry and frame rate this take is recorded at. Named so
+/// startRecording() (which starts the source with it) and stopRecording()
+/// (which needs the same rate back to convert a frame count into a timestamp)
+/// cannot drift apart into two different literals.
+constexpr capture::CaptureConfig kCaptureConfig{};
+
+/// Every take's timeline starts here, on the same footing as the source's own
+/// frame 0. See the long comment in startRecording() for why this must not be
+/// core::ProjectClock::now().
+constexpr core::TimestampNs kSessionStart{};
+
+QString formatDuration(DurationNs duration) {
+    const auto totalSeconds = std::chrono::duration_cast<std::chrono::seconds>(duration).count();
+    const auto hours = totalSeconds / 3600;
+    const auto minutes = (totalSeconds % 3600) / 60;
+    const auto seconds = totalSeconds % 60;
+    return QStringLiteral("%1:%2:%3")
+        .arg(hours, 2, 10, QLatin1Char('0'))
+        .arg(minutes, 2, 10, QLatin1Char('0'))
+        .arg(seconds, 2, 10, QLatin1Char('0'));
+}
+
+}  // namespace
+
+StudioController::StudioController(QObject* parent)
+    : StudioController(
+          std::make_unique<fakes::FakeCaptureSource>(
+              domain::SourceId::create("screen-1").value(), "Test Pattern"),
+          std::make_unique<fakes::FakeRecorder>(), parent) {}
+
+StudioController::StudioController(std::unique_ptr<capture::IPullCaptureSource> source,
+                                   std::unique_ptr<recorder::IRecorder> recorder, QObject* parent)
+    : QObject(parent), source_(std::move(source)), recorder_(std::move(recorder)) {
+    captureTimer_.setInterval(kCaptureIntervalMs);
+    connect(&captureTimer_, &QTimer::timeout, this, &StudioController::onCaptureTick);
+}
+
+StudioController::~StudioController() {
+    // The take is lost either way at this point, but the source must still let
+    // go of its OS handles (CLAUDE.md 8 requires resource cleanup). The
+    // returned session is discarded, so the exact stop instant does not
+    // matter here - it only has to be >= kSessionStart, the same value
+    // startRecording() opened this take with, or RecordingSession::stop
+    // rejects it as preceding the start time.
+    if (recording_) {
+        static_cast<void>(recorder_->stop(kSessionStart));
+        static_cast<void>(source_->stop());
+    }
+}
+
+void StudioController::startRecording() {
+    if (recording_) {
+        return;
+    }
+
+    ++takeCounter_;
+    auto sessionId = domain::SessionId::create("session-" + std::to_string(takeCounter_));
+    if (!sessionId.hasValue()) {
+        setStatusMessage(QString::fromStdString(sessionId.error().message()));
+        return;
+    }
+
+    const recorder::RecorderConfig config{
+        .sessionId = std::move(sessionId).value(),
+        .sourceId = source_->id(),
+        .segmentDuration = std::chrono::seconds{2},
+    };
+    // The recorder's segment boundaries (FakeRecorder::accept's
+    // frame.timestamp - segmentStart_ comparison) and the session's own
+    // duration are both computed purely from the TimestampNs values this
+    // class hands to start()/stop(). FakeCaptureSource restarts its own frame
+    // timeline at zero on every start() - frame 0 is always timestamp zero,
+    // never core::ProjectClock::now() - so starting the recorder's session at
+    // a fresh "now" reading would put segmentStart_ on a completely different
+    // scale from the frame timestamps accept() is about to receive: no
+    // segment would ever close mid-take, and duration() would measure real
+    // wall-clock time (microseconds for a tight test loop) instead of
+    // simulated recording time. CLAUDE.md 9 bans wall-clock-based A/V sync for
+    // the same underlying reason - an independently-read clock has no
+    // relationship to the media's own timeline. Anchoring at kSessionStart
+    // (zero) keeps both timelines on the same footing.
+    if (auto started = recorder_->start(config, kSessionStart); !started.hasValue()) {
+        setStatusMessage(QString::fromStdString(started.error().message()));
+        return;
+    }
+    if (auto started = source_->start(kCaptureConfig); !started.hasValue()) {
+        // Unwind the recorder so a failed source does not leave a take half open.
+        static_cast<void>(recorder_->stop(kSessionStart));
+        setStatusMessage(QString::fromStdString(started.error().message()));
+        return;
+    }
+
+    resetTakeSummary();
+    recording_ = true;
+    captureTimer_.start();
+    setStatusMessage(tr("Recording"));
+    emit recordingChanged();
+}
+
+void StudioController::stopRecording() {
+    if (!recording_) {
+        setStatusMessage(tr("Not recording"));
+        return;
+    }
+
+    captureTimer_.stop();
+    recording_ = false;
+
+    // Stop on the same frame-timestamp scale the take started on (see
+    // startRecording()). stats().receivedFrames is the count of frames the
+    // source actually delivered this take - a plain counter the
+    // ICaptureSource port already exposes, not anything fake-specific -
+    // and running it back through frameToTimestamp gives the instant the
+    // *next* frame would have landed on, i.e. exactly where this take
+    // stopped, using the same ceiling rule frameToTimestamp itself defines
+    // rather than approximating it.
+    core::TimestampNs stopAt = kSessionStart;
+    if (auto rate = core::FrameRate::create(
+            static_cast<std::int64_t>(kCaptureConfig.frameRateNumerator),
+            static_cast<std::int64_t>(kCaptureConfig.frameRateDenominator));
+        rate.hasValue()) {
+        const auto framesCaptured = static_cast<std::int64_t>(source_->stats().receivedFrames);
+        stopAt = core::frameToTimestamp(framesCaptured, rate.value());
+    }
+
+    auto session = recorder_->stop(stopAt);
+    static_cast<void>(source_->stop());
+
+    if (!session.hasValue()) {
+        setStatusMessage(QString::fromStdString(session.error().message()));
+        emit recordingChanged();
+        return;
+    }
+
+    segmentCount_ = static_cast<int>(session.value().segmentCount());
+    // Always engaged here: the session just stopped successfully. Handling the
+    // nullopt branch anyway rather than value_or-ing a zero, because a zero
+    // would be indistinguishable from a real zero-length take on screen.
+    if (const auto takeLength = session.value().duration()) {
+        takeDuration_ = formatDuration(*takeLength);
+    }
+    setStatusMessage(tr("Stopped"));
+    emit takeSummaryChanged();
+    emit recordingChanged();
+}
+
+void StudioController::onCaptureTick() {
+    if (!recording_) {
+        return;
+    }
+
+    auto frame = source_->tick();
+    if (!frame.hasValue()) {
+        setStatusMessage(QString::fromStdString(frame.error().message()));
+        return;
+    }
+    if (auto accepted = recorder_->accept(frame.value()); !accepted.hasValue()) {
+        setStatusMessage(QString::fromStdString(accepted.error().message()));
+    }
+}
+
+void StudioController::setStatusMessage(QString message) {
+    if (statusMessage_ == message) {
+        return;
+    }
+    statusMessage_ = std::move(message);
+    emit statusMessageChanged();
+}
+
+void StudioController::resetTakeSummary() {
+    segmentCount_ = 0;
+    takeDuration_ = QStringLiteral("00:00:00");
+    emit takeSummaryChanged();
+}
+
+}  // namespace creator::app
