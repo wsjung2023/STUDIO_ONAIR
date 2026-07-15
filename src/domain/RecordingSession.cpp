@@ -41,9 +41,9 @@ Result<void> RecordingSession::addSegment(SegmentInfo segment) {
     return core::ok();
 }
 
-DurationNs RecordingSession::duration() const noexcept {
+std::optional<DurationNs> RecordingSession::duration() const noexcept {
     if (state_ != SessionState::Stopped) {
-        return DurationNs::zero();
+        return std::nullopt;
     }
     return stoppedAt_ - startedAt_;
 }

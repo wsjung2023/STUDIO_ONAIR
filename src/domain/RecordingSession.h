@@ -6,6 +6,7 @@
 #include "domain/Segment.h"
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 namespace creator::domain {
@@ -49,9 +50,18 @@ public:
     [[nodiscard]] const std::vector<SegmentInfo>& segments() const noexcept { return segments_; }
     [[nodiscard]] std::size_t segmentCount() const noexcept { return segments_.size(); }
 
-    /// Wall duration of the take, or zero until stopped. Not the sum of segment
-    /// durations: those can have gaps a paused take leaves behind.
-    [[nodiscard]] core::DurationNs duration() const noexcept;
+    /// Wall duration of the take, or nullopt until the session has stopped.
+    ///
+    /// Optional rather than a zero sentinel, because zero would mean three
+    /// different things at once: never started, recording right now, and a take
+    /// that genuinely measured zero. A caller reading a bare zero would see
+    /// "nothing is happening" while a recording is live - exactly the hidden
+    /// recording state CLAUDE.md 9 forbids. nullopt makes that unreadable
+    /// rather than merely documented.
+    ///
+    /// Not the sum of segment durations: those can have gaps a paused take
+    /// leaves behind.
+    [[nodiscard]] std::optional<core::DurationNs> duration() const noexcept;
 
 private:
     SessionId id_;

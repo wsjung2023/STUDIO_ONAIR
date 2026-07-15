@@ -67,15 +67,21 @@ TEST(RecordingSessionTest, ReportsDurationAfterStop) {
     ASSERT_TRUE(session.start(at(0)).hasValue());
     ASSERT_TRUE(session.stop(at(10)).hasValue());
 
-    EXPECT_EQ(session.duration(), DurationNs{std::chrono::seconds{10}});
+    const auto taken = session.duration();
+
+    ASSERT_TRUE(taken.has_value());
+    EXPECT_EQ(*taken, DurationNs{std::chrono::seconds{10}});
 }
 
-TEST(RecordingSessionTest, DurationIsZeroBeforeStop) {
+TEST(RecordingSessionTest, ReportsNoDurationUntilStopped) {
     RecordingSession session = makeSession();
-    EXPECT_EQ(session.duration(), DurationNs::zero());
+    // Idle: there is no take to measure.
+    EXPECT_FALSE(session.duration().has_value());
 
     ASSERT_TRUE(session.start(at(0)).hasValue());
-    EXPECT_EQ(session.duration(), DurationNs::zero());
+    // Recording: a live take has no final length yet, and reporting zero here
+    // would be indistinguishable from a finished zero-length one.
+    EXPECT_FALSE(session.duration().has_value());
 }
 
 TEST(RecordingSessionTest, CollectsSegmentsWhileRecording) {
@@ -129,6 +135,7 @@ TEST(RecordingSessionTest, RejectsDoubleStop) {
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidState);
+    EXPECT_EQ(session.state(), SessionState::Stopped);
 }
 
 TEST(RecordingSessionTest, RejectsRestartAfterStop) {
@@ -140,6 +147,7 @@ TEST(RecordingSessionTest, RejectsRestartAfterStop) {
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidState);
+    EXPECT_EQ(session.state(), SessionState::Stopped);
 }
 
 TEST(RecordingSessionTest, RejectsSegmentBeforeStart) {
@@ -161,6 +169,7 @@ TEST(RecordingSessionTest, RejectsSegmentAfterStop) {
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidState);
+    EXPECT_EQ(session.segmentCount(), 0u);
 }
 
 TEST(RecordingSessionTest, RejectsStopBeforeStartTime) {
@@ -172,6 +181,29 @@ TEST(RecordingSessionTest, RejectsStopBeforeStartTime) {
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
     EXPECT_EQ(session.state(), SessionState::Recording);
+}
+
+TEST(RecordingSessionTest, AcceptsZeroLengthTake) {
+    // Instantaneous start/stop is degenerate but legal - stop() only rejects a
+    // stop time strictly before the start. The resulting zero must be a real
+    // measured zero, distinguishable from "not stopped yet" by having a value.
+    RecordingSession session = makeSession();
+    ASSERT_TRUE(session.start(at(10)).hasValue());
+
+    ASSERT_TRUE(session.stop(at(10)).hasValue());
+
+    const auto taken = session.duration();
+    ASSERT_TRUE(taken.has_value());
+    EXPECT_EQ(*taken, DurationNs::zero());
+}
+
+TEST(SegmentInfoTest, ComparesByValue) {
+    const SegmentInfo first = makeSegment(0);
+    SegmentInfo second = makeSegment(0);
+    EXPECT_EQ(first, second);
+
+    second.index = 1;
+    EXPECT_NE(first, second);
 }
 
 }  // namespace
