@@ -40,9 +40,10 @@ jobs:
       # install-qt-action adds Qt's bin directory to PATH and exports
       # QT_ROOT_DIR/Qt6_DIR for the rest of the job, which is also why no step
       # below sets CMAKE_PREFIX_PATH explicitly (unlike the README, which must,
-      # because a local dev shell does not get that for free). This is per the
-      # action's own documentation; it has not been exercised by an actual run
-      # of this workflow (see README "Unverified" note).
+      # because a local dev shell does not get that for free). That behaviour
+      # is per the action's own documentation, not verified by an actual run
+      # of this workflow: there is no remote to push this to yet, and the
+      # macOS legs have never been built anywhere. Treat this file as a draft.
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
