@@ -24,6 +24,7 @@ add_executable(cs_tests
     core/UuidTest.cpp
     core/UtcTest.cpp
     domain/IdentifiersTest.cpp
+    domain/ProjectManifestTest.cpp
     media/MediaTypesTest.cpp
 )
 
