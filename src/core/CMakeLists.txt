@@ -3,4 +3,6 @@ cs_add_qtfree_library(cs_core
         AppError.h
         AppError.cpp
         Result.h
+        Timebase.h
+        Timebase.cpp
 )
