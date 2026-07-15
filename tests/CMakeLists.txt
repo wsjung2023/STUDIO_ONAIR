@@ -24,12 +24,14 @@ add_executable(cs_tests
     core/UuidTest.cpp
     core/UtcTest.cpp
     domain/IdentifiersTest.cpp
+    media/MediaTypesTest.cpp
 )
 
 target_link_libraries(cs_tests
     PRIVATE
         cs_core
         cs_domain
+        cs_media
         GTest::gtest_main
 )
 
