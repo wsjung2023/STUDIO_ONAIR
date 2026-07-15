@@ -86,6 +86,34 @@ TEST(ProjectManifestTest, AcceptsNameAtMaxLength) {
     EXPECT_TRUE(validate(manifest).hasValue());
 }
 
+TEST(ProjectManifestTest, MeasuresNameInCodePointsNotBytes) {
+    // 200 Hangul syllables is 600 UTF-8 bytes but exactly 200 characters, which
+    // the schema allows. Counting bytes here would reject it at 67 characters.
+    ProjectManifest manifest = makeValidManifest();
+    std::string name;
+    for (int i = 0; i < 200; ++i) {
+        name += "가";
+    }
+    manifest.name = name;
+
+    ASSERT_EQ(name.size(), 600u) << "fixture must be multi-byte for this test to mean anything";
+    EXPECT_TRUE(validate(manifest).hasValue());
+}
+
+TEST(ProjectManifestTest, RejectsOverlongUnicodeName) {
+    ProjectManifest manifest = makeValidManifest();
+    std::string name;
+    for (int i = 0; i < 201; ++i) {
+        name += "가";
+    }
+    manifest.name = name;
+
+    const auto result = validate(manifest);
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+}
+
 TEST(ProjectManifestTest, RejectsNonUuidProjectId) {
     ProjectManifest manifest = makeValidManifest();
     manifest.projectId = ProjectId::create("not-a-uuid").value();

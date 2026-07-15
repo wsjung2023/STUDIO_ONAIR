@@ -18,6 +18,26 @@ constexpr std::int32_t kMinCanvasDimension = 16;
 constexpr std::int32_t kMaxCanvasDimension = 16384;
 constexpr std::size_t kMaxNameLength = 200;
 
+/// Counts Unicode code points in UTF-8 text.
+///
+/// JSON Schema measures maxLength in code points, but std::string::size()
+/// counts bytes. Using size() would reject names the schema allows, and the
+/// gap is not academic for this product: Hangul is three bytes per character
+/// in UTF-8, so a 67-character Korean project name already exceeds 200 bytes
+/// while sitting nowhere near the schema's 200-character limit. ASCII fixtures
+/// hide this completely - bytes and code points coincide there.
+///
+/// Continuation bytes are 10xxxxxx; every other byte begins a code point.
+[[nodiscard]] std::size_t utf8Length(std::string_view text) noexcept {
+    std::size_t count = 0;
+    for (const unsigned char byte : text) {
+        if ((byte & 0xC0) != 0x80) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 Result<void> validateDirectory(std::string_view label, const std::string& value) {
     if (value.empty()) {
         return AppError{ErrorCode::InvalidArgument,
@@ -66,7 +86,8 @@ Result<void> validate(const ProjectManifest& manifest) {
     if (manifest.name.empty()) {
         return AppError{ErrorCode::InvalidArgument, "project name must not be empty"};
     }
-    if (manifest.name.size() > kMaxNameLength) {
+    // Code points, not bytes - the schema says characters. See utf8Length.
+    if (utf8Length(manifest.name) > kMaxNameLength) {
         return AppError{ErrorCode::InvalidArgument, "project name must be at most 200 characters"};
     }
 
