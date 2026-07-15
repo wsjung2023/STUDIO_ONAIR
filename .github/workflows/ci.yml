@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push makes the in-flight run pointless; do not pay for it twice.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.preset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Do not cancel macOS when Windows fails. A platform-specific break is
+      # exactly what this matrix exists to surface, and cancelling the other job
+      # hides half the answer.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            preset: windows-debug
+          - os: windows-latest
+            preset: windows-release
+          - os: macos-latest
+            preset: macos-debug
+          - os: macos-latest
+            preset: macos-release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the same 6.8.3 the presets and CMakeLists require. A floating
+      # version would mean CI and developers build against different Qt.
+      #
+      # install-qt-action adds Qt's bin directory to PATH and exports
+      # QT_ROOT_DIR/Qt6_DIR for the rest of the job, which is also why no step
+      # below sets CMAKE_PREFIX_PATH explicitly (unlike the README, which must,
+      # because a local dev shell does not get that for free). This is per the
+      # action's own documentation; it has not been exercised by an actual run
+      # of this workflow (see README "Unverified" note).
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          modules: 'qtmultimedia qtshadertools'
+          cache: true
+
+      # windows-latest ships CMake already; this step is only for the MSVC
+      # compiler environment (PATH/INCLUDE/LIB for cl.exe), the same thing
+      # vcvars64.bat does locally.
+      - name: Set up MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # Installed explicitly rather than assumed from the runner image, so the
+      # version is under our control on both OSes.
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@master
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      # Presets set CS_WARNINGS_AS_ERRORS=ON, so a warning fails the build here.
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.preset }}
+          path: build/${{ matrix.preset }}/Testing/
+          if-no-files-found: ignore

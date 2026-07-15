@@ -1,0 +1,26 @@
+# Normalise line endings in the repository.
+#
+# Without this, macOS and Windows CI flip every file back and forth: the first
+# commit of the starter pack produced an LF-to-CRLF warning on all 24 files.
+# Both platforms are release targets (ARCHITECTURE.md 12), so this is not
+# cosmetic - it is what stops the two from fighting over every diff.
+* text=auto eol=lf
+
+# Shell scripts must keep LF even when checked out on Windows: CRLF makes them
+# unrunnable in CI containers and in Git Bash.
+*.sh text eol=lf
+
+# Windows batch files are the mirror image: they need CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets git must not touch.
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.mkv binary
+*.mka binary
+*.mp4 binary
+*.vrm binary
+*.inp binary

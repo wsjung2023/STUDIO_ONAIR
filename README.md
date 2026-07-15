@@ -30,7 +30,17 @@
 
 ## 현재 코드 골격
 
-현재 코드는 Qt Quick 애플리케이션이 빌드될 수 있는 최소 골격과 도메인 인터페이스를 제공합니다. 아직 실제 화면 캡처·녹화 기능은 구현하지 않았습니다. 첫 구현 대상은 `prompts/01-bootstrap.md`와 `IMPLEMENTATION_ROADMAP.md`의 R0 항목입니다.
+R0-01이 완료되어 다음이 동작합니다.
+
+- Home / Studio / Editor 세 화면 전환
+- Studio에서 test pattern 표시, Record/Stop으로 fake 녹화 세션 시작·종료
+- Stop 시 세그먼트 개수와 duration 표시
+- 프로젝트 manifest 생성·읽기 (`manifest.json`)
+- 단위 테스트와 CI 워크플로
+
+아직 실제 화면 캡처·녹화·편집은 구현하지 않았습니다. 다음 대상은 `IMPLEMENTATION_ROADMAP.md`의 R0-02 프로젝트 패키지입니다.
+
+모듈은 CMake static library로 분리되어 있고, application 계층 아래(`cs_core`, `cs_domain`, `cs_media`, `cs_capture`, `cs_recorder`, `cs_project_store`, `cs_fakes`)는 Qt를 링크하지 않습니다. `cmake/CreatorStudioTargets.cmake`의 `cs_add_qtfree_library()`가 configure 단계에서 이를 강제합니다.
 
 ## 프로젝트 패키지 예시
 
@@ -60,15 +70,78 @@ MyTutorial.cstudio/
 ## 빌드 전제
 
 - CMake 3.25 이상
+- Ninja
 - C++20 컴파일러
-- Qt 6.8 이상 권장: Quick, QuickControls2, Multimedia
+  - Windows: Visual Studio 2022 Build Tools (MSVC v143)
+  - macOS: Xcode 명령줄 도구
+- Qt 6.8 이상: Quick, QuickControls2, Multimedia
+
+Qt는 공식 온라인 설치 프로그램이나 [aqtinstall](https://github.com/miurahr/aqtinstall)로 설치합니다.
 
 ```bash
-cmake -S . -B build
-cmake --build build
+pip install aqtinstall
+# Windows
+python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -m qtmultimedia qtshadertools --outputdir C:\Qt
+# macOS
+python -m aqt install-qt mac desktop 6.8.3 clang_64 -m qtmultimedia qtshadertools --outputdir ~/Qt
 ```
 
-Qt 경로를 찾지 못하면 `CMAKE_PREFIX_PATH`를 지정해야 합니다.
+## 빌드
+
+Qt 경로를 `CMAKE_PREFIX_PATH`로 알려줍니다. 머신마다 다르므로 프리셋에 넣지 않았습니다.
+
+**Windows** — MSVC 환경이 필요합니다. 아래 명령은 "x64 Native Tools Command Prompt for VS 2022"에서, 또는 일반 `cmd.exe`를 열어 그대로 실행하면 동작을 확인했습니다(Windows 11, MSVC 14.44, Qt 6.8.3, CMake 3.31.6, Ninja 1.12.1).
+
+```bat
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+set CMAKE_PREFIX_PATH=C:\Qt\6.8.3\msvc2022_64
+set PATH=C:\Qt\6.8.3\msvc2022_64\bin;%PATH%
+
+cmake --preset windows-debug
+cmake --build --preset windows-debug
+ctest --preset windows-debug
+```
+
+겪어보지 않으면 놓치기 쉬운 것이 두 가지 있습니다.
+
+- `vcvars64.bat`는 반드시 `call`로 실행합니다. 이 블록을 `.bat` 스크립트 파일로 저장해 실행할 경우, `call` 없이 부르면 vcvars64.bat 실행 후 나머지 줄이 조용히 실행되지 않고 스크립트가 끝나버립니다(대화형 프롬프트에 한 줄씩 입력할 때는 `call` 유무가 문제되지 않지만, 스크립트로 저장하는 사람이 있으므로 항상 붙입니다).
+- `ctest` 전에 Qt의 `bin`을 PATH에 추가해야 합니다. `cs_app_tests`가 Qt를 링크하기 때문입니다. 빠뜨리면 `StudioControllerTest`에 속한 11개 테스트가 전부 `Exit code 0xc0000135`(DLL을 찾을 수 없음)로 실패합니다 — 빌드는 성공하고 ctest만 실패하므로 원인을 오해하기 쉽습니다.
+
+**PowerShell을 쓴다면**: 위 블록은 `cmd.exe` 문법(`set VAR=값`)이라 PowerShell에 그대로 붙여 넣으면 안 됩니다(`set`이 `Set-Variable`로 해석되어 환경 변수가 설정되지 않습니다). 그리고 `vcvars64.bat`를 PowerShell에서 직접 실행하면(`& $vcvars`) 배치 파일이 자식 `cmd.exe` 프로세스에서 실행되므로, 그 프로세스가 끝나는 순간 환경 변수 변경도 함께 사라져 PowerShell 세션에는 반영되지 않습니다. 두 가지 중 하나를 씁니다.
+
+1. 시작 메뉴의 "Developer PowerShell for VS 2022"를 엽니다.
+2. 일반 PowerShell이라면 VS가 제공하는 스크립트로 같은 세션에 환경을 불러옵니다(동작 확인함):
+
+   ```powershell
+   & "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64
+   $env:CMAKE_PREFIX_PATH = "C:\Qt\6.8.3\msvc2022_64"
+   $env:PATH = "C:\Qt\6.8.3\msvc2022_64\bin;$env:PATH"
+
+   cmake --preset windows-debug
+   cmake --build --preset windows-debug
+   ctest --preset windows-debug
+   ```
+
+Git Bash에서는 `cmd //c '...'` 형태로 감싸 한 줄에 몰아 넣지 않습니다. MSYS가 인용부호로 감싼 vcvars 경로를 다시 써버려(mangles argv) 실패합니다. Git Bash를 쓰고 싶다면 위 cmd.exe 또는 PowerShell 블록을 별도 창에서 실행하십시오.
+
+**macOS** — 이 저장소를 만든 머신에는 macOS가 없어 아래 명령은 실행해 보지 못했습니다. 프리셋 정의와 Qt/CMake 문서로부터 구성한 것이며, CI의 `macos-*` 잡이 사실상 첫 실행입니다.
+
+```bash
+export CMAKE_PREFIX_PATH=~/Qt/6.8.3/macos
+
+cmake --preset macos-debug
+cmake --build --preset macos-debug
+ctest --preset macos-debug
+```
+
+프리셋은 `windows-debug`, `windows-release`, `macos-debug`, `macos-release` 네 가지입니다. 모두 경고를 오류로 취급합니다.
+
+앱을 실행하려면 Qt의 `bin`이 PATH에 있어야 합니다(동작 확인함: Studio/Editor 화면 전환, Record/Stop 모두 정상).
+
+```bat
+set PATH=C:\Qt\6.8.3\msvc2022_64\bin;%PATH%
+build\windows-debug\creator_studio.exe
+```
 
 ## 중요한 법적 주의
 
