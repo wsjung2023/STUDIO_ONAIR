@@ -38,6 +38,7 @@ add_subdirectory(src/media)
 add_subdirectory(src/capture)
 add_subdirectory(src/recorder)
 add_subdirectory(src/project_store)
+add_subdirectory(src/fakes)
 
 if(CS_BUILD_TESTS)
     enable_testing()

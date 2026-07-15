@@ -29,6 +29,8 @@ add_executable(cs_tests
     media/MediaTypesTest.cpp
     capture/PortContractTest.cpp
     project_store/JsonProjectStoreTest.cpp
+    fakes/FakeCaptureSourceTest.cpp
+    fakes/FakeRecorderTest.cpp
 )
 
 target_link_libraries(cs_tests
@@ -39,6 +41,7 @@ target_link_libraries(cs_tests
         cs_capture
         cs_recorder
         cs_project_store
+        cs_fakes
         nlohmann_json::nlohmann_json
         GTest::gtest_main
 )
