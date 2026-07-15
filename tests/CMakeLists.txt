@@ -21,6 +21,8 @@ include(GoogleTest)
 add_executable(cs_tests
     core/ResultTest.cpp
     core/TimebaseTest.cpp
+    core/UuidTest.cpp
+    core/UtcTest.cpp
 )
 
 target_link_libraries(cs_tests

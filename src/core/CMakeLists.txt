@@ -5,4 +5,8 @@ cs_add_qtfree_library(cs_core
         Result.h
         Timebase.h
         Timebase.cpp
+        Utc.h
+        Utc.cpp
+        Uuid.h
+        Uuid.cpp
 )
