@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://creator-studio.local/schemas/project.schema.json",
+  "title": "Creator Studio Project Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "projectId",
+    "name",
+    "createdAt",
+    "updatedAt",
+    "canvas",
+    "database",
+    "directories"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "projectId": { "type": "string", "format": "uuid" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "canvas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "frameRateNumerator", "frameRateDenominator", "colorSpace"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 16, "maximum": 16384 },
+        "height": { "type": "integer", "minimum": 16, "maximum": 16384 },
+        "frameRateNumerator": { "type": "integer", "minimum": 1 },
+        "frameRateDenominator": { "type": "integer", "minimum": 1 },
+        "colorSpace": { "enum": ["rec709-sdr"] }
+      }
+    },
+    "database": { "type": "string", "const": "project.db" },
+    "directories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["media", "audio", "telemetry", "proxies", "thumbnails", "autosave", "renders", "logs"],
+      "properties": {
+        "media": { "type": "string" },
+        "audio": { "type": "string" },
+        "telemetry": { "type": "string" },
+        "proxies": { "type": "string" },
+        "thumbnails": { "type": "string" },
+        "autosave": { "type": "string" },
+        "renders": { "type": "string" },
+        "logs": { "type": "string" }
+      }
+    },
+    "requiredFeatures": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "default": []
+    }
+  }
+}

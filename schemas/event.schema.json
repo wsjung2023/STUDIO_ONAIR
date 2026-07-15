@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://creator-studio.local/schemas/event.schema.json",
+  "title": "Creator Studio Telemetry Event",
+  "oneOf": [
+    { "$ref": "#/$defs/cursorMove" },
+    { "$ref": "#/$defs/cursorClick" },
+    { "$ref": "#/$defs/sceneChanged" },
+    { "$ref": "#/$defs/marker" },
+    { "$ref": "#/$defs/avatarMotion" }
+  ],
+  "$defs": {
+    "base": {
+      "type": "object",
+      "required": ["tNs", "type"],
+      "properties": {
+        "tNs": { "type": "integer", "minimum": 0 },
+        "type": { "type": "string" }
+      }
+    },
+    "point": {
+      "type": "object",
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "cursorMove": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        { "$ref": "#/$defs/point" },
+        {
+          "properties": {
+            "type": { "const": "cursor.move" },
+            "sourceId": { "type": "string" }
+          },
+          "required": ["sourceId"]
+        }
+      ]
+    },
+    "cursorClick": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        { "$ref": "#/$defs/point" },
+        {
+          "properties": {
+            "type": { "const": "cursor.click" },
+            "button": { "enum": ["left", "right", "middle"] }
+          },
+          "required": ["button"]
+        }
+      ]
+    },
+    "sceneChanged": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "properties": {
+            "type": { "const": "scene.changed" },
+            "sceneId": { "type": "string" }
+          },
+          "required": ["sceneId"]
+        }
+      ]
+    },
+    "marker": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "properties": {
+            "type": { "const": "marker" },
+            "label": { "type": "string", "maxLength": 200 }
+          },
+          "required": ["label"]
+        }
+      ]
+    },
+    "avatarMotion": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "properties": {
+            "type": { "const": "avatar.motion" },
+            "provider": { "type": "string" },
+            "parameters": {
+              "type": "object",
+              "additionalProperties": { "type": "number" }
+            }
+          },
+          "required": ["provider", "parameters"]
+        }
+      ]
+    }
+  }
+}

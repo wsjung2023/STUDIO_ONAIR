@@ -1,0 +1,9 @@
+/build/
+/build-*/
+/.cache/
+/.idea/
+/.vscode/
+*.user
+*.DS_Store
+*.cstudio/
+*.cstudiozip
