@@ -28,6 +28,7 @@ add_executable(cs_tests
     domain/RecordingSessionTest.cpp
     media/MediaTypesTest.cpp
     capture/PortContractTest.cpp
+    project_store/JsonProjectStoreTest.cpp
 )
 
 target_link_libraries(cs_tests
@@ -37,6 +38,8 @@ target_link_libraries(cs_tests
         cs_media
         cs_capture
         cs_recorder
+        cs_project_store
+        nlohmann_json::nlohmann_json
         GTest::gtest_main
 )
 

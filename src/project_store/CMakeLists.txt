@@ -1,6 +1,9 @@
 cs_add_qtfree_library(cs_project_store
     SOURCES
         IProjectStore.h
+        JsonProjectStore.h
+        JsonProjectStore.cpp
     DEPENDS
         cs_domain
+        nlohmann_json::nlohmann_json
 )
