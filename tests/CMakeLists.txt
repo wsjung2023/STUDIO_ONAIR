@@ -27,6 +27,7 @@ add_executable(cs_tests
     domain/ProjectManifestTest.cpp
     domain/RecordingSessionTest.cpp
     media/MediaTypesTest.cpp
+    capture/PortContractTest.cpp
 )
 
 target_link_libraries(cs_tests
@@ -34,6 +35,8 @@ target_link_libraries(cs_tests
         cs_core
         cs_domain
         cs_media
+        cs_capture
+        cs_recorder
         GTest::gtest_main
 )
 
