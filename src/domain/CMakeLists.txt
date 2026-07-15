@@ -3,6 +3,9 @@ cs_add_qtfree_library(cs_domain
         Identifiers.h
         ProjectManifest.h
         ProjectManifest.cpp
+        RecordingSession.h
+        RecordingSession.cpp
+        Segment.h
     DEPENDS
         cs_core
 )
