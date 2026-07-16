@@ -6,6 +6,8 @@ cs_add_qtfree_library(cs_recorder
         TrackSegmentPorts.h
         DiskSpaceMonitor.h
         DiskSpaceMonitor.cpp
+        DurableSegmentPublisher.h
+        DurableSegmentPublisher.cpp
     DEPENDS
         cs_domain
         cs_media
