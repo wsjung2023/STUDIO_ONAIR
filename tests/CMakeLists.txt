@@ -41,6 +41,7 @@ add_executable(cs_tests
     sync/ClockCoordinatorTest.cpp
     sync/VideoSyncPlannerTest.cpp
     sync/AudioRateCompensatorTest.cpp
+    sync/SyncPipelineAcceptanceTest.cpp
     capture/PortContractTest.cpp
     capture/CaptureTimestampMapperTest.cpp
     capture/ScreenCapturePortsTest.cpp
