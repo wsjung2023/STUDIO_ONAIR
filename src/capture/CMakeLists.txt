@@ -14,6 +14,8 @@ cs_add_qtfree_library(cs_capture
         BoundedAudioBlockQueue.cpp
         CameraCaptureFrameAssembler.h
         CameraCaptureFrameAssembler.cpp
+        CaptureFanoutSinks.h
+        CaptureFanoutSinks.cpp
         DeviceCaptureTypes.h
         DeviceCaptureTypes.cpp
         DeviceCaptureStopCoordinator.h

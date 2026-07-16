@@ -42,6 +42,7 @@ add_executable(cs_tests
     capture/CaptureTimestampMapperTest.cpp
     capture/ScreenCapturePortsTest.cpp
     capture/LatestVideoFrameMailboxTest.cpp
+    capture/CaptureFanoutSinksTest.cpp
     capture/UnsupportedScreenCaptureBackendTest.cpp
     capture/NumericCaptureTargetIdTest.cpp
     capture/ScreenCaptureFrameAssemblerTest.cpp

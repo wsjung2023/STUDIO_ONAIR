@@ -341,8 +341,11 @@ void DeviceCaptureController::startCamera() {
     cameraFps_ = 0.0;
     ++cameraGeneration_;
     cameraMailbox_ = std::make_shared<capture::LatestVideoFrameMailbox>();
-    auto created = backend_->createCamera(device->id(), cameraMailbox_);
+    cameraFanout_ = std::make_shared<capture::VideoFrameFanoutSink>(cameraMailbox_);
+    cameraFanout_->setSecondary(cameraRecordingSink_);
+    auto created = backend_->createCamera(device->id(), cameraFanout_);
     if (!created.hasValue()) {
+        cameraFanout_.reset();
         cameraMailbox_.reset();
         cameraState_ = DeviceCaptureState::Error;
         cameraStatus_ = fromUtf8(created.error().message());
@@ -355,6 +358,7 @@ void DeviceCaptureController::startCamera() {
         const auto message = fromUtf8(started.error().message());
         static_cast<void>(cameraSource_->stop());
         cameraSource_.reset();
+        cameraFanout_.reset();
         cameraMailbox_.reset();
         cameraState_ = DeviceCaptureState::Error;
         cameraStatus_ = message;
@@ -383,8 +387,12 @@ void DeviceCaptureController::startMicrophone() {
     microphoneOverruns_ = 0;
     ++microphoneGeneration_;
     microphoneMailbox_ = std::make_shared<capture::AudioCaptureMailbox>(kAudioQueueBlocks);
-    auto created = backend_->createMicrophone(device->id(), microphoneMailbox_);
+    microphoneFanout_ =
+        std::make_shared<capture::AudioBlockFanoutSink>(microphoneMailbox_);
+    microphoneFanout_->setSecondary(microphoneRecordingSink_);
+    auto created = backend_->createMicrophone(device->id(), microphoneFanout_);
     if (!created.hasValue()) {
+        microphoneFanout_.reset();
         microphoneMailbox_.reset();
         microphoneState_ = DeviceCaptureState::Error;
         microphoneStatus_ = fromUtf8(created.error().message());
@@ -397,6 +405,7 @@ void DeviceCaptureController::startMicrophone() {
         const auto message = fromUtf8(started.error().message());
         static_cast<void>(microphoneSource_->stop());
         microphoneSource_.reset();
+        microphoneFanout_.reset();
         microphoneMailbox_.reset();
         microphoneState_ = DeviceCaptureState::Error;
         microphoneStatus_ = message;
@@ -414,8 +423,12 @@ void DeviceCaptureController::startSystemAudio() {
     systemAudioOverruns_ = 0;
     ++systemAudioGeneration_;
     systemAudioMailbox_ = std::make_shared<capture::AudioCaptureMailbox>(kAudioQueueBlocks);
-    auto created = backend_->createSystemAudio(systemAudioMailbox_);
+    systemAudioFanout_ =
+        std::make_shared<capture::AudioBlockFanoutSink>(systemAudioMailbox_);
+    systemAudioFanout_->setSecondary(systemAudioRecordingSink_);
+    auto created = backend_->createSystemAudio(systemAudioFanout_);
     if (!created.hasValue()) {
+        systemAudioFanout_.reset();
         systemAudioMailbox_.reset();
         systemAudioState_ = DeviceCaptureState::Error;
         systemAudioStatus_ = fromUtf8(created.error().message());
@@ -428,12 +441,31 @@ void DeviceCaptureController::startSystemAudio() {
         const auto message = fromUtf8(started.error().message());
         static_cast<void>(systemAudioSource_->stop());
         systemAudioSource_.reset();
+        systemAudioFanout_.reset();
         systemAudioMailbox_.reset();
         systemAudioState_ = DeviceCaptureState::Error;
         systemAudioStatus_ = message;
     }
     updateTimer();
     emit stateChanged();
+}
+
+void DeviceCaptureController::setCameraRecordingSink(
+    std::shared_ptr<capture::IVideoFrameSink> sink) noexcept {
+    cameraRecordingSink_ = std::move(sink);
+    if (cameraFanout_) cameraFanout_->setSecondary(cameraRecordingSink_);
+}
+
+void DeviceCaptureController::setMicrophoneRecordingSink(
+    std::shared_ptr<capture::IAudioBlockSink> sink) noexcept {
+    microphoneRecordingSink_ = std::move(sink);
+    if (microphoneFanout_) microphoneFanout_->setSecondary(microphoneRecordingSink_);
+}
+
+void DeviceCaptureController::setSystemAudioRecordingSink(
+    std::shared_ptr<capture::IAudioBlockSink> sink) noexcept {
+    systemAudioRecordingSink_ = std::move(sink);
+    if (systemAudioFanout_) systemAudioFanout_->setSecondary(systemAudioRecordingSink_);
 }
 
 void DeviceCaptureController::stopSlot(SlotKind kind, DeviceCaptureState finalState,
@@ -484,9 +516,16 @@ void DeviceCaptureController::handleStopResult(SlotKind kind, std::uint64_t gene
                    : kind == SlotKind::Microphone ? microphoneSource_
                                                   : systemAudioSource_;
     source.reset();
-    if (kind == SlotKind::Camera) cameraMailbox_.reset();
-    else if (kind == SlotKind::Microphone) microphoneMailbox_.reset();
-    else systemAudioMailbox_.reset();
+    if (kind == SlotKind::Camera) {
+        cameraFanout_.reset();
+        cameraMailbox_.reset();
+    } else if (kind == SlotKind::Microphone) {
+        microphoneFanout_.reset();
+        microphoneMailbox_.reset();
+    } else {
+        systemAudioFanout_.reset();
+        systemAudioMailbox_.reset();
+    }
     if (!result.hasValue()) {
         state = DeviceCaptureState::Error;
         const auto message = fromUtf8(result.error().message());
@@ -568,9 +607,16 @@ void DeviceCaptureController::terminateSlot(SlotKind kind, core::AppError error)
                                                   : systemAudioSource_;
     if (source) static_cast<void>(source->stop());
     source.reset();
-    if (kind == SlotKind::Camera) cameraMailbox_.reset();
-    else if (kind == SlotKind::Microphone) microphoneMailbox_.reset();
-    else systemAudioMailbox_.reset();
+    if (kind == SlotKind::Camera) {
+        cameraFanout_.reset();
+        cameraMailbox_.reset();
+    } else if (kind == SlotKind::Microphone) {
+        microphoneFanout_.reset();
+        microphoneMailbox_.reset();
+    } else {
+        systemAudioFanout_.reset();
+        systemAudioMailbox_.reset();
+    }
     const auto message = fromUtf8(error.message());
     if (kind == SlotKind::Camera) {
         cameraState_ = DeviceCaptureState::Error;
@@ -599,6 +645,9 @@ void DeviceCaptureController::releaseAll() noexcept {
     cameraSource_.reset();
     microphoneSource_.reset();
     systemAudioSource_.reset();
+    cameraFanout_.reset();
+    microphoneFanout_.reset();
+    systemAudioFanout_.reset();
     cameraMailbox_.reset();
     microphoneMailbox_.reset();
     systemAudioMailbox_.reset();

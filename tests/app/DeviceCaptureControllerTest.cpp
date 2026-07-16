@@ -91,6 +91,24 @@ struct LifecycleProbe final {
     int barrierStops{0};
 };
 
+class RecordingVideoSink final : public IVideoFrameSink {
+public:
+    void onCaptureStarted() noexcept override {}
+    void onVideoFrame(VideoFrame) noexcept override { ++frames; }
+    void onCaptureError(AppError) noexcept override { ++errors; }
+    int frames{0};
+    int errors{0};
+};
+
+class RecordingAudioSink final : public IAudioBlockSink {
+public:
+    void onCaptureStarted() noexcept override {}
+    void onAudioBlock(AudioBlock) noexcept override { ++blocks; }
+    void onCaptureError(AppError) noexcept override { ++errors; }
+    int blocks{0};
+    int errors{0};
+};
+
 class DeviceSourceFake final : public IDeviceCaptureSource {
 public:
     DeviceSourceFake(std::shared_ptr<IVideoFrameSink> sink,
@@ -306,6 +324,38 @@ TEST(DeviceCaptureControllerTest, PublishesCameraGeometryAndSeparateAudioLevels)
     EXPECT_NEAR(fixture.controller->systemAudioPeakDbfs(), -6.020599913, 1e-6);
     EXPECT_EQ(fixture.controller->microphoneBlocks(), 1u);
     EXPECT_EQ(fixture.controller->systemAudioBlocks(), 1u);
+}
+
+TEST(DeviceCaptureControllerTest, FanoutFeedsRecordingWithoutDisablingPreviewOrMeters) {
+    Fixture fixture;
+    fixture.controller->initialize();
+    fixture.controller->setCameraEnabled(true);
+    fixture.controller->setMicrophoneEnabled(true);
+    fixture.controller->setSystemAudioEnabled(true);
+    auto camera = std::make_shared<RecordingVideoSink>();
+    auto microphone = std::make_shared<RecordingAudioSink>();
+    auto systemAudio = std::make_shared<RecordingAudioSink>();
+
+    fixture.controller->setCameraRecordingSink(camera);
+    fixture.controller->setMicrophoneRecordingSink(microphone);
+    fixture.controller->setSystemAudioRecordingSink(systemAudio);
+    fixture.backendRaw->cameraSource->pushVideo(video(1920, 1080));
+    fixture.backendRaw->microphoneSource->pushAudio(audio(1.0F, 0.0F));
+    fixture.backendRaw->systemAudioSource->pushAudio(audio(0.5F, -0.5F));
+    fixture.controller->setCameraRecordingSink({});
+    fixture.controller->setMicrophoneRecordingSink({});
+    fixture.controller->setSystemAudioRecordingSink({});
+    fixture.backendRaw->cameraSource->pushVideo(video(1280, 720));
+    fixture.backendRaw->microphoneSource->pushAudio(audio(0.25F, 0.0F));
+    fixture.backendRaw->systemAudioSource->pushAudio(audio(0.25F, -0.25F));
+    fixture.controller->pollCapture();
+
+    EXPECT_EQ(camera->frames, 1);
+    EXPECT_EQ(microphone->blocks, 1);
+    EXPECT_EQ(systemAudio->blocks, 1);
+    EXPECT_EQ(fixture.controller->cameraWidth(), 1280u);
+    EXPECT_EQ(fixture.controller->microphoneBlocks(), 2u);
+    EXPECT_EQ(fixture.controller->systemAudioBlocks(), 2u);
 }
 
 TEST(DeviceCaptureControllerTest, RemainsStoppingUntilNativeCompletion) {

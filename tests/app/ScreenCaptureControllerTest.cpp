@@ -173,6 +173,20 @@ public:
     std::optional<AppError> nextError;
 };
 
+class RecordingVideoSink final : public IVideoFrameSink {
+public:
+    void onCaptureStarted() noexcept override {}
+    void onVideoFrame(VideoFrame frame) noexcept override {
+        timestamps.push_back(frame.timestamp.time_since_epoch().count());
+    }
+    void onCaptureError(AppError error) noexcept override {
+        terminalError = std::move(error);
+    }
+
+    std::vector<std::int64_t> timestamps;
+    std::optional<AppError> terminalError;
+};
+
 struct ControllerFixture {
     ControllerFixture(ScreenCapturePermissionStatus permissionStatus) {
         auto permission = std::make_unique<PermissionFake>();
@@ -277,6 +291,31 @@ TEST(ScreenCaptureControllerTest, StartsSelectedPushSourceAndPublishesLiveGeomet
     EXPECT_EQ(fixture.controller->actualWidth(), 1440u);
     EXPECT_EQ(fixture.controller->actualHeight(), 900u);
     EXPECT_EQ(fixture.controller->receivedFrames(), 1u);
+}
+
+TEST(ScreenCaptureControllerTest, AttachesRecordingSinkWithoutInterruptingPreview) {
+    ControllerFixture fixture{ScreenCapturePermissionStatus::Granted};
+    fixture.controller->initialize();
+    fixture.finishDiscovery({displayTarget()});
+    fixture.controller->startPreview();
+    auto* source = fixture.factoryFake->lastSource;
+    ASSERT_NE(source, nullptr);
+    auto recording = std::make_shared<RecordingVideoSink>();
+
+    fixture.controller->setRecordingSink(recording);
+    ASSERT_TRUE(source->pushFrame(VideoFrame{
+        .timestamp = TimestampNs{ProjectClock::duration{21}}, .width = 640, .height = 360})
+                    .hasValue());
+    fixture.controller->setRecordingSink({});
+    ASSERT_TRUE(source->pushFrame(VideoFrame{
+        .timestamp = TimestampNs{ProjectClock::duration{22}}, .width = 800, .height = 450})
+                    .hasValue());
+    fixture.controller->pollCapture();
+
+    EXPECT_EQ(recording->timestamps, (std::vector<std::int64_t>{21}));
+    EXPECT_EQ(fixture.controller->actualWidth(), 800u);
+    EXPECT_EQ(fixture.controller->actualHeight(), 450u);
+    EXPECT_TRUE(fixture.controller->previewing());
 }
 
 TEST(ScreenCaptureControllerTest, DoesNotClaimPreviewBeforeNativeStartConfirmation) {

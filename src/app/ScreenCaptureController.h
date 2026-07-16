@@ -4,6 +4,7 @@
 #include "capture/IScreenCaptureDiscovery.h"
 #include "capture/IScreenCapturePermission.h"
 #include "capture/IScreenCaptureSourceFactory.h"
+#include "capture/CaptureFanoutSinks.h"
 #include "capture/LatestVideoFrameMailbox.h"
 #include "capture/ScreenCaptureTypes.h"
 #include "core/Result.h"
@@ -93,6 +94,11 @@ public:
         return mailbox_;
     }
 
+    /// Atomically attaches the live recorder while keeping preview active.
+    /// Passing an empty sink detaches recording without restarting capture.
+    void setRecordingSink(
+        std::shared_ptr<creator::capture::IVideoFrameSink> sink) noexcept;
+
     Q_INVOKABLE void initialize();
     Q_INVOKABLE void requestPermission();
     Q_INVOKABLE void refreshTargets();
@@ -132,6 +138,8 @@ private:
     std::unique_ptr<creator::capture::IScreenCaptureSourceFactory> sourceFactory_;
     std::unique_ptr<creator::capture::IScreenCaptureSource> source_;
     std::shared_ptr<creator::capture::LatestVideoFrameMailbox> mailbox_;
+    std::shared_ptr<creator::capture::VideoFrameFanoutSink> fanout_;
+    std::shared_ptr<creator::capture::IVideoFrameSink> recordingSink_;
     std::vector<creator::capture::ScreenCaptureTarget> targetSnapshot_;
     QVariantList targetModel_;
     QString selectedTargetId_;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "capture/AudioCaptureMailbox.h"
+#include "capture/CaptureFanoutSinks.h"
 #include "capture/AudioLevelMeter.h"
 #include "capture/DeviceCaptureTypes.h"
 #include "capture/IDeviceCaptureBackend.h"
@@ -121,6 +122,13 @@ public:
         return systemAudioOverruns_;
     }
 
+    void setCameraRecordingSink(
+        std::shared_ptr<creator::capture::IVideoFrameSink> sink) noexcept;
+    void setMicrophoneRecordingSink(
+        std::shared_ptr<creator::capture::IAudioBlockSink> sink) noexcept;
+    void setSystemAudioRecordingSink(
+        std::shared_ptr<creator::capture::IAudioBlockSink> sink) noexcept;
+
     Q_INVOKABLE void initialize();
     Q_INVOKABLE void refreshDevices();
     Q_INVOKABLE void requestCameraPermission();
@@ -178,6 +186,12 @@ private:
     std::shared_ptr<creator::capture::LatestVideoFrameMailbox> cameraMailbox_;
     std::shared_ptr<creator::capture::AudioCaptureMailbox> microphoneMailbox_;
     std::shared_ptr<creator::capture::AudioCaptureMailbox> systemAudioMailbox_;
+    std::shared_ptr<creator::capture::VideoFrameFanoutSink> cameraFanout_;
+    std::shared_ptr<creator::capture::AudioBlockFanoutSink> microphoneFanout_;
+    std::shared_ptr<creator::capture::AudioBlockFanoutSink> systemAudioFanout_;
+    std::shared_ptr<creator::capture::IVideoFrameSink> cameraRecordingSink_;
+    std::shared_ptr<creator::capture::IAudioBlockSink> microphoneRecordingSink_;
+    std::shared_ptr<creator::capture::IAudioBlockSink> systemAudioRecordingSink_;
 
     creator::capture::MediaPermissionStatus cameraPermission_{
         creator::capture::MediaPermissionStatus::Unknown};

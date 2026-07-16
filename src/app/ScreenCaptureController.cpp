@@ -203,8 +203,11 @@ void ScreenCaptureController::startPreview() {
     setState(ScreenCaptureState::Starting);
     setStatusMessage(tr("Starting screen preview"));
     mailbox_ = std::make_shared<capture::LatestVideoFrameMailbox>();
-    auto created = sourceFactory_->create(target->id(), mailbox_);
+    fanout_ = std::make_shared<capture::VideoFrameFanoutSink>(mailbox_);
+    fanout_->setSecondary(recordingSink_);
+    auto created = sourceFactory_->create(target->id(), fanout_);
     if (!created.hasValue()) {
+        fanout_.reset();
         mailbox_.reset();
         setState(ScreenCaptureState::Error);
         setStatusMessage(fromUtf8(created.error().message()));
@@ -215,6 +218,7 @@ void ScreenCaptureController::startPreview() {
     if (!started.hasValue()) {
         const QString error = fromUtf8(started.error().message());
         releaseSource();
+        fanout_.reset();
         mailbox_.reset();
         setState(ScreenCaptureState::Error);
         setStatusMessage(error);
@@ -235,6 +239,12 @@ void ScreenCaptureController::startPreview() {
     if (state_ == ScreenCaptureState::Starting) {
         setStatusMessage(tr("Waiting for the native capture stream"));
     }
+}
+
+void ScreenCaptureController::setRecordingSink(
+    std::shared_ptr<capture::IVideoFrameSink> sink) noexcept {
+    recordingSink_ = std::move(sink);
+    if (fanout_) fanout_->setSecondary(recordingSink_);
 }
 
 void ScreenCaptureController::stopPreview() {
@@ -263,6 +273,7 @@ void ScreenCaptureController::handleStopResult(std::uint64_t generation,
                                                core::Result<void> result) {
     if (generation != generation_ || state_ != ScreenCaptureState::Stopping) return;
     source_.reset();
+    fanout_.reset();
     mailbox_.reset();
     if (!result.hasValue()) {
         setState(ScreenCaptureState::Error);
@@ -287,6 +298,7 @@ void ScreenCaptureController::pollCapture() {
 
     pollTimer_.stop();
     releaseSource();
+    fanout_.reset();
     mailbox_.reset();
     setState(ScreenCaptureState::Error);
     setStatusMessage(fromUtf8(error->message()));
