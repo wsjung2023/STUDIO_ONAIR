@@ -30,7 +30,8 @@
 
 ## 현재 코드 골격
 
-R0-01과 R0-02가 완료되었고 R0-03 macOS 화면 캡처 코드는 현재 브랜치에 구현되어,
+R0-01과 R0-02가 완료되었고 R0-03 macOS 화면 캡처와 R0-04 카메라·오디오 캡처
+코드는 현재 브랜치에 구현되어,
 애플리케이션(`creator_studio.exe`)에서 다음 흐름이 연결됩니다.
 
 - Home에서 로컬 `.cstudio` 프로젝트 생성·열기와 최근 프로젝트 표시
@@ -38,22 +39,24 @@ R0-01과 R0-02가 완료되었고 R0-03 macOS 화면 캡처 코드는 현재 브
 - 프로젝트가 열린 뒤에만 Studio로 이동하고 Record/Stop 허용
 - 녹화 시작 전 세션 상태를 SQLite에 먼저 기록하고, 종료 저장이 성공한 뒤에만 `Stopped` 표시
 - 비정상 종료로 남은 세션을 시작 시 스캔하고 Recovery 화면에서 복구 또는 나중에 처리
+- 카메라·마이크 장치 열거, 독립 권한 요청, hotplug 격리, 시스템 오디오, 입력 레벨 표시
 - Studio의 test pattern, fake 녹화 세션, 세그먼트 개수와 duration 표시
 
 프로젝트 URL은 반드시 **로컬 파일시스템 경로**여야 합니다. 원격 URL이나 네트워크 API는 지원하지 않습니다. 저장 계층은 SQLite **3.53.3**과 pboettch JSON Schema Validator **2.4.0**을 고정 버전으로 사용합니다.
 
-2026-07-16 이 Windows 머신에서 R0-03 수정 후 Debug와 Release 빌드는 경고를 오류로
-처리해 성공했습니다. Debug는 **256개 테스트가 발견되어 255개 통과, 1개 조건부 skip**
-이었습니다. Release는 254개 통과, 같은 symlink 1개 skip, crash-recovery 자식 fixture
-1개가 코드 진입 전 Windows Application Control에 차단되어 실패했습니다(`runFixture=-1`).
-동일한 실제 프로세스 사망 복구 테스트는 Debug에서 통과합니다. symlink skip은 일반 권한
+2026-07-16 이 Windows 머신에서 R0-04 최종 리뷰 수정 후 Debug 빌드는 경고를 오류로
+처리해 성공했습니다. **292개 테스트가 발견되어 291개 통과, 1개 조건부 skip**이었습니다.
+Release 빌드도 리뷰 수정 전 R0-04 전체에서 경고 없이 성공했지만, 이 Windows 머신의
+Application Control이 새 Release 테스트 실행 파일과 crash-recovery 자식 fixture를 간헐적으로
+차단했습니다. 동일한 실제 프로세스 사망 복구 테스트는 Debug에서 통과합니다. symlink skip은 일반 권한
 Windows에서 fixture를 만들 수 없어 발생하며, 같은 외부 파일 연결 위험은 권한이 필요 없는
 hard-link 테스트로 통과했습니다. CI 워크플로는 아직 원격에서 실행되지 않았고 macOS
 빌드도 실제 머신에서 검증되지 않았습니다.
 
-macOS ScreenCaptureKit 프레임 수신과 Metal zero-copy 프리뷰 경로는 구현했지만, 이 저장소를
-작업한 Windows 머신에서는 Apple 전용 코드를 컴파일하거나 실기 측정할 수 없어 R0-03 완료
-증거로 간주하지 않습니다. 실제 미디어 바이트 기록·인코딩과 비선형 편집은 아직 없으며,
+macOS ScreenCaptureKit 프레임 수신, Metal zero-copy 프리뷰, AVFoundation 카메라·마이크,
+ScreenCaptureKit 시스템 오디오 경로는 구현했지만, 이 저장소를 작업한 Windows 머신에서는
+Apple 전용 코드를 컴파일하거나 실기 측정할 수 없어 R0-03/R0-04 제품 완료 증거로 간주하지
+않습니다. 실제 미디어 바이트 기록·인코딩과 비선형 편집은 아직 없으며,
 Record/Stop 녹화 경로는 R0-05 전까지 결정론적 fake source/recorder를 사용합니다.
 
 모듈은 CMake static library로 분리되어 있고, application 계층 아래(`cs_core`, `cs_domain`, `cs_media`, `cs_capture`, `cs_recorder`, `cs_project_store`, `cs_fakes`)는 Qt를 링크하지 않습니다. `cmake/CreatorStudioTargets.cmake`의 `cs_add_qtfree_library()`가 configure 단계에서 이를 강제합니다.
