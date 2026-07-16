@@ -74,6 +74,10 @@ Result<void> SqliteStatement::bindInt64(int index, std::int64_t value) {
     return checkSqlite(database_, "bind integer", sqlite3_bind_int64(statement_, index, value));
 }
 
+Result<void> SqliteStatement::bindDouble(int index, double value) {
+    return checkSqlite(database_, "bind real", sqlite3_bind_double(statement_, index, value));
+}
+
 Result<void> SqliteStatement::bindNull(int index) {
     return checkSqlite(database_, "bind null", sqlite3_bind_null(statement_, index));
 }
@@ -91,6 +95,10 @@ Result<SqliteStep> SqliteStatement::step() {
 
 std::int64_t SqliteStatement::columnInt64(int index) const noexcept {
     return sqlite3_column_int64(statement_, index);
+}
+
+double SqliteStatement::columnDouble(int index) const noexcept {
+    return sqlite3_column_double(statement_, index);
 }
 
 std::string SqliteStatement::columnText(int index) const {

@@ -24,9 +24,11 @@ public:
 
     [[nodiscard]] core::Result<void> bindText(int index, std::string_view value);
     [[nodiscard]] core::Result<void> bindInt64(int index, std::int64_t value);
+    [[nodiscard]] core::Result<void> bindDouble(int index, double value);
     [[nodiscard]] core::Result<void> bindNull(int index);
     [[nodiscard]] core::Result<SqliteStep> step();
     [[nodiscard]] std::int64_t columnInt64(int index) const noexcept;
+    [[nodiscard]] double columnDouble(int index) const noexcept;
     [[nodiscard]] std::string columnText(int index) const;
     [[nodiscard]] bool columnIsNull(int index) const noexcept;
     [[nodiscard]] core::Result<void> reset();
