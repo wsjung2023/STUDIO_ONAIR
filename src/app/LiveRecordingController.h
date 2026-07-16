@@ -1,0 +1,103 @@
+#pragma once
+
+#include "app/ILiveRecordingEngine.h"
+#include "app/IRecordingPersistence.h"
+
+#include <QObject>
+#include <QString>
+#include <QTimer>
+
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <optional>
+
+namespace creator::app {
+
+enum class LiveRecordingOperationState { Idle, Preparing, Recording, Finalizing };
+
+/// QML-facing owner of the production live recording lifecycle.
+class LiveRecordingController final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(bool busy READ isBusy NOTIFY operationStateChanged)
+    Q_PROPERTY(bool recording READ isRecording NOTIFY recordingChanged)
+    Q_PROPERTY(bool recordingAvailable READ recordingAvailable CONSTANT)
+    Q_PROPERTY(int segmentCount READ segmentCount NOTIFY diagnosticsChanged)
+    Q_PROPERTY(int trackCount READ trackCount NOTIFY diagnosticsChanged)
+    Q_PROPERTY(qulonglong queuedItems READ queuedItems NOTIFY diagnosticsChanged)
+    Q_PROPERTY(qulonglong droppedFrames READ droppedFrames NOTIFY diagnosticsChanged)
+    Q_PROPERTY(qulonglong diskAvailableBytes READ diskAvailableBytes NOTIFY diagnosticsChanged)
+    Q_PROPERTY(QString encoderName READ encoderName NOTIFY diagnosticsChanged)
+    Q_PROPERTY(QString takeDuration READ takeDuration NOTIFY diagnosticsChanged)
+    Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
+
+public:
+    using PackagePathProvider =
+        std::function<std::optional<std::filesystem::path>()>;
+    using Clock = std::function<core::TimestampNs()>;
+
+    LiveRecordingController(std::unique_ptr<ILiveRecordingEngine> engine,
+                            IRecordingPersistence* persistence,
+                            PackagePathProvider packagePathProvider,
+                            Clock clock = [] { return core::ProjectClock::now(); },
+                            QObject* parent = nullptr);
+    ~LiveRecordingController() override;
+
+    [[nodiscard]] LiveRecordingOperationState operationState() const noexcept {
+        return operationState_;
+    }
+    [[nodiscard]] bool isBusy() const noexcept;
+    [[nodiscard]] bool isRecording() const noexcept;
+    [[nodiscard]] bool recordingAvailable() const noexcept;
+    [[nodiscard]] int segmentCount() const noexcept { return segmentCount_; }
+    [[nodiscard]] int trackCount() const noexcept { return trackCount_; }
+    [[nodiscard]] qulonglong queuedItems() const noexcept { return queuedItems_; }
+    [[nodiscard]] qulonglong droppedFrames() const noexcept { return droppedFrames_; }
+    [[nodiscard]] qulonglong diskAvailableBytes() const noexcept {
+        return diskAvailableBytes_;
+    }
+    [[nodiscard]] QString encoderName() const { return encoderName_; }
+    [[nodiscard]] QString takeDuration() const { return takeDuration_; }
+    [[nodiscard]] QString statusMessage() const { return statusMessage_; }
+
+    Q_INVOKABLE void startRecording();
+    Q_INVOKABLE void stopRecording();
+
+public slots:
+    void pollDiagnostics();
+
+signals:
+    void operationStateChanged();
+    void recordingChanged();
+    void diagnosticsChanged();
+    void statusMessageChanged();
+
+private:
+    void handleBeginFinished(core::Result<void> result);
+    void handleEngineFinished(core::Result<LiveRecordingCompletion> result);
+    void handlePersistenceComplete(core::Result<void> result);
+    void abortStartedSession(core::AppError error);
+    void setOperationState(LiveRecordingOperationState state);
+    void setStatusMessage(QString message);
+    void resetDiagnostics();
+
+    std::unique_ptr<ILiveRecordingEngine> engine_;
+    IRecordingPersistence* persistence_{};
+    PackagePathProvider packagePathProvider_;
+    Clock clock_;
+    QTimer diagnosticsTimer_;
+    LiveRecordingOperationState operationState_{LiveRecordingOperationState::Idle};
+    std::optional<LiveRecordingStart> pendingStart_;
+    std::optional<LiveRecordingCompletion> pendingCompletion_;
+    std::optional<core::AppError> pendingTerminalError_;
+    int segmentCount_{0};
+    int trackCount_{0};
+    qulonglong queuedItems_{0};
+    qulonglong droppedFrames_{0};
+    qulonglong diskAvailableBytes_{0};
+    QString encoderName_{QStringLiteral("Not active")};
+    QString takeDuration_{QStringLiteral("00:00:00")};
+    QString statusMessage_;
+};
+
+}  // namespace creator::app

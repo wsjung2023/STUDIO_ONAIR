@@ -10,6 +10,9 @@ add_library(cs_app STATIC
     ProjectSegmentLifecycleSink.cpp
     MultiTrackRecordingService.h
     MultiTrackRecordingService.cpp
+    ILiveRecordingEngine.h
+    LiveRecordingController.h
+    LiveRecordingController.cpp
     StudioController.h
     StudioController.cpp
     ScreenCaptureController.h

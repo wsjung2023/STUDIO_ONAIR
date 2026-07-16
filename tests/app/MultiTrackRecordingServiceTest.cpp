@@ -231,4 +231,32 @@ TEST(MultiTrackRecordingServiceTest, StartFailureCompletesObserverAndStopsServic
     EXPECT_EQ(service.snapshot().state, creator::app::MultiTrackRecordingState::Stopped);
 }
 
+TEST(MultiTrackRecordingServiceTest, CaptureFailureStopsEveryTrackAndCompletesOnce) {
+    const auto screen = SourceId::create("screen-1").value();
+    const auto microphone = SourceId::create("microphone-1").value();
+    auto screenTrack = buildTrack(screen, TrackRole::Screen);
+    auto microphoneTrack = buildTrack(microphone, TrackRole::Microphone);
+    MultiTrackRecordingService service;
+    ASSERT_TRUE(service.addTrack(std::move(screenTrack.recorder)).hasValue());
+    ASSERT_TRUE(service.addTrack(std::move(microphoneTrack.recorder)).hasValue());
+    ASSERT_TRUE(service.start().hasValue());
+    auto promise = std::make_shared<std::promise<Result<MultiTrackRecordingSummary>>>();
+    auto future = promise->get_future();
+    service.observeCompletion(
+        [promise](const auto& result) { promise->set_value(result); });
+
+    service.fail({creator::core::ErrorCode::NotFound, "camera disconnected"},
+                 creator::core::TimestampNs{std::chrono::seconds{1}});
+    service.fail({creator::core::ErrorCode::IoFailure, "late duplicate"},
+                 creator::core::TimestampNs{std::chrono::seconds{2}});
+    const auto completed = future.get();
+
+    ASSERT_FALSE(completed.hasValue());
+    EXPECT_EQ(completed.error().message(), "camera disconnected");
+    const auto snapshot = service.snapshot();
+    EXPECT_EQ(snapshot.state, creator::app::MultiTrackRecordingState::Stopped);
+    ASSERT_TRUE(snapshot.terminalError.has_value());
+    EXPECT_EQ(snapshot.terminalError->message(), "camera disconnected");
+}
+
 }  // namespace

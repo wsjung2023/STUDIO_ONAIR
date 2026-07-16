@@ -53,6 +53,10 @@ public:
         const domain::SourceId& sourceId, media::VideoFrame frame);
     [[nodiscard]] core::Result<void> accept(
         const domain::SourceId& sourceId, media::AudioBlock block);
+    /// Terminates every active track after an upstream capture failure.
+    /// The first failure remains the terminal diagnostic; later duplicates
+    /// are harmless and do not trigger a second completion.
+    void fail(core::AppError error, core::TimestampNs endTime);
     void stopAsync(core::TimestampNs endTime, StopCompletion completion = {});
     void observeCompletion(StopCompletion observer);
     [[nodiscard]] MultiTrackRecordingSnapshot snapshot() const;

@@ -145,6 +145,11 @@ core::Result<void> MultiTrackRecordingService::accept(
     return accepted;
 }
 
+void MultiTrackRecordingService::fail(core::AppError error,
+                                      core::TimestampNs endTime) {
+    latchFailure(error, endTime);
+}
+
 void MultiTrackRecordingService::stopAsync(core::TimestampNs endTime,
                                            StopCompletion completion) {
     std::vector<recorder::AsyncTrackRecorder*> toStop;
