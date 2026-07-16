@@ -5,6 +5,7 @@
 #include "edit_engine/IEditEngine.h"
 
 #include <QObject>
+#include <QImage>
 #include <QString>
 
 #include <memory>
@@ -17,6 +18,7 @@ enum class EditorEngineOperation {
     Play,
     Pause,
     Seek,
+    Frame,
 };
 
 class EditorEngineWorker final : public QObject {
@@ -33,10 +35,15 @@ public:
     void pause(quint64 generation, quint64 commandId);
     void seek(quint64 generation, quint64 commandId,
               core::TimestampNs position);
+    void requestFrame(quint64 generation, quint64 commandId,
+                      core::TimestampNs position);
 
 signals:
     void completed(quint64 generation, quint64 commandId, int operation,
                    bool success, QString errorMessage);
+    void frameCompleted(quint64 generation, quint64 commandId, bool success,
+                        QString errorMessage, qlonglong revision,
+                        qlonglong positionNs, QImage image);
 
 private:
     void publish(quint64 generation, quint64 commandId,

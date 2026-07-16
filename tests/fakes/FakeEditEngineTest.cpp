@@ -72,7 +72,8 @@ TEST(FakeEditEngineTest, RecordsPlaybackAndReturnsDeterministicFrame) {
     EXPECT_FALSE(engine.playing());
     EXPECT_EQ(engine.playhead().time_since_epoch().count(), 250);
     EXPECT_EQ(frame.value().revision().value(), 3);
-    EXPECT_EQ(frame.value().frame().width, 1920U);
+    EXPECT_EQ(frame.value().frame().width, 64U);
+    EXPECT_NE(frame.value().frame().platformHandle, nullptr);
     ASSERT_EQ(engine.calls().size(), 5U);
     EXPECT_EQ(engine.calls()[0].operation, FakeEditOperation::Load);
     EXPECT_EQ(engine.calls()[1].operation, FakeEditOperation::Play);

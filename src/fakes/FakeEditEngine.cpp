@@ -52,17 +52,30 @@ DurationNs timelineDuration(const domain::Timeline& timeline) {
 }
 
 media::VideoFrame frameAt(TimestampNs position) {
+    constexpr std::uint32_t kWidth = 64;
+    constexpr std::uint32_t kHeight = 36;
+    auto pixels = std::make_shared<std::vector<std::uint8_t>>(
+        static_cast<std::size_t>(kWidth) * kHeight * 4U);
+    const auto blue = static_cast<std::uint8_t>(
+        position.time_since_epoch().count() & 0xff);
+    for (std::size_t offset = 0; offset < pixels->size(); offset += 4U) {
+        (*pixels)[offset] = blue;
+        (*pixels)[offset + 1U] = 0x20;
+        (*pixels)[offset + 2U] = 0x30;
+        (*pixels)[offset + 3U] = 0xff;
+    }
     return media::VideoFrame{
         .timestamp = position,
-        .width = 1920,
-        .height = 1080,
-        .visibleRect = {.x = 0, .y = 0, .width = 1920, .height = 1080},
-        .contentWidth = 1920,
-        .contentHeight = 1080,
+        .width = kWidth,
+        .height = kHeight,
+        .visibleRect = {.x = 0, .y = 0, .width = kWidth, .height = kHeight},
+        .contentWidth = kWidth,
+        .contentHeight = kHeight,
         .contentScale = 1.0,
         .pointPixelScale = 1.0,
         .pixelFormat = media::PixelFormat::Bgra8,
         .colorSpace = media::ColorSpace::Rec709Sdr,
+        .platformHandle = std::shared_ptr<void>{pixels, pixels->data()},
     };
 }
 

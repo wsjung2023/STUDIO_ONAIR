@@ -13,6 +13,7 @@ FetchContent_Declare(
 # Without this, MSVC links gtest against the static CRT while our targets use
 # the dynamic CRT, and the link fails with mismatched runtime library errors.
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(googletest)
 
@@ -42,6 +43,7 @@ add_executable(cs_tests
     domain/EditCommandTest.cpp
     domain/DeleteRangeCommandTest.cpp
     edit_engine/EditEngineTypesTest.cpp
+    mlt_adapter/MltGraphPlanTest.cpp
     domain/ProjectManifestTest.cpp
     domain/RecordingSessionTest.cpp
     media/MediaTypesTest.cpp
@@ -94,6 +96,7 @@ target_link_libraries(cs_tests
         cs_recorder
         cs_project_store
         cs_edit_engine
+        cs_mlt_graph_plan
         cs_fakes
         nlohmann_json::nlohmann_json
         GTest::gtest_main
@@ -151,6 +154,15 @@ gtest_discover_tests(cs_app_tests
     PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+if(WIN32)
+    add_test(
+        NAME MltBootstrapPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/MltBootstrapPolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+endif()
+
 if(CS_ENABLE_FFMPEG)
     add_executable(cs_ffmpeg_tests
         ffmpeg_adapter/FfmpegCapabilityProbeTest.cpp
@@ -189,5 +201,55 @@ if(CS_ENABLE_FFMPEG)
         DISCOVERY_MODE PRE_TEST
         PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:${CS_FFMPEG_ROOT}/bin"
+    )
+endif()
+
+if(CS_ENABLE_MLT)
+    add_executable(cs_mlt_tests
+        mlt_adapter/MltEditEngineTest.cpp
+        mlt_adapter/MltRuntimeManifestTest.cpp
+    )
+    target_link_libraries(cs_mlt_tests PRIVATE
+        cs_mlt_adapter
+        GTest::gtest_main
+    )
+    target_compile_definitions(cs_mlt_tests PRIVATE
+        CS_TEST_MLT_ROOT="${CS_MLT_ROOT}"
+    )
+    cs_apply_warnings(cs_mlt_tests)
+    gtest_discover_tests(cs_mlt_tests
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:${CS_MLT_ROOT}/bin"
+    )
+
+    add_executable(cs_r1_mlt_acceptance_tests
+        acceptance/R1MltPreviewAcceptanceTest.cpp
+    )
+    target_link_libraries(cs_r1_mlt_acceptance_tests PRIVATE
+        cs_app
+        cs_mlt_adapter
+        Qt6::Quick
+        Qt6::Test
+        GTest::gtest
+    )
+    target_compile_definitions(cs_r1_mlt_acceptance_tests PRIVATE
+        CS_TEST_STAGED_MLT_ROOT="$<TARGET_FILE_DIR:creator_studio>/mlt-runtime"
+    )
+    if(WIN32 AND MSVC)
+        target_link_libraries(cs_r1_mlt_acceptance_tests PRIVATE delayimp)
+        target_link_options(cs_r1_mlt_acceptance_tests PRIVATE
+            "/DELAYLOAD:mlt++-7.dll"
+            "/DELAYLOAD:mlt-7.dll"
+        )
+    endif()
+    add_dependencies(cs_r1_mlt_acceptance_tests creator_studio)
+    cs_apply_warnings(cs_r1_mlt_acceptance_tests)
+    gtest_discover_tests(cs_r1_mlt_acceptance_tests
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 endif()

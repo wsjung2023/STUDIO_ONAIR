@@ -13,7 +13,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(CS_BUILD_TESTS "Build unit tests" ON)
 option(CS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(CS_ENABLE_FFMPEG "Build the audited FFmpeg adapter" OFF)
+option(CS_ENABLE_MLT "Build the audited MLT edit-engine adapter" OFF)
 set(CS_FFMPEG_ROOT "" CACHE PATH "Audited FFmpeg dynamic-library prefix")
+set(CS_MLT_ROOT "" CACHE PATH "Audited MLT dynamic-library prefix")
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(CreatorStudioTargets)
@@ -24,6 +26,22 @@ if(CS_ENABLE_FFMPEG)
     endif()
     list(PREPEND CMAKE_MODULE_PATH "${CS_FFMPEG_ROOT}/share/ffmpeg")
     find_package(FFMPEG 8.1.2 REQUIRED)
+endif()
+
+if(CS_ENABLE_MLT)
+    if(NOT CS_MLT_ROOT)
+        message(FATAL_ERROR "CS_ENABLE_MLT requires CS_MLT_ROOT from scripts/bootstrap_mlt.ps1")
+    endif()
+    execute_process(
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_mlt_runtime.ps1"
+            -RuntimeRoot "${CS_MLT_ROOT}"
+        RESULT_VARIABLE CS_MLT_VERIFY_RESULT
+    )
+    if(NOT CS_MLT_VERIFY_RESULT EQUAL 0)
+        message(FATAL_ERROR "CS_MLT_ROOT failed the audited runtime verification")
+    endif()
+    find_package(MLT REQUIRED)
 endif()
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Test)
@@ -111,6 +129,7 @@ add_subdirectory(src/core)
 add_subdirectory(src/domain)
 add_subdirectory(src/media)
 add_subdirectory(src/edit_engine)
+add_subdirectory(src/mlt_adapter)
 add_subdirectory(src/sync)
 add_subdirectory(src/capture)
 add_subdirectory(src/recorder)
@@ -165,6 +184,32 @@ if(CS_ENABLE_FFMPEG)
     endif()
 endif()
 
+if(CS_ENABLE_MLT)
+    target_link_libraries(creator_studio PRIVATE cs_mlt_adapter)
+    target_compile_definitions(creator_studio PRIVATE
+        CS_APP_ENABLE_MLT=1
+    )
+    if(WIN32)
+        if(NOT MSVC)
+            message(FATAL_ERROR "The audited Windows MLT package requires MSVC")
+        endif()
+        target_link_libraries(creator_studio PRIVATE delayimp)
+        target_link_options(creator_studio PRIVATE
+            "/DELAYLOAD:mlt++-7.dll"
+            "/DELAYLOAD:mlt-7.dll"
+        )
+        add_custom_command(TARGET creator_studio POST_BUILD
+            COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/stage_mlt_runtime.ps1"
+                -SourceRoot "${CS_MLT_ROOT}"
+                -DestinationRoot "$<TARGET_FILE_DIR:creator_studio>/mlt-runtime"
+        )
+    else()
+        message(FATAL_ERROR
+            "Audited MLT application staging is currently implemented for Windows")
+    endif()
+endif()
+
 if(APPLE)
     target_link_libraries(creator_studio PRIVATE cs_capture_macos)
     set_target_properties(creator_studio PROPERTIES
@@ -182,6 +227,12 @@ install(TARGETS creator_studio
     BUNDLE DESTINATION .
     RUNTIME DESTINATION bin
 )
+
+if(CS_ENABLE_MLT)
+    install(DIRECTORY "$<TARGET_FILE_DIR:creator_studio>/mlt-runtime/"
+        DESTINATION bin/mlt-runtime
+    )
+endif()
 
 if(CS_BUILD_TESTS)
     enable_testing()

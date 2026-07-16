@@ -18,6 +18,8 @@ namespace creator::edit_engine {
 struct TimelineSnapshot final {
     domain::Timeline timeline;
     domain::TimelineRevision revision;
+    std::vector<domain::MediaAsset> assets{};
+    std::filesystem::path mediaRoot{};
 
     friend bool operator==(const TimelineSnapshot&,
                            const TimelineSnapshot&) = default;
