@@ -280,6 +280,7 @@ core::Result<void> AsyncTrackRecorder::process(const media::AudioBlock& block) {
             .sampleRate = block.sampleRate,
             .channels = block.channels,
             .frameCount = static_cast<std::uint32_t>(sliceFrames),
+            .sampleRateRatio = block.sampleRateRatio,
             .samples = std::move(sliceSamples),
         };
         if (auto accepted = encoder_->accept(slice); !accepted.hasValue()) {

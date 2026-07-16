@@ -1,6 +1,7 @@
 #include "ffmpeg_adapter/FfmpegAudioSegmentEncoder.h"
 
 #include "core/AppError.h"
+#include "sync/AudioRateCompensator.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -15,6 +16,7 @@ extern "C" {
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
@@ -60,6 +62,7 @@ public:
                                   "FFmpeg audio segment configuration is invalid"};
         }
         config_ = config;
+        rateCompensator_ = {};
         started_ = true;
         return core::ok();
     }
@@ -71,7 +74,9 @@ public:
         }
         if (block.sampleRate == 0 || block.channels == 0 || block.frameCount == 0 ||
             block.frameCount > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
-            !block.samples || block.timestamp < config_->startTime) {
+            !block.samples || block.timestamp < config_->startTime ||
+            !std::isfinite(block.sampleRateRatio) || block.sampleRateRatio < 0.999 ||
+            block.sampleRateRatio > 1.001) {
             return core::AppError{core::ErrorCode::InvalidArgument,
                                   "FFmpeg audio block is invalid"};
         }
@@ -85,6 +90,10 @@ public:
                                   "Audio format changed inside one segment"};
         }
 
+        const auto compensation =
+            rateCompensator_.next(block.frameCount, block.sampleRateRatio);
+        if (!compensation.hasValue()) return compensation.error();
+
         constexpr AVRational nanoseconds{1, 1'000'000'000};
         std::int64_t inputPts = av_rescale_q(
             (block.timestamp - config_->startTime).count(), nanoseconds,
@@ -95,21 +104,36 @@ public:
                 return core::AppError{core::ErrorCode::InvalidArgument,
                                       "Audio block overlaps an earlier project timestamp"};
             }
-            if (std::llabs(difference) <= 1) inputPts = *expectedInputPts_;
-            else if (av_audio_fifo_size(fifo_) > 0) {
-                if (auto partial = encodeFromFifo(av_audio_fifo_size(fifo_), false);
-                    !partial.hasValue()) {
-                    return partial.error();
+            if (std::llabs(difference) <= 1) {
+                inputPts = *expectedInputPts_;
+            } else {
+                if (av_audio_fifo_size(fifo_) > 0) {
+                    if (auto partial = encodeFromFifo(av_audio_fifo_size(fifo_), true);
+                        !partial.hasValue()) {
+                        return partial.error();
+                    }
                 }
+                fifoStartPts_ = inputPts;
             }
         }
-        if (av_audio_fifo_size(fifo_) == 0) fifoStartPts_ = inputPts;
+        if (!fifoStartPts_) fifoStartPts_ = inputPts;
 
         AVFrame* converted = av_frame_alloc();
         if (converted == nullptr) {
             return core::AppError{core::ErrorCode::IoFailure,
                                   "Could not allocate FFmpeg converted audio frame"};
         }
+        if (compensation.value() != 0 || compensationActive_) {
+            const int compensated = swr_set_compensation(
+                resampler_, compensation.value(), static_cast<int>(block.frameCount));
+            if (compensated < 0) {
+                av_frame_free(&converted);
+                return ffmpegError("Could not apply FFmpeg audio clock compensation",
+                                   compensated);
+            }
+            compensationActive_ = true;
+        }
+        // swr_set_compensation invalidates earlier capacity estimates.
         const int capacity = swr_get_out_samples(resampler_, block.frameCount);
         if (capacity <= 0) {
             av_frame_free(&converted);
@@ -369,6 +393,7 @@ private:
         channels_ = 0;
         fifoStartPts_.reset();
         expectedInputPts_.reset();
+        compensationActive_ = false;
     }
 
     AudioEncoderOptions options_;
@@ -378,6 +403,8 @@ private:
     std::uint32_t channels_{0};
     std::optional<std::int64_t> fifoStartPts_;
     std::optional<std::int64_t> expectedInputPts_;
+    synchronization::AudioRateCompensator rateCompensator_;
+    bool compensationActive_{false};
     AVFormatContext* formatContext_{nullptr};
     AVCodecContext* codecContext_{nullptr};
     AVStream* stream_{nullptr};

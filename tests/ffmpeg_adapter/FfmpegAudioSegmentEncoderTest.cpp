@@ -32,6 +32,7 @@ struct DecodedAudio final {
     int sampleRate{0};
     int channels{0};
     bool decodedFrame{false};
+    std::int64_t decodedSamples{0};
     std::vector<std::int64_t> packetPtsNanoseconds;
 };
 
@@ -93,12 +94,22 @@ Result<DecodedAudio> decodeAudio(const fs::path& path) {
                 result.packetPtsNanoseconds.push_back(av_rescale_q(
                     packet->pts, input->streams[streamIndex]->time_base, nanoseconds));
             }
-            if (avcodec_send_packet(decoderContext, packet) >= 0 &&
-                avcodec_receive_frame(decoderContext, frame) >= 0) {
-                result.decodedFrame = true;
+            if (avcodec_send_packet(decoderContext, packet) >= 0) {
+                while (avcodec_receive_frame(decoderContext, frame) >= 0) {
+                    result.decodedFrame = true;
+                    result.decodedSamples += frame->nb_samples;
+                    av_frame_unref(frame);
+                }
             }
         }
         av_packet_unref(packet);
+    }
+    if (avcodec_send_packet(decoderContext, nullptr) >= 0) {
+        while (avcodec_receive_frame(decoderContext, frame) >= 0) {
+            result.decodedFrame = true;
+            result.decodedSamples += frame->nb_samples;
+            av_frame_unref(frame);
+        }
     }
     cleanup();
     return result;
@@ -213,6 +224,57 @@ TEST_F(FfmpegAudioSegmentEncoderTest, RejectsFormatChangeAndOverlappingTimestamp
     ASSERT_FALSE(overlap.hasValue());
     EXPECT_EQ(overlap.error().code(), creator::core::ErrorCode::InvalidArgument);
     encoder.abort();
+}
+
+TEST_F(FfmpegAudioSegmentEncoderTest, RejectsAudioRateCorrectionOutsideSafeBound) {
+    FfmpegAudioSegmentEncoder encoder;
+    ASSERT_TRUE(encoder.start(config(path_)).hasValue());
+    auto block = blockAt(0, 480);
+    block.sampleRateRatio = 1.0011;
+
+    const auto accepted = encoder.accept(block);
+
+    ASSERT_FALSE(accepted.hasValue());
+    EXPECT_EQ(accepted.error().code(), creator::core::ErrorCode::InvalidArgument);
+    encoder.abort();
+}
+
+TEST_F(FfmpegAudioSegmentEncoderTest, SoftCompensationChangesEncodedSampleCount) {
+    const auto fasterPath = path_.parent_path() / "cs_ffmpeg_audio_faster.mka.part";
+    const auto slowerPath = path_.parent_path() / "cs_ffmpeg_audio_slower.mka.part";
+    std::error_code ignored;
+    fs::remove(fasterPath, ignored);
+    fs::remove(slowerPath, ignored);
+
+    const auto encode = [](const fs::path& path, double ratio) {
+        FfmpegAudioSegmentEncoder encoder;
+        auto started = encoder.start(config(path));
+        if (!started.hasValue()) return Result<DecodedAudio>{started.error()};
+        constexpr std::uint32_t blockFrames = 480;
+        constexpr std::uint32_t blockCount = 2'500;
+        for (std::uint32_t index = 0; index < blockCount; ++index) {
+            auto block = blockAt(static_cast<std::uint64_t>(index) * blockFrames,
+                                 blockFrames);
+            block.sampleRateRatio = ratio;
+            if (auto accepted = encoder.accept(block); !accepted.hasValue()) {
+                return Result<DecodedAudio>{accepted.error()};
+            }
+        }
+        auto finished = encoder.finish(creator::core::TimestampNs{
+            std::chrono::seconds{25}});
+        if (!finished.hasValue()) return Result<DecodedAudio>{finished.error()};
+        return decodeAudio(path);
+    };
+
+    const auto faster = encode(fasterPath, 1.001);
+    const auto slower = encode(slowerPath, 0.999);
+
+    ASSERT_TRUE(faster.hasValue()) << faster.error().message();
+    ASSERT_TRUE(slower.hasValue()) << slower.error().message();
+    EXPECT_GT(faster.value().decodedSamples, slower.value().decodedSamples);
+    EXPECT_GE(faster.value().decodedSamples - slower.value().decodedSamples, 1024);
+    fs::remove(fasterPath, ignored);
+    fs::remove(slowerPath, ignored);
 }
 
 }  // namespace

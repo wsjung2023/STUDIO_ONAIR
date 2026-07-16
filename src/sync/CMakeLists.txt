@@ -4,6 +4,8 @@ cs_add_qtfree_library(cs_sync
         ClockCoordinator.cpp
         VideoSyncPlanner.h
         VideoSyncPlanner.cpp
+        AudioRateCompensator.h
+        AudioRateCompensator.cpp
     DEPENDS
         cs_domain
         cs_media

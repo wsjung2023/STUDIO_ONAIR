@@ -23,7 +23,7 @@ target_include_directories(cs_ffmpeg_adapter SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIR
 target_compile_features(cs_ffmpeg_adapter PUBLIC cxx_std_20)
 target_link_libraries(cs_ffmpeg_adapter
     PUBLIC cs_recorder
-    PRIVATE ${FFMPEG_LIBRARIES}
+    PRIVATE cs_sync ${FFMPEG_LIBRARIES}
 )
 cs_apply_warnings(cs_ffmpeg_adapter)
 cs_assert_qt_free(cs_ffmpeg_adapter)

@@ -105,6 +105,7 @@ struct EncoderState final {
     std::vector<creator::core::TimestampNs> finishes;
     std::uint64_t videoAccepts{0};
     std::uint64_t audioFrames{0};
+    std::vector<double> audioRateRatios;
 };
 
 class Encoder final : public ITrackSegmentEncoder {
@@ -116,9 +117,9 @@ public:
         state_->starts.push_back(config);
         return creator::core::ok();
     }
-    Result<void> accept(const VideoFrame&) override { return acceptFrames(1, true); }
+    Result<void> accept(const VideoFrame&) override { return acceptFrames(1, true, 1.0); }
     Result<void> accept(const AudioBlock& block) override {
-        return acceptFrames(block.frameCount, false);
+        return acceptFrames(block.frameCount, false, block.sampleRateRatio);
     }
     Result<EncodedSegment> finish(creator::core::TimestampNs endTime) override {
         std::lock_guard lock{state_->mutex};
@@ -128,7 +129,7 @@ public:
     void abort() noexcept override {}
 
 private:
-    Result<void> acceptFrames(std::uint64_t count, bool video) {
+    Result<void> acceptFrames(std::uint64_t count, bool video, double rateRatio) {
         std::unique_lock lock{state_->mutex};
         if (state_->blockFirstAccept && !state_->firstAcceptEntered) {
             state_->firstAcceptEntered = true;
@@ -137,7 +138,10 @@ private:
         }
         if (state_->acceptError) return *state_->acceptError;
         if (video) ++state_->videoAccepts;
-        else state_->audioFrames += count;
+        else {
+            state_->audioFrames += count;
+            state_->audioRateRatios.push_back(rateRatio);
+        }
         return creator::core::ok();
     }
 
@@ -246,6 +250,22 @@ TEST(AsyncTrackRecorderTest, AudioQueueOverflowIsTerminalAndNeverSilentlyDrops) 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidState);
     EXPECT_EQ(fixture.encoderState->audioFrames, 8u);
+}
+
+TEST(AsyncTrackRecorderTest, PreservesAudioRateRatioWhenSplittingAtSegmentBoundary) {
+    RecorderFixture fixture{TrackRole::Microphone};
+    ASSERT_TRUE(fixture.recorder->start().hasValue());
+    auto block = audioAt(std::chrono::milliseconds{1990}, 960);
+    block.sampleRateRatio = 1.0005;
+
+    ASSERT_TRUE(fixture.recorder->accept(std::move(block)).hasValue());
+    const auto stopped = fixture.stopAt(std::chrono::milliseconds{2010}).get();
+
+    ASSERT_TRUE(stopped.hasValue()) << stopped.error().message();
+    std::lock_guard lock{fixture.encoderState->mutex};
+    ASSERT_EQ(fixture.encoderState->audioRateRatios.size(), 2u);
+    EXPECT_DOUBLE_EQ(fixture.encoderState->audioRateRatios[0], 1.0005);
+    EXPECT_DOUBLE_EQ(fixture.encoderState->audioRateRatios[1], 1.0005);
 }
 
 TEST(AsyncTrackRecorderTest, PublishesAtProjectTwoSecondBoundariesAndFlushesTail) {

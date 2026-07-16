@@ -40,6 +40,7 @@ add_executable(cs_tests
     media/MediaTypesTest.cpp
     sync/ClockCoordinatorTest.cpp
     sync/VideoSyncPlannerTest.cpp
+    sync/AudioRateCompensatorTest.cpp
     capture/PortContractTest.cpp
     capture/CaptureTimestampMapperTest.cpp
     capture/ScreenCapturePortsTest.cpp

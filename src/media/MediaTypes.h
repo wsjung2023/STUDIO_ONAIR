@@ -70,6 +70,9 @@ struct AudioBlock final {
     std::uint32_t sampleRate{48000};
     std::uint32_t channels{2};
     std::uint32_t frameCount{0};
+    // Output samples per input sample. Synchronisation keeps this within
+    // +/-1000 ppm; adapters may reject wider ratios instead of hiding damage.
+    double sampleRateRatio{1.0};
     std::shared_ptr<const float[]> samples;
 };
 
