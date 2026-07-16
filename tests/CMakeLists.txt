@@ -35,6 +35,7 @@ add_executable(cs_tests
     project_store/SqliteProjectDatabaseTest.cpp
     project_store/SegmentPersistenceTest.cpp
     project_store/RecoveryTest.cpp
+    project_store/ProjectPackageStoreTest.cpp
     fakes/FakeCaptureSourceTest.cpp
     fakes/FakeRecorderTest.cpp
 )

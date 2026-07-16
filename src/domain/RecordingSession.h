@@ -36,6 +36,8 @@ public:
 
     [[nodiscard]] const SessionId& id() const noexcept { return id_; }
     [[nodiscard]] SessionState state() const noexcept { return state_; }
+    [[nodiscard]] std::optional<core::TimestampNs> startedAt() const noexcept;
+    [[nodiscard]] std::optional<core::TimestampNs> stoppedAt() const noexcept;
 
     /// Fails with InvalidState unless Idle.
     [[nodiscard]] core::Result<void> start(core::TimestampNs at);

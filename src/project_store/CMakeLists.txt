@@ -1,6 +1,7 @@
 cs_add_qtfree_library(cs_project_store
     SOURCES
         IProjectStore.h
+        IProjectPackageStore.h
         JsonProjectStore.h
         JsonProjectStore.cpp
         ManifestSchemaValidator.h
@@ -8,11 +9,15 @@ cs_add_qtfree_library(cs_project_store
         MigrationRunner.h
         MigrationRunner.cpp
         ProjectPackage.h
+        ProjectPackageStore.h
+        ProjectPackageStore.cpp
         SqliteProjectDatabase.h
         SqliteProjectDatabase.cpp
         migrations/001_initial.sql
         internal/SqliteConnection.h
         internal/SqliteConnection.cpp
+        internal/DurableFile.h
+        internal/DurableFile.cpp
     DEPENDS
         cs_domain
         nlohmann_json::nlohmann_json
