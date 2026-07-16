@@ -116,11 +116,15 @@ public:
         const TrackId& trackId, const ClipId& clipId) const noexcept;
 
     [[nodiscard]] core::Result<void> addTrack(Track track);
+    [[nodiscard]] core::Result<void> setTrackLocked(
+        const TrackId& trackId, bool locked);
     [[nodiscard]] core::Result<void> insertClip(const TrackId& trackId, Clip clip);
     [[nodiscard]] core::Result<void> replaceClip(
         const TrackId& trackId, const ClipId& clipId, Clip replacement);
     [[nodiscard]] core::Result<Clip> removeClip(
         const TrackId& trackId, const ClipId& clipId);
+    [[nodiscard]] core::Result<void> replaceTrackClips(
+        const TrackId& trackId, std::vector<Clip> clips);
 
     friend bool operator==(const Timeline&, const Timeline&) = default;
 

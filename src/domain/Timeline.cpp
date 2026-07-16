@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -118,15 +119,16 @@ bool Timeline::containsClipId(const ClipId& id) const noexcept {
 
 core::Result<void> Timeline::validateClips(
     TrackKind kind, const std::vector<Clip>& clips) {
+    std::set<ClipId> identities;
     for (std::size_t index = 0; index < clips.size(); ++index) {
         if (!compatible(kind, clips[index])) {
             return AppError{ErrorCode::InvalidArgument,
                             "clip content is incompatible with its track"};
         }
+        if (!identities.insert(clips[index].id()).second) {
+            return AppError{ErrorCode::AlreadyExists, "clip id already exists"};
+        }
         if (index > 0) {
-            if (clips[index - 1].id() == clips[index].id()) {
-                return AppError{ErrorCode::AlreadyExists, "clip id already exists"};
-            }
             if (overlaps(clips[index - 1].timelineRange(),
                          clips[index].timelineRange())) {
                 return AppError{ErrorCode::InvalidArgument,
@@ -134,6 +136,16 @@ core::Result<void> Timeline::validateClips(
             }
         }
     }
+    return core::ok();
+}
+
+core::Result<void> Timeline::setTrackLocked(
+    const TrackId& trackId, bool locked) {
+    auto* target = mutableTrack(trackId);
+    if (target == nullptr) {
+        return AppError{ErrorCode::NotFound, "timeline track was not found"};
+    }
+    target->locked_ = locked;
     return core::ok();
 }
 
@@ -226,6 +238,41 @@ core::Result<Clip> Timeline::removeClip(
     Clip removed = std::move(*found);
     target->clips_.erase(found);
     return removed;
+}
+
+core::Result<void> Timeline::replaceTrackClips(
+    const TrackId& trackId, std::vector<Clip> clips) {
+    auto* target = mutableTrack(trackId);
+    if (target == nullptr) {
+        return AppError{ErrorCode::NotFound, "timeline track was not found"};
+    }
+    if (target->locked()) {
+        return AppError{ErrorCode::InvalidState, "timeline track is locked"};
+    }
+    std::sort(clips.begin(), clips.end(), [](const Clip& first, const Clip& second) {
+        if (first.timelineRange().start() != second.timelineRange().start()) {
+            return first.timelineRange().start() < second.timelineRange().start();
+        }
+        return first.id() < second.id();
+    });
+    if (auto valid = validateClips(target->kind(), clips); !valid.hasValue()) {
+        return valid.error();
+    }
+    for (const auto& candidateTrack : tracks_) {
+        if (candidateTrack.id() == trackId) continue;
+        for (const auto& candidate : clips) {
+            const auto duplicate = std::find_if(
+                candidateTrack.clips().begin(), candidateTrack.clips().end(),
+                [&candidate](const Clip& existing) {
+                    return existing.id() == candidate.id();
+                });
+            if (duplicate != candidateTrack.clips().end()) {
+                return AppError{ErrorCode::AlreadyExists, "clip id already exists"};
+            }
+        }
+    }
+    target->clips_ = std::move(clips);
+    return core::ok();
 }
 
 }  // namespace creator::domain

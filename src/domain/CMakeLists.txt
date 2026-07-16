@@ -2,6 +2,8 @@ cs_add_qtfree_library(cs_domain
     SOURCES
         Identifiers.h
         EditCommand.h
+        DeleteRangeCommand.h
+        DeleteRangeCommand.cpp
         EditHistory.h
         EditHistory.cpp
         MediaAsset.h
