@@ -1,0 +1,10 @@
+cs_add_qtfree_library(cs_edit_engine
+    SOURCES
+        EditEngineTypes.h
+        EditEngineTypes.cpp
+        IEditEngine.h
+    DEPENDS
+        cs_core
+        cs_domain
+        cs_media
+)
