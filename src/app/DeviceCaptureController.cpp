@@ -86,11 +86,11 @@ bool DeviceCaptureController::systemAudioCapturing() const noexcept {
 }
 
 bool DeviceCaptureController::cameraCanStop() const noexcept {
-    return canStop(cameraState_);
+    return cameraSource_ && canStop(cameraState_);
 }
 
 bool DeviceCaptureController::microphoneCanStop() const noexcept {
-    return canStop(microphoneState_);
+    return microphoneSource_ && canStop(microphoneState_);
 }
 
 bool DeviceCaptureController::systemAudioCanStop() const noexcept {

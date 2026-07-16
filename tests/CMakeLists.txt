@@ -48,6 +48,7 @@ add_executable(cs_tests
     capture/ScreenCaptureStopCoordinatorTest.cpp
     capture/DeviceCapturePortsTest.cpp
     capture/AudioCapturePrimitivesTest.cpp
+    capture/AudioPcmLayoutTest.cpp
     capture/DeviceCaptureAssemblerTest.cpp
     capture/DeviceCaptureStopCoordinatorTest.cpp
     project_store/ManifestSchemaValidatorTest.cpp

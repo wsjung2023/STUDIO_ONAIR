@@ -347,6 +347,23 @@ TEST(DeviceCaptureControllerTest, CanStopEverySourceWhileNativeStartIsPending) {
     EXPECT_EQ(fixture.controller->systemAudioState(), DeviceCaptureState::Stopping);
 }
 
+TEST(DeviceCaptureControllerTest, CannotStopWhileOnlyPermissionRequestIsPending) {
+    Fixture fixture;
+    fixture.backendRaw->cameraPermission = MediaPermissionStatus::Unknown;
+    fixture.backendRaw->microphonePermission = MediaPermissionStatus::Unknown;
+    fixture.controller->initialize();
+
+    fixture.controller->requestCameraPermission();
+    EXPECT_EQ(fixture.controller->cameraState(), DeviceCaptureState::Starting);
+    EXPECT_FALSE(fixture.controller->cameraCanStop());
+
+    fixture.backendRaw->completePermission(MediaPermissionStatus::Denied);
+    drainQueuedCalls();
+    fixture.controller->requestMicrophonePermission();
+    EXPECT_EQ(fixture.controller->microphoneState(), DeviceCaptureState::Starting);
+    EXPECT_FALSE(fixture.controller->microphoneCanStop());
+}
+
 TEST(DeviceCaptureControllerTest, CameraHotUnplugDoesNotStopOtherSourcesOrApp) {
     Fixture fixture;
     fixture.controller->initialize();

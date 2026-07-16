@@ -1,6 +1,7 @@
 #include "capture/macos/MacDeviceCaptureBackend.h"
 
 #include "capture/AudioCaptureBlockAssembler.h"
+#include "capture/AudioPcmLayout.h"
 #include "capture/CameraCaptureFrameAssembler.h"
 #include "capture/DeviceCaptureStopCoordinator.h"
 #include "core/AppError.h"
@@ -65,17 +66,25 @@ NSArray<AVCaptureDeviceType>* cameraDeviceTypes() {
         [types addObject:AVCaptureDeviceTypeExternalUnknown];
 #pragma clang diagnostic pop
     }
-    if (@available(macOS 13.0, *)) {
+    if (@available(macOS 14.0, *)) {
         [types addObject:AVCaptureDeviceTypeContinuityCamera];
     }
     return types;
 }
 
+NSArray<AVCaptureDeviceType>* microphoneDeviceTypes() {
+    if (@available(macOS 14.0, *)) {
+        return @[ AVCaptureDeviceTypeMicrophone ];
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return @[ AVCaptureDeviceTypeBuiltInMicrophone ];
+#pragma clang diagnostic pop
+}
+
 AVCaptureDeviceDiscoverySession* discoverySession(CaptureDeviceKind kind) {
     NSArray<AVCaptureDeviceType>* types =
-        kind == CaptureDeviceKind::Camera
-            ? cameraDeviceTypes()
-            : @[ AVCaptureDeviceTypeMicrophone ];
+        kind == CaptureDeviceKind::Camera ? cameraDeviceTypes() : microphoneDeviceTypes();
     return [AVCaptureDeviceDiscoverySession
         discoverySessionWithDeviceTypes:types
                                 mediaType:mediaType(kind)
@@ -299,6 +308,15 @@ core::Result<NativeAudioBlock> extractAudioBlock(CMSampleBufferRef sampleBuffer)
     }
 
     const auto channels = static_cast<std::uint32_t>(format->mChannelsPerFrame);
+    const bool planar = (format->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
+    auto layout = validateFloat32PcmLayout({
+        .channels = channels,
+        .bytesPerFrame = format->mBytesPerFrame,
+        .interleaved = !planar,
+        .packed = (format->mFormatFlags & kAudioFormatFlagIsPacked) != 0,
+        .bigEndian = (format->mFormatFlags & kAudioFormatFlagIsBigEndian) != 0,
+    });
+    if (!layout.hasValue()) return layout.error();
     const auto frames = static_cast<std::uint32_t>(frameCount);
     const std::uint64_t sampleCount64 = static_cast<std::uint64_t>(channels) * frames;
     if (sampleCount64 > std::numeric_limits<std::size_t>::max()) {
@@ -333,9 +351,9 @@ core::Result<NativeAudioBlock> extractAudioBlock(CMSampleBufferRef sampleBuffer)
         }};
     auto samples = std::shared_ptr<float[]>(new float[sampleCount],
                                             std::default_delete<float[]>{});
-    const bool planar = (format->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
     if (!planar) {
-        if (list->mNumberBuffers < 1 || list->mBuffers[0].mData == nullptr ||
+        if (list->mNumberBuffers != 1 || list->mBuffers[0].mNumberChannels != channels ||
+            list->mBuffers[0].mData == nullptr ||
             list->mBuffers[0].mDataByteSize < sampleCount * sizeof(float)) {
             return core::AppError{core::ErrorCode::InvalidArgument,
                                   "Interleaved native audio buffer is truncated"};
@@ -349,7 +367,7 @@ core::Result<NativeAudioBlock> extractAudioBlock(CMSampleBufferRef sampleBuffer)
         }
         for (std::uint32_t channel = 0; channel < channels; ++channel) {
             const AudioBuffer& buffer = list->mBuffers[channel];
-            if (buffer.mData == nullptr ||
+            if (buffer.mNumberChannels != 1 || buffer.mData == nullptr ||
                 buffer.mDataByteSize < static_cast<std::size_t>(frames) * sizeof(float)) {
                 return core::AppError{core::ErrorCode::InvalidArgument,
                                       "Planar native audio buffer is truncated"};
@@ -436,6 +454,60 @@ class AvSessionRuntime final : public std::enable_shared_from_this<AvSessionRunt
 public:
     explicit AvSessionRuntime(dispatch_queue_t queue) : queue_(queue) {}
 
+    void observeSession(AVCaptureSession* session) {
+        std::weak_ptr<AvSessionRuntime> weak = weak_from_this();
+        NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+        runtimeErrorObserver_ = [center
+            addObserverForName:AVCaptureSessionRuntimeErrorNotification
+                        object:session
+                         queue:nil
+                    usingBlock:^(NSNotification* notification) {
+                      NSError* nativeError = notification.userInfo[AVCaptureSessionErrorKey];
+                      const core::AppError error = nativeFailure(
+                          "AVFoundation session runtime error", nativeError);
+                      if (auto retained = weak.lock()) {
+                          dispatch_async(retained->queue_, ^{
+                            if (!retained->stopRequested_.load(std::memory_order_acquire)) {
+                                retained->terminal(error);
+                            }
+                          });
+                      }
+                    }];
+        interruptedObserver_ = [center
+            addObserverForName:AVCaptureSessionWasInterruptedNotification
+                        object:session
+                         queue:nil
+                    usingBlock:^(NSNotification*) {
+                      const core::AppError error{
+                          core::ErrorCode::IoFailure,
+                          "AVFoundation session was interrupted"};
+                      if (auto retained = weak.lock()) {
+                          dispatch_async(retained->queue_, ^{
+                            if (!retained->stopRequested_.load(std::memory_order_acquire)) {
+                                retained->terminal(error);
+                            }
+                          });
+                      }
+                    }];
+    }
+
+    void terminal(core::AppError error) {
+        if (cameraState_) cameraState_->terminal(std::move(error));
+        else if (audioState_) audioState_->terminal(std::move(error));
+    }
+
+    void removeObservers() {
+        NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+        if (runtimeErrorObserver_ != nil) {
+            [center removeObserver:runtimeErrorObserver_];
+            runtimeErrorObserver_ = nil;
+        }
+        if (interruptedObserver_ != nil) {
+            [center removeObserver:interruptedObserver_];
+            interruptedObserver_ = nil;
+        }
+    }
+
     void stop(IDeviceCaptureSource::StopCompletion completion) {
         coordinator_.add(std::move(completion));
         if (stopRequested_.exchange(true, std::memory_order_acq_rel)) return;
@@ -443,6 +515,7 @@ public:
         if (audioState_) audioState_->stopAccepting();
         auto retained = shared_from_this();
         dispatch_async(queue_, ^{
+          retained->removeObservers();
           if (retained->session_ != nil && retained->session_.running) {
               [retained->session_ stopRunning];
           }
@@ -464,6 +537,8 @@ public:
     AVCaptureSession* __strong session_{nil};
     AVCaptureOutput* __strong output_{nil};
     NSObject* __strong bridge_{nil};
+    id __strong runtimeErrorObserver_{nil};
+    id __strong interruptedObserver_{nil};
     std::shared_ptr<CameraDeliveryState> cameraState_;
     std::shared_ptr<AudioDeliveryState> audioState_;
     std::atomic<bool> stopRequested_{false};
@@ -589,9 +664,10 @@ public:
               runtime->bridge_ = bridge;
               runtime->output_ = output;
           }
-          [session commitConfiguration];
-          runtime->session_ = session;
-          if (runtime->stopRequested_.load(std::memory_order_acquire)) return;
+           [session commitConfiguration];
+           runtime->session_ = session;
+           runtime->observeSession(session);
+           if (runtime->stopRequested_.load(std::memory_order_acquire)) return;
           [session startRunning];
           if (!session.running) {
               const core::AppError error{core::ErrorCode::IoFailure,

@@ -4,6 +4,8 @@ cs_add_qtfree_library(cs_capture
         CaptureTimestampMapper.cpp
         AudioLevelMeter.h
         AudioLevelMeter.cpp
+        AudioPcmLayout.h
+        AudioPcmLayout.cpp
         AudioCaptureBlockAssembler.h
         AudioCaptureBlockAssembler.cpp
         AudioCaptureMailbox.h
