@@ -1,0 +1,8 @@
+#pragma once
+
+#include <string_view>
+
+namespace creator::project_store::embedded {
+inline constexpr std::string_view kProjectSchema =
+    R"CS_SCHEMA(@CS_PROJECT_SCHEMA_JSON@)CS_SCHEMA";
+}  // namespace creator::project_store::embedded

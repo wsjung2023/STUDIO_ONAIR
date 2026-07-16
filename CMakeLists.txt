@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(CreatorStudio VERSION 0.1.0 LANGUAGES CXX)
+project(CreatorStudio VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,6 +30,28 @@ FetchContent_Declare(
 )
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(nlohmann_json)
+
+set(JSON_VALIDATOR_INSTALL OFF CACHE BOOL "" FORCE)
+set(JSON_VALIDATOR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(JSON_VALIDATOR_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(JSON_VALIDATOR_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    nlohmann_json_schema_validator
+    GIT_REPOSITORY https://github.com/pboettch/json-schema-validator.git
+    GIT_TAG        2.4.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(nlohmann_json_schema_validator)
+
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/schemas/project.schema.json"
+)
+file(READ "${PROJECT_SOURCE_DIR}/schemas/project.schema.json" CS_PROJECT_SCHEMA_JSON)
+configure_file(
+    "${PROJECT_SOURCE_DIR}/cmake/ProjectSchema.h.in"
+    "${PROJECT_BINARY_DIR}/generated/project_store/ProjectSchema.h"
+    @ONLY
+)
 
 # Layers below the application boundary. None of these link Qt.
 add_subdirectory(src/core)

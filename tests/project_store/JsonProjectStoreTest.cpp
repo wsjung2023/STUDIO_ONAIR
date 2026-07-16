@@ -325,6 +325,23 @@ TEST_F(JsonProjectStoreTest, LoadReportsFutureSchemaVersion) {
     EXPECT_EQ(loaded.error().code(), ErrorCode::UnsupportedVersion);
 }
 
+TEST_F(JsonProjectStoreTest, FutureSchemaVersionTakesPrecedenceOverUnknownProperties) {
+    const auto created = store_.create(packageDir_, "MyTutorial");
+    ASSERT_TRUE(created.hasValue());
+
+    std::ifstream in{packageDir_ / JsonProjectStore::kManifestFileName, std::ios::binary};
+    auto json = nlohmann::json::parse(in);
+    in.close();
+    json["schemaVersion"] = ProjectManifest::kCurrentSchemaVersion + 1;
+    json["futureProperty"] = true;
+    writeManifestText(json.dump());
+
+    const auto loaded = store_.load(packageDir_);
+
+    ASSERT_FALSE(loaded.hasValue());
+    EXPECT_EQ(loaded.error().code(), ErrorCode::UnsupportedVersion);
+}
+
 TEST_F(JsonProjectStoreTest, LoadReportsUnknownColorSpace) {
     const auto created = store_.create(packageDir_, "MyTutorial");
     ASSERT_TRUE(created.hasValue());
@@ -338,7 +355,7 @@ TEST_F(JsonProjectStoreTest, LoadReportsUnknownColorSpace) {
     const auto loaded = store_.load(packageDir_);
 
     ASSERT_FALSE(loaded.hasValue());
-    EXPECT_EQ(loaded.error().code(), ErrorCode::UnsupportedVersion);
+    EXPECT_EQ(loaded.error().code(), ErrorCode::ParseFailure);
 }
 
 TEST_F(JsonProjectStoreTest, LoadReportsInvalidUuid) {
@@ -354,7 +371,7 @@ TEST_F(JsonProjectStoreTest, LoadReportsInvalidUuid) {
     const auto loaded = store_.load(packageDir_);
 
     ASSERT_FALSE(loaded.hasValue());
-    EXPECT_EQ(loaded.error().code(), ErrorCode::InvalidArgument);
+    EXPECT_EQ(loaded.error().code(), ErrorCode::ParseFailure);
 }
 
 TEST_F(JsonProjectStoreTest, SaveRejectsInvalidManifest) {

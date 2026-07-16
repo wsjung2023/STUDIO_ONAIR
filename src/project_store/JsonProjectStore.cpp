@@ -3,6 +3,7 @@
 #include "core/Utc.h"
 #include "core/Uuid.h"
 #include "domain/ProjectManifest.h"
+#include "project_store/ManifestSchemaValidator.h"
 
 #include <nlohmann/json.hpp>
 
@@ -121,9 +122,13 @@ nlohmann::json toJson(const ProjectManifest& manifest) {
 /// sequence. validate() counts lead bytes for the length limit but never
 /// checks well-formedness, so a bad sequence reaches here intact. Catch it:
 /// an exception escaping this adapter is exactly what CLAUDE.md 4 forbids.
-Result<std::string> serialiseManifest(const ProjectManifest& manifest) {
+Result<std::string> validateAndSerialiseManifest(const ProjectManifest& manifest) {
     try {
-        return toJson(manifest).dump(2);
+        const nlohmann::json json = toJson(manifest);
+        if (auto valid = validateManifestJson(json); !valid.hasValue()) {
+            return valid.error();
+        }
+        return json.dump(2);
     } catch (const nlohmann::json::exception& error) {
         return AppError{ErrorCode::InvalidArgument,
                         "manifest contains text that is not valid UTF-8: " +
@@ -305,10 +310,10 @@ Result<ProjectManifest> JsonProjectStore::create(const fs::path& packageDirector
     // Serialise before touching the disk too: validate() only counts UTF-8
     // lead bytes for the length limit (see domain::utf8Length), so a name that
     // is a malformed byte sequence passes it and is only caught when dump()
-    // rejects it inside serialiseManifest. This must happen before
+    // rejects it inside validateAndSerialiseManifest. This must happen before
     // create_directories below, or a rejected name leaves a directory tree
     // behind - the same property the validate() call above protects.
-    auto serialised = serialiseManifest(manifest);
+    auto serialised = validateAndSerialiseManifest(manifest);
     if (!serialised.hasValue()) {
         return serialised.error();
     }
@@ -351,6 +356,20 @@ Result<ProjectManifest> JsonProjectStore::load(const fs::path& packageDirectory)
         return AppError{ErrorCode::ParseFailure,
                         "manifest is not valid JSON: " + std::string{error.what()}};
     }
+
+    // Keep the compatibility error more useful than a shape error: a future
+    // schema may legitimately add properties this Draft 7 schema rejects.
+    if (json.is_object()) {
+        const auto version = json.find("schemaVersion");
+        if (version != json.end() && version->is_number_integer() &&
+            version->get<std::int64_t>() > ProjectManifest::kCurrentSchemaVersion) {
+            return AppError{ErrorCode::UnsupportedVersion,
+                            "project was written by a newer version of Creator Studio"};
+        }
+    }
+    if (auto valid = validateManifestJson(json); !valid.hasValue()) {
+        return valid.error();
+    }
     return fromJson(json);
 }
 
@@ -361,7 +380,7 @@ Result<void> JsonProjectStore::save(const fs::path& packageDirectory,
     if (auto valid = domain::validate(manifest); !valid.hasValue()) {
         return valid.error();
     }
-    auto serialised = serialiseManifest(manifest);
+    auto serialised = validateAndSerialiseManifest(manifest);
     if (!serialised.hasValue()) {
         return serialised.error();
     }

@@ -28,6 +28,7 @@ add_executable(cs_tests
     domain/RecordingSessionTest.cpp
     media/MediaTypesTest.cpp
     capture/PortContractTest.cpp
+    project_store/ManifestSchemaValidatorTest.cpp
     project_store/JsonProjectStoreTest.cpp
     fakes/FakeCaptureSourceTest.cpp
     fakes/FakeRecorderTest.cpp
