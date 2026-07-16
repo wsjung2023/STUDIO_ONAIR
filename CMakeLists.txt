@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.25)
 
 project(CreatorStudio VERSION 0.1.0 LANGUAGES C CXX)
 
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -117,6 +121,16 @@ target_link_libraries(creator_studio
         Qt6::Quick
         Qt6::QuickControls2
 )
+
+if(APPLE)
+    target_link_libraries(creator_studio PRIVATE cs_capture_macos)
+    set_target_properties(creator_studio PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST "${PROJECT_SOURCE_DIR}/cmake/CreatorStudioInfo.plist.in"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    )
+endif()
 
 cs_apply_warnings(creator_studio)
 

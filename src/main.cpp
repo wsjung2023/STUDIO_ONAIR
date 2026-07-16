@@ -2,6 +2,9 @@
 #include "app/ScreenCaptureController.h"
 #include "app/StudioController.h"
 #include "capture/UnsupportedScreenCaptureBackend.h"
+#if defined(__APPLE__)
+#include "capture/macos/MacScreenCaptureBackend.h"
+#endif
 #include "domain/Identifiers.h"
 #include "fakes/FakeCaptureSource.h"
 #include "fakes/FakeRecorder.h"
@@ -18,10 +21,17 @@ int main(int argc, char* argv[]) {
 
     auto packageStore = std::make_unique<creator::project_store::ProjectPackageStore>();
     creator::app::ProjectController projectController{std::move(packageStore), &app};
+#if defined(__APPLE__)
+    auto screenCaptureBackend = creator::capture::macos::makeMacScreenCaptureBackend();
+    creator::app::ScreenCaptureController screenCaptureController{
+        std::move(screenCaptureBackend.permission), std::move(screenCaptureBackend.discovery),
+        std::move(screenCaptureBackend.sourceFactory), &app};
+#else
     creator::app::ScreenCaptureController screenCaptureController{
         std::make_unique<creator::capture::UnsupportedScreenCapturePermission>(),
         std::make_unique<creator::capture::UnsupportedScreenCaptureDiscovery>(),
         std::make_unique<creator::capture::UnsupportedScreenCaptureSourceFactory>(), &app};
+#endif
     creator::app::StudioController studioController{
         std::make_unique<creator::fakes::FakeCaptureSource>(
             creator::domain::SourceId::create("screen-1").value(), "Test Pattern"),
