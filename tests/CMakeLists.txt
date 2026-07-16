@@ -113,6 +113,7 @@ gtest_discover_tests(cs_tests)
 # standing check that the layers below the application really do build without
 # Qt on the include path.
 add_executable(cs_app_tests
+    app/EditorModelsTest.cpp
     app/StudioControllerTest.cpp
     app/LiveRecordingControllerTest.cpp
     app/ProjectControllerTest.cpp
