@@ -2,6 +2,10 @@ cs_add_qtfree_library(cs_capture
     SOURCES
         CaptureTimestampMapper.h
         CaptureTimestampMapper.cpp
+        AudioLevelMeter.h
+        AudioLevelMeter.cpp
+        BoundedAudioBlockQueue.h
+        BoundedAudioBlockQueue.cpp
         DeviceCaptureTypes.h
         DeviceCaptureTypes.cpp
         ICaptureSource.h
