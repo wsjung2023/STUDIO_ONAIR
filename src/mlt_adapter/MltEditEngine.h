@@ -2,6 +2,7 @@
 
 #include "edit_engine/IEditEngine.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -12,6 +13,12 @@ struct MltEditEngineConfig final {
     std::filesystem::path runtimeRoot;
     std::uint32_t previewWidth{1280};
     std::uint32_t previewHeight{720};
+};
+
+struct MltEditEngineDiagnostics final {
+    std::size_t nativeTrackCount{};
+    std::size_t videoCompositeTransitions{};
+    std::size_t audioMixTransitions{};
 };
 
 class MltEditEngine final : public edit_engine::IEditEngine {
@@ -28,6 +35,7 @@ public:
     [[nodiscard]] core::Result<void> seek(core::TimestampNs position) override;
     [[nodiscard]] core::Result<edit_engine::PreviewFrame> requestFrame(
         core::TimestampNs position) override;
+    [[nodiscard]] core::Result<MltEditEngineDiagnostics> diagnostics() const;
     [[nodiscard]] core::Result<std::unique_ptr<edit_engine::IRenderJob>> render(
         const edit_engine::RenderRequest& request) override;
 

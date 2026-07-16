@@ -187,6 +187,20 @@ std::string keyFor(std::string path) {
     return path;
 }
 
+std::string asciiLower(std::string path) {
+    std::transform(path.begin(), path.end(), path.begin(), [](unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+    return path;
+}
+
+std::string fromUtf8String(const std::u8string& text) {
+    std::string result;
+    result.reserve(text.size());
+    for (const char8_t value : text) result.push_back(static_cast<char>(value));
+    return result;
+}
+
 bool isLowerHexSha256(const std::string& text) {
     return text.size() == 64 &&
            std::all_of(text.begin(), text.end(), [](unsigned char value) {
@@ -197,7 +211,7 @@ bool isLowerHexSha256(const std::string& text) {
 }
 
 bool isForbiddenArtifact(const std::string& path) {
-    std::string lower = keyFor(path);
+    std::string lower = asciiLower(path);
     const auto slash = lower.find_last_of('/');
     const std::string name = lower.substr(slash == std::string::npos ? 0 : slash + 1);
     return name.ends_with(".exe") || name == "melt" || name == "melt.exe" ||
@@ -222,7 +236,7 @@ Result<void> validateRelativePath(const std::string& text) {
     }
     const std::filesystem::path path = pathFromUtf8(text);
     if (path.is_absolute() || path.has_root_name() || path.has_root_directory() ||
-        path.lexically_normal().generic_string() != text) {
+        fromUtf8String(path.lexically_normal().generic_u8string()) != text) {
         return invalid("MLT manifest contains a path outside its runtime root");
     }
     for (const auto& component : path) {
@@ -239,11 +253,15 @@ Result<void> verifyMltRuntimeManifest(
     const std::filesystem::path& runtimeRoot) {
     std::error_code error;
     const auto root = std::filesystem::weakly_canonical(runtimeRoot, error);
-    if (error || !std::filesystem::is_directory(root) || isReparsePoint(root)) {
+    const bool rootIsDirectory =
+        !error && std::filesystem::is_directory(root, error);
+    if (error || !rootIsDirectory || isReparsePoint(root)) {
         return invalid("MLT runtime root is missing or redirected");
     }
     const auto manifestPath = root / "mlt-runtime-manifest.json";
-    if (!std::filesystem::is_regular_file(manifestPath) ||
+    const bool manifestIsFile =
+        std::filesystem::is_regular_file(manifestPath, error);
+    if (error || !manifestIsFile ||
         isReparsePoint(manifestPath)) {
         return AppError{ErrorCode::NotFound, "MLT runtime manifest is missing"};
     }
@@ -314,7 +332,8 @@ Result<void> verifyMltRuntimeManifest(
             return invalid("MLT runtime contains a redirected artifact");
         }
         if (iterator->is_regular_file(error) && !error && path != manifestPath) {
-            const auto relative = path.lexically_relative(root).generic_string();
+            const auto relative = fromUtf8String(
+                path.lexically_relative(root).generic_u8string());
             if (auto valid = validateRelativePath(relative); !valid.hasValue()) {
                 return valid;
             }
