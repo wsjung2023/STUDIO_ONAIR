@@ -9,7 +9,9 @@
 #import <AudioToolbox/AudioToolbox.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <Foundation/Foundation.h>
+#import <ScreenCaptureKit/ScreenCaptureKit.h>
 
 #include <atomic>
 #include <cmath>
@@ -633,6 +635,205 @@ private:
     std::shared_ptr<AvSessionRuntime> runtime_;
 };
 
+@interface CSSystemAudioBridge : NSObject <SCStreamOutput, SCStreamDelegate>
+- (instancetype)initWithState:(std::shared_ptr<AudioDeliveryState>)state;
+@end
+
+@implementation CSSystemAudioBridge {
+    std::shared_ptr<AudioDeliveryState> _state;
+}
+- (instancetype)initWithState:(std::shared_ptr<AudioDeliveryState>)state {
+    self = [super init];
+    if (self != nil) _state = std::move(state);
+    return self;
+}
+- (void)stream:(SCStream*)stream
+    didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+                  ofType:(SCStreamOutputType)type {
+    static_cast<void>(stream);
+    if (type != SCStreamOutputTypeAudio) return;
+    try {
+        auto block = extractAudioBlock(sampleBuffer);
+        if (!block.hasValue()) {
+            _state->terminal(block.error());
+            return;
+        }
+        _state->block(std::move(block).value());
+    } catch (...) {
+        _state->terminal({core::ErrorCode::Unknown,
+                          "System audio callback failed while copying samples"});
+    }
+}
+- (void)stream:(SCStream*)stream didStopWithError:(NSError*)error {
+    static_cast<void>(stream);
+    _state->terminal(nativeFailure("ScreenCaptureKit system audio stopped", error));
+}
+@end
+
+class SystemAudioRuntime final
+    : public std::enable_shared_from_this<SystemAudioRuntime> {
+public:
+    explicit SystemAudioRuntime(std::shared_ptr<AudioDeliveryState> state)
+        : state_(std::move(state)),
+          queue_(dispatch_queue_create("com.creatorstudio.system-audio-capture",
+                                       DISPATCH_QUEUE_SERIAL)) {}
+
+    void start() {
+        auto retained = shared_from_this();
+        [SCShareableContent
+            getShareableContentExcludingDesktopWindows:YES
+                                     onScreenWindowsOnly:NO
+                                      completionHandler:^(SCShareableContent* content,
+                                                          NSError* error) {
+          dispatch_async(retained->queue_, ^{
+            if (retained->stopRequested_.load(std::memory_order_acquire)) return;
+            if (error != nil || content.displays.count == 0) {
+                retained->state_->terminal(
+                    error != nil
+                        ? nativeFailure("Discovering a display for system audio", error)
+                        : core::AppError{core::ErrorCode::NotFound,
+                                         "No display is available for system audio capture"});
+                return;
+            }
+
+            SCDisplay* display = content.displays.firstObject;
+            SCContentFilter* filter =
+                [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
+            SCStreamConfiguration* configuration = [SCStreamConfiguration new];
+            configuration.capturesAudio = YES;
+            configuration.excludesCurrentProcessAudio = YES;
+            configuration.sampleRate = 48'000;
+            configuration.channelCount = 2;
+            configuration.width = 2;
+            configuration.height = 2;
+            configuration.queueDepth = 3;
+            configuration.showsCursor = NO;
+
+            CSSystemAudioBridge* bridge =
+                [[CSSystemAudioBridge alloc] initWithState:retained->state_];
+            SCStream* stream = [[SCStream alloc] initWithFilter:filter
+                                                  configuration:configuration
+                                                       delegate:bridge];
+            NSError* outputError = nil;
+            if (![stream addStreamOutput:bridge
+                                    type:SCStreamOutputTypeAudio
+                      sampleHandlerQueue:retained->queue_
+                                   error:&outputError]) {
+                retained->state_->terminal(nativeFailure(
+                    "Adding ScreenCaptureKit system audio output", outputError));
+                return;
+            }
+            retained->filter_ = filter;
+            retained->bridge_ = bridge;
+            retained->stream_ = stream;
+            [stream startCaptureWithCompletionHandler:^(NSError* startError) {
+              if (startError != nil) {
+                  retained->state_->terminal(
+                      nativeFailure("Starting ScreenCaptureKit system audio", startError));
+              } else {
+                  retained->state_->started();
+              }
+            }];
+          });
+        }];
+    }
+
+    void stop(IDeviceCaptureSource::StopCompletion completion) {
+        coordinator_.add(std::move(completion));
+        if (stopRequested_.exchange(true, std::memory_order_acq_rel)) return;
+        state_->stopAccepting();
+        auto retained = shared_from_this();
+        dispatch_async(queue_, ^{
+          if (retained->stream_ == nil) {
+              retained->coordinator_.finish(core::ok());
+              return;
+          }
+          SCStream* stream = retained->stream_;
+          CSSystemAudioBridge* bridge = retained->bridge_;
+          [stream stopCaptureWithCompletionHandler:^(NSError* stopError) {
+            dispatch_async(retained->queue_, ^{
+              NSError* removeError = nil;
+              const BOOL removed = [stream removeStreamOutput:bridge
+                                                         type:SCStreamOutputTypeAudio
+                                                        error:&removeError];
+              retained->stream_ = nil;
+              retained->bridge_ = nil;
+              retained->filter_ = nil;
+              if (stopError != nil) {
+                  retained->coordinator_.finish(nativeFailure(
+                      "Stopping ScreenCaptureKit system audio", stopError));
+              } else if (!removed) {
+                  retained->coordinator_.finish(nativeFailure(
+                      "Removing ScreenCaptureKit system audio output", removeError));
+              } else {
+                  retained->coordinator_.finish(core::ok());
+              }
+            });
+          }];
+        });
+    }
+
+private:
+    std::shared_ptr<AudioDeliveryState> state_;
+    dispatch_queue_t __strong queue_{nil};
+    SCContentFilter* __strong filter_{nil};
+    SCStream* __strong stream_{nil};
+    CSSystemAudioBridge* __strong bridge_{nil};
+    std::atomic<bool> stopRequested_{false};
+    DeviceCaptureStopCoordinator coordinator_;
+};
+
+class SystemAudioCaptureSource final : public IDeviceCaptureSource {
+public:
+    explicit SystemAudioCaptureSource(std::shared_ptr<IAudioBlockSink> sink)
+        : id_(domain::SourceId::create("system-audio").value()),
+          sink_(std::move(sink)) {}
+
+    ~SystemAudioCaptureSource() override { static_cast<void>(stop()); }
+    [[nodiscard]] domain::SourceId id() const override { return id_; }
+    [[nodiscard]] std::string displayName() const override { return "System Audio"; }
+
+    core::Result<void> start(const CaptureConfig&) override {
+        if (runtime_) {
+            return core::AppError{core::ErrorCode::InvalidState,
+                                  "System audio source is already started"};
+        }
+        if (!sink_) {
+            return core::AppError{core::ErrorCode::InvalidState,
+                                  "System audio source has no sink"};
+        }
+        if (!CGPreflightScreenCaptureAccess()) {
+            return core::AppError{
+                core::ErrorCode::InvalidState,
+                "Screen recording permission is required for system audio capture"};
+        }
+        auto state = std::make_shared<AudioDeliveryState>(sink_);
+        runtime_ = std::make_shared<SystemAudioRuntime>(std::move(state));
+        runtime_->start();
+        return core::ok();
+    }
+
+    core::Result<void> stop() override {
+        if (runtime_) runtime_->stop({});
+        return core::ok();
+    }
+
+    void stopAsync(StopCompletion completion) override {
+        if (!runtime_) {
+            if (completion) completion(core::ok());
+            return;
+        }
+        runtime_->stop(std::move(completion));
+    }
+
+    [[nodiscard]] CaptureStats stats() const noexcept override { return {}; }
+
+private:
+    domain::SourceId id_;
+    std::shared_ptr<IAudioBlockSink> sink_;
+    std::shared_ptr<SystemAudioRuntime> runtime_;
+};
+
 class HotplugState final {
 public:
     void set(IDeviceCaptureBackend::DeviceChangeHandler handler) {
@@ -773,9 +974,10 @@ public:
     }
 
     [[nodiscard]] core::Result<std::unique_ptr<IDeviceCaptureSource>> createSystemAudio(
-        std::shared_ptr<IAudioBlockSink>) override {
-        return core::AppError{core::ErrorCode::UnsupportedVersion,
-                              "ScreenCaptureKit system audio source is not initialized"};
+        std::shared_ptr<IAudioBlockSink> sink) override {
+        std::unique_ptr<IDeviceCaptureSource> source =
+            std::make_unique<SystemAudioCaptureSource>(std::move(sink));
+        return source;
     }
 
 private:
