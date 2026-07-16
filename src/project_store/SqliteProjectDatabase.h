@@ -10,6 +10,7 @@
 #include "project_store/internal/SqliteConnection.h"
 
 #include <filesystem>
+#include <cstdint>
 #include <string_view>
 #include <vector>
 
@@ -40,9 +41,22 @@ public:
         const core::Utc& finishedAt);
     [[nodiscard]] core::Result<RecordingSessionRecord> session(
         const domain::SessionId& sessionId);
+    [[nodiscard]] core::Result<void> beginSegment(
+        const domain::SessionId& sessionId, const domain::SegmentInfo& segment);
+    [[nodiscard]] core::Result<void> markSegmentReady(
+        const domain::SessionId& sessionId, const domain::SegmentInfo& segment);
+    [[nodiscard]] core::Result<void> markSegmentFailed(
+        const domain::SessionId& sessionId, const domain::SourceId& sourceId,
+        std::uint64_t segmentIndex);
+    [[nodiscard]] core::Result<std::vector<RecoveryCandidate>> scanRecovery(
+        const std::filesystem::path& packagePath, std::string_view projectName);
+    [[nodiscard]] core::Result<RecoveryResult> recover(
+        const domain::SessionId& sessionId, const core::Utc& finishedAt);
 
 private:
     SqliteProjectDatabase(internal::SqliteConnection connection, domain::ProjectId projectId);
+    [[nodiscard]] core::Result<void> storeCompletedSegment(
+        const domain::SessionId& sessionId, const domain::SegmentInfo& segment);
     internal::SqliteConnection connection_;
     domain::ProjectId projectId_;
 };
