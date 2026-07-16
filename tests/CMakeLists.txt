@@ -140,3 +140,31 @@ gtest_discover_tests(cs_qml_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+
+if(CS_ENABLE_FFMPEG)
+    add_executable(cs_ffmpeg_tests
+        ffmpeg_adapter/FfmpegCapabilityProbeTest.cpp
+    )
+    target_link_libraries(cs_ffmpeg_tests PRIVATE cs_ffmpeg_adapter GTest::gtest_main)
+    cs_apply_warnings(cs_ffmpeg_tests)
+
+    if(WIN32)
+        file(GLOB CS_FFMPEG_RUNTIME_DLLS CONFIGURE_DEPENDS "${CS_FFMPEG_ROOT}/bin/*.dll")
+        add_custom_command(TARGET cs_ffmpeg_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CS_FFMPEG_RUNTIME_DLLS}
+                $<TARGET_FILE_DIR:cs_ffmpeg_tests>
+            COMMAND_EXPAND_LISTS
+        )
+    elseif(APPLE)
+        set_property(TARGET cs_ffmpeg_tests APPEND PROPERTY
+            BUILD_RPATH "${CS_FFMPEG_ROOT}/lib"
+        )
+    endif()
+
+    gtest_discover_tests(cs_ffmpeg_tests
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:${CS_FFMPEG_ROOT}/bin"
+    )
+endif()
