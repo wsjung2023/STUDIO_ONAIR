@@ -139,10 +139,15 @@ TEST(FfmpegLiveRecordingEngineTest, RecordsAttachedScreenAndMicrophoneToReadyFil
     ASSERT_TRUE(engineStarted.hasValue()) << engineStarted.error().message();
     ASSERT_TRUE(bindings->video);
     ASSERT_TRUE(bindings->audio);
+    // Establish the deterministic microphone master before follower video.
+    bindings->audio->onAudioBlock(audioBlock(0));
     for (std::uint32_t frame = 0; frame < 63; ++frame) {
         bindings->video->onVideoFrame(videoFrame(frame));
     }
-    for (std::uint32_t block = 0; block < 210; ++block) {
+    const auto synchronized = engine.snapshot();
+    EXPECT_GT(synchronized.syncVideoFramesDuplicated, 0u);
+    EXPECT_GT(synchronized.maximumAbsoluteDriftNanoseconds, 0u);
+    for (std::uint32_t block = 1; block < 210; ++block) {
         bindings->audio->onAudioBlock(audioBlock(block));
     }
     engine.stopAsync(creator::core::TimestampNs{std::chrono::milliseconds{2100}});

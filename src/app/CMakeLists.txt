@@ -76,7 +76,7 @@ target_link_libraries(cs_app
 )
 
 if(CS_ENABLE_FFMPEG)
-    target_link_libraries(cs_app PRIVATE cs_ffmpeg_adapter)
+    target_link_libraries(cs_app PRIVATE cs_ffmpeg_adapter cs_sync)
 endif()
 
 cs_apply_warnings(cs_app)

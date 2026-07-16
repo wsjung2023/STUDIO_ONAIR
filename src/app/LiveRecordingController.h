@@ -26,6 +26,10 @@ class LiveRecordingController final : public QObject {
     Q_PROPERTY(int trackCount READ trackCount NOTIFY diagnosticsChanged)
     Q_PROPERTY(qulonglong queuedItems READ queuedItems NOTIFY diagnosticsChanged)
     Q_PROPERTY(qulonglong droppedFrames READ droppedFrames NOTIFY diagnosticsChanged)
+    Q_PROPERTY(qulonglong syncDroppedFrames READ syncDroppedFrames NOTIFY diagnosticsChanged)
+    Q_PROPERTY(qulonglong duplicatedFrames READ duplicatedFrames NOTIFY diagnosticsChanged)
+    Q_PROPERTY(double maximumDriftMilliseconds READ maximumDriftMilliseconds NOTIFY diagnosticsChanged)
+    Q_PROPERTY(double audioCorrectionPpm READ audioCorrectionPpm NOTIFY diagnosticsChanged)
     Q_PROPERTY(qulonglong diskAvailableBytes READ diskAvailableBytes NOTIFY diagnosticsChanged)
     Q_PROPERTY(QString encoderName READ encoderName NOTIFY diagnosticsChanged)
     Q_PROPERTY(QString takeDuration READ takeDuration NOTIFY diagnosticsChanged)
@@ -53,6 +57,18 @@ public:
     [[nodiscard]] int trackCount() const noexcept { return trackCount_; }
     [[nodiscard]] qulonglong queuedItems() const noexcept { return queuedItems_; }
     [[nodiscard]] qulonglong droppedFrames() const noexcept { return droppedFrames_; }
+    [[nodiscard]] qulonglong syncDroppedFrames() const noexcept {
+        return syncDroppedFrames_;
+    }
+    [[nodiscard]] qulonglong duplicatedFrames() const noexcept {
+        return duplicatedFrames_;
+    }
+    [[nodiscard]] double maximumDriftMilliseconds() const noexcept {
+        return maximumDriftMilliseconds_;
+    }
+    [[nodiscard]] double audioCorrectionPpm() const noexcept {
+        return audioCorrectionPpm_;
+    }
     [[nodiscard]] qulonglong diskAvailableBytes() const noexcept {
         return diskAvailableBytes_;
     }
@@ -94,6 +110,10 @@ private:
     int trackCount_{0};
     qulonglong queuedItems_{0};
     qulonglong droppedFrames_{0};
+    qulonglong syncDroppedFrames_{0};
+    qulonglong duplicatedFrames_{0};
+    double maximumDriftMilliseconds_{0.0};
+    double audioCorrectionPpm_{0.0};
     qulonglong diskAvailableBytes_{0};
     QString encoderName_{QStringLiteral("Not active")};
     QString takeDuration_{QStringLiteral("00:00:00")};

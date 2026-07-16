@@ -29,6 +29,7 @@ struct ClockCorrection final {
 
 struct ClockSourceSnapshot final {
     domain::SourceId sourceId;
+    SyncMediaKind mediaKind{SyncMediaKind::Video};
     core::DurationNs drift{};
     core::DurationNs maximumAbsoluteDrift{};
     double rateCorrectionPpm{0.0};

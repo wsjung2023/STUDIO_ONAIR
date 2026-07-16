@@ -65,6 +65,10 @@ class FakeStudioController final : public QObject {
     Q_PROPERTY(int trackCount READ trackCount CONSTANT)
     Q_PROPERTY(qulonglong queuedItems READ queuedItems CONSTANT)
     Q_PROPERTY(qulonglong droppedFrames READ droppedFrames CONSTANT)
+    Q_PROPERTY(qulonglong syncDroppedFrames READ syncDroppedFrames CONSTANT)
+    Q_PROPERTY(qulonglong duplicatedFrames READ duplicatedFrames CONSTANT)
+    Q_PROPERTY(double maximumDriftMilliseconds READ maximumDriftMilliseconds CONSTANT)
+    Q_PROPERTY(double audioCorrectionPpm READ audioCorrectionPpm CONSTANT)
     Q_PROPERTY(qulonglong diskAvailableBytes READ diskAvailableBytes CONSTANT)
     Q_PROPERTY(QString encoderName READ encoderName CONSTANT)
     Q_PROPERTY(QString takeDuration READ takeDuration CONSTANT)
@@ -79,6 +83,10 @@ public:
     [[nodiscard]] int trackCount() const noexcept { return 2; }
     [[nodiscard]] qulonglong queuedItems() const noexcept { return 3; }
     [[nodiscard]] qulonglong droppedFrames() const noexcept { return 1; }
+    [[nodiscard]] qulonglong syncDroppedFrames() const noexcept { return 2; }
+    [[nodiscard]] qulonglong duplicatedFrames() const noexcept { return 4; }
+    [[nodiscard]] double maximumDriftMilliseconds() const noexcept { return 8.5; }
+    [[nodiscard]] double audioCorrectionPpm() const noexcept { return 125.0; }
     [[nodiscard]] qulonglong diskAvailableBytes() const noexcept {
         return 8ULL * 1024ULL * 1024ULL * 1024ULL;
     }
@@ -292,6 +300,7 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     auto* disk = object->findChild<QObject*>(QStringLiteral("recordingDiskLabel"));
     auto* encoder = object->findChild<QObject*>(QStringLiteral("recordingEncoderLabel"));
     auto* queue = object->findChild<QObject*>(QStringLiteral("recordingQueueLabel"));
+    auto* sync = object->findChild<QObject*>(QStringLiteral("recordingSyncLabel"));
     ASSERT_NE(selector, nullptr);
     ASSERT_NE(status, nullptr);
     ASSERT_NE(preview, nullptr);
@@ -301,9 +310,12 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     ASSERT_NE(disk, nullptr);
     ASSERT_NE(encoder, nullptr);
     ASSERT_NE(queue, nullptr);
+    ASSERT_NE(sync, nullptr);
     EXPECT_TRUE(disk->property("text").toString().contains(QStringLiteral("8.0 GiB")));
     EXPECT_TRUE(encoder->property("text").toString().contains(QStringLiteral("mpeg4, aac")));
     EXPECT_TRUE(queue->property("text").toString().contains(QStringLiteral("Queue: 3")));
+    EXPECT_TRUE(sync->property("text").toString().contains(QStringLiteral("duplicate 4")));
+    EXPECT_TRUE(sync->property("text").toString().contains(QStringLiteral("8.5 ms")));
     EXPECT_EQ(selector->property("count").toInt(), 1);
     EXPECT_EQ(status->property("text").toString(),
               QStringLiteral("captured window closed"));

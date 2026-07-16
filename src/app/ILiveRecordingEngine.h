@@ -24,6 +24,10 @@ struct LiveRecordingEngineSnapshot final {
     std::size_t trackCount{0};
     std::uint64_t queuedItems{0};
     std::uint64_t videoFramesDropped{0};
+    std::uint64_t syncVideoFramesDropped{0};
+    std::uint64_t syncVideoFramesDuplicated{0};
+    std::uint64_t maximumAbsoluteDriftNanoseconds{0};
+    double audioCorrectionPpm{0.0};
     std::uint64_t segmentsPublished{0};
     std::optional<std::uint64_t> availableDiskBytes;
     std::string encoderName;

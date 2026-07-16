@@ -11,10 +11,13 @@
 #include "recorder/AsyncTrackRecorder.h"
 #include "recorder/DiskSpaceMonitor.h"
 #include "recorder/DurableSegmentPublisher.h"
+#include "sync/ClockCoordinator.h"
+#include "sync/VideoSyncPlanner.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <limits>
 #include <optional>
 #include <set>
@@ -34,16 +37,21 @@ using recorder::TrackMediaKind;
 class VideoRouter final : public capture::IVideoFrameSink {
 public:
     VideoRouter(std::weak_ptr<FfmpegLiveRecordingEngine::Run> run,
-                domain::SourceId sourceId)
-        : run_(std::move(run)), sourceId_(std::move(sourceId)) {}
+                domain::SourceId sourceId,
+                std::unique_ptr<synchronization::VideoSyncPlanner> planner)
+        : run_(std::move(run)), sourceId_(std::move(sourceId)),
+          planner_(std::move(planner)) {}
 
     void onCaptureStarted() noexcept override {}
     void onVideoFrame(media::VideoFrame frame) noexcept override;
     void onCaptureError(core::AppError error) noexcept override;
+    [[nodiscard]] synchronization::VideoSyncSnapshot syncSnapshot() const noexcept;
 
 private:
     std::weak_ptr<FfmpegLiveRecordingEngine::Run> run_;
     domain::SourceId sourceId_;
+    mutable std::mutex plannerMutex_;
+    std::unique_ptr<synchronization::VideoSyncPlanner> planner_;
 };
 
 class AudioRouter final : public capture::IAudioBlockSink {
@@ -99,19 +107,43 @@ core::Result<std::unique_ptr<AsyncTrackRecorder>> makeTrackRecorder(
     return recorder;
 }
 
+std::uint32_t clockPriority(recorder::TrackRole role,
+                            std::size_t sourceOrder) noexcept {
+    switch (role) {
+        case recorder::TrackRole::Microphone:
+            return 0;
+        case recorder::TrackRole::SystemAudio:
+            return 1;
+        default:
+            constexpr auto maximum =
+                static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max());
+            return sourceOrder > maximum - 2
+                       ? std::numeric_limits<std::uint32_t>::max()
+                       : static_cast<std::uint32_t>(sourceOrder + 2);
+    }
+}
+
+core::DurationNs videoPeriod(recorder::TrackRole role) noexcept {
+    if (role == recorder::TrackRole::Screen) {
+        return std::chrono::nanoseconds{1'000'000'000LL / 60LL};
+    }
+    return std::chrono::nanoseconds{1'000'000'000LL / 30LL};
+}
+
 }  // namespace
 
 struct FfmpegLiveRecordingEngine::Run final {
     std::shared_ptr<ILiveCaptureBindings> bindings;
     std::shared_ptr<MultiTrackRecordingService> service;
     std::shared_ptr<ProjectSegmentLifecycleContext> context;
+    std::unique_ptr<synchronization::ClockCoordinator> coordinator;
     Completion completion;
     core::TimestampNs startedAt{};
     std::mutex endMutex;
     core::TimestampNs stoppedAt{};
     std::atomic<bool> accepting{false};
     std::atomic<bool> delivered{false};
-    std::vector<std::shared_ptr<capture::IVideoFrameSink>> videoSinks;
+    std::vector<std::shared_ptr<VideoRouter>> videoSinks;
     std::vector<std::shared_ptr<capture::IAudioBlockSink>> audioSinks;
 
     void fail(core::AppError error, core::TimestampNs at) noexcept {
@@ -129,7 +161,35 @@ namespace {
 void VideoRouter::onVideoFrame(media::VideoFrame frame) noexcept {
     const auto run = run_.lock();
     if (!run || !run->accepting.load(std::memory_order_acquire)) return;
-    static_cast<void>(run->service->accept(sourceId_, std::move(frame)));
+    const auto observedAt = core::ProjectClock::now();
+    const auto correction =
+        run->coordinator->observe(sourceId_, frame.timestamp, observedAt);
+    if (!correction.hasValue()) {
+        run->fail(correction.error(), observedAt);
+        return;
+    }
+    auto planned = [&] {
+        std::lock_guard lock{plannerMutex_};
+        return planner_->plan(std::move(frame),
+                              correction.value().correctedTimestamp);
+    }();
+    if (!planned.hasValue()) {
+        run->fail(planned.error(), observedAt);
+        return;
+    }
+    for (auto& synchronizedFrame : planned.value().frames) {
+        if (auto accepted =
+                run->service->accept(sourceId_, std::move(synchronizedFrame));
+            !accepted.hasValue()) {
+            run->fail(accepted.error(), observedAt);
+            return;
+        }
+    }
+}
+
+synchronization::VideoSyncSnapshot VideoRouter::syncSnapshot() const noexcept {
+    std::lock_guard lock{plannerMutex_};
+    return planner_->snapshot();
 }
 
 void VideoRouter::onCaptureError(core::AppError error) noexcept {
@@ -141,7 +201,19 @@ void VideoRouter::onCaptureError(core::AppError error) noexcept {
 void AudioRouter::onAudioBlock(media::AudioBlock block) noexcept {
     const auto run = run_.lock();
     if (!run || !run->accepting.load(std::memory_order_acquire)) return;
-    static_cast<void>(run->service->accept(sourceId_, std::move(block)));
+    const auto observedAt = core::ProjectClock::now();
+    const auto correction =
+        run->coordinator->observe(sourceId_, block.timestamp, observedAt);
+    if (!correction.hasValue()) {
+        run->fail(correction.error(), observedAt);
+        return;
+    }
+    block.timestamp = correction.value().correctedTimestamp;
+    block.sampleRateRatio = correction.value().audioRateRatio;
+    if (auto accepted = run->service->accept(sourceId_, std::move(block));
+        !accepted.hasValue()) {
+        run->fail(accepted.error(), observedAt);
+    }
 }
 
 void AudioRouter::onCaptureError(core::AppError error) noexcept {
@@ -171,6 +243,21 @@ LiveRecordingEngineSnapshot snapshotOf(
                                             : track.diskSpace->availableBytes;
         }
         if (!track.encoderName.empty()) encoders.insert(track.encoderName);
+    }
+    const auto clockSnapshot = run->coordinator->snapshot();
+    for (const auto& source : clockSnapshot.sources) {
+        result.maximumAbsoluteDriftNanoseconds = std::max(
+            result.maximumAbsoluteDriftNanoseconds,
+            static_cast<std::uint64_t>(source.maximumAbsoluteDrift.count()));
+        if (source.mediaKind == synchronization::SyncMediaKind::Audio) {
+            result.audioCorrectionPpm = std::max(
+                result.audioCorrectionPpm, std::abs(source.rateCorrectionPpm));
+        }
+    }
+    for (const auto& sink : run->videoSinks) {
+        const auto sync = sink->syncSnapshot();
+        result.syncVideoFramesDropped += sync.framesDropped;
+        result.syncVideoFramesDuplicated += sync.framesDuplicated;
     }
     for (const auto& encoder : encoders) {
         if (!result.encoderName.empty()) result.encoderName += ", ";
@@ -297,10 +384,29 @@ core::Result<void> FfmpegLiveRecordingEngine::start(
                               "Start at least one capture source before recording"};
     }
 
+    std::vector<synchronization::ClockSourceConfig> clockSources;
+    clockSources.reserve(sources.size());
+    for (std::size_t index = 0; index < sources.size(); ++index) {
+        const auto track = RecordingTrack::create(sources[index].sourceId,
+                                                  sources[index].role);
+        if (!track.hasValue()) return track.error();
+        clockSources.push_back(synchronization::ClockSourceConfig{
+            .sourceId = sources[index].sourceId,
+            .mediaKind = track.value().mediaKind() == TrackMediaKind::Audio
+                             ? synchronization::SyncMediaKind::Audio
+                             : synchronization::SyncMediaKind::Video,
+            .masterPriority = clockPriority(sources[index].role, index),
+        });
+    }
+    auto coordinator =
+        synchronization::ClockCoordinator::create(std::move(clockSources));
+    if (!coordinator.hasValue()) return coordinator.error();
+
     auto run = std::make_shared<Run>();
     run->bindings = captureBindings_;
     run->service = std::make_shared<MultiTrackRecordingService>();
     run->context = std::move(contextResult).value();
+    run->coordinator = std::move(coordinator).value();
     run->completion = std::move(completion);
     run->startedAt = start.startedAt;
     run->stoppedAt = start.startedAt;
@@ -324,7 +430,11 @@ core::Result<void> FfmpegLiveRecordingEngine::start(
             return added.error();
         }
         if (mediaKind == TrackMediaKind::Video) {
-            auto sink = std::make_shared<VideoRouter>(run, source.sourceId);
+            auto planner = synchronization::VideoSyncPlanner::create(
+                videoPeriod(source.role));
+            if (!planner.hasValue()) return planner.error();
+            auto sink = std::make_shared<VideoRouter>(
+                run, source.sourceId, std::move(planner).value());
             run->videoSinks.push_back(sink);
             pendingAttachments.push_back(
                 PendingAttachment{.source = source, .video = std::move(sink)});

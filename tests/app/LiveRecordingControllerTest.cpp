@@ -175,6 +175,10 @@ TEST(LiveRecordingControllerTest, PersistsBeginBeforeEngineStartAndCompleteAfter
     fixture.engineRaw->liveSnapshot = {.trackCount = 3,
                                        .queuedItems = 4,
                                        .videoFramesDropped = 2,
+                                       .syncVideoFramesDropped = 6,
+                                       .syncVideoFramesDuplicated = 7,
+                                       .maximumAbsoluteDriftNanoseconds = 8'500'000,
+                                       .audioCorrectionPpm = 125.0,
                                        .segmentsPublished = 5,
                                        .availableDiskBytes = 8ULL << 30U,
                                        .encoderName = "h264_videotoolbox"};
@@ -182,6 +186,10 @@ TEST(LiveRecordingControllerTest, PersistsBeginBeforeEngineStartAndCompleteAfter
     fixture.controller->pollDiagnostics();
     EXPECT_EQ(fixture.controller->segmentCount(), 5);
     EXPECT_EQ(fixture.controller->trackCount(), 3);
+    EXPECT_EQ(fixture.controller->syncDroppedFrames(), 6u);
+    EXPECT_EQ(fixture.controller->duplicatedFrames(), 7u);
+    EXPECT_DOUBLE_EQ(fixture.controller->maximumDriftMilliseconds(), 8.5);
+    EXPECT_DOUBLE_EQ(fixture.controller->audioCorrectionPpm(), 125.0);
     EXPECT_EQ(fixture.controller->takeDuration(), QStringLiteral("00:00:05"));
 
     fixture.controller->stopRecording();

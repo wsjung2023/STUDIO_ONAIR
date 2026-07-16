@@ -383,6 +383,14 @@ Item {
                           .arg(studioController.queuedItems)
                           .arg(studioController.droppedFrames)
                 }
+                Label {
+                    objectName: "recordingSyncLabel"
+                    text: qsTr("Sync: drop %1 · duplicate %2 · max drift %3 ms · audio %4 ppm")
+                          .arg(studioController.syncDroppedFrames)
+                          .arg(studioController.duplicatedFrames)
+                          .arg(studioController.maximumDriftMilliseconds.toFixed(1))
+                          .arg(studioController.audioCorrectionPpm.toFixed(1))
+                }
 
                 Item { Layout.fillWidth: true }
 

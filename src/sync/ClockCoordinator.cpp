@@ -233,6 +233,7 @@ ClockCoordinatorSnapshot ClockCoordinator::snapshot() const {
         const auto& state = impl_->sources[index];
         result.sources.push_back(ClockSourceSnapshot{
             .sourceId = state.config.sourceId,
+            .mediaKind = state.config.mediaKind,
             .drift = core::DurationNs{state.filteredDriftNs},
             .maximumAbsoluteDrift =
                 core::DurationNs{state.maximumAbsoluteDriftNs},

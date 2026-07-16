@@ -231,6 +231,13 @@ void LiveRecordingController::pollDiagnostics() {
     const int segments = boundedInt(snapshot.segmentsPublished);
     const auto queued = static_cast<qulonglong>(snapshot.queuedItems);
     const auto dropped = static_cast<qulonglong>(snapshot.videoFramesDropped);
+    const auto syncDropped =
+        static_cast<qulonglong>(snapshot.syncVideoFramesDropped);
+    const auto duplicated =
+        static_cast<qulonglong>(snapshot.syncVideoFramesDuplicated);
+    const double driftMilliseconds =
+        static_cast<double>(snapshot.maximumAbsoluteDriftNanoseconds) / 1'000'000.0;
+    const double correctionPpm = snapshot.audioCorrectionPpm;
     const auto disk = static_cast<qulonglong>(snapshot.availableDiskBytes.value_or(0));
     const auto encoder = snapshot.encoderName.empty()
                              ? (isRecording() ? tr("Selecting encoder")
@@ -243,6 +250,9 @@ void LiveRecordingController::pollDiagnostics() {
     }
     if (trackCount_ == tracks && segmentCount_ == segments && queuedItems_ == queued &&
         droppedFrames_ == dropped && diskAvailableBytes_ == disk &&
+        syncDroppedFrames_ == syncDropped && duplicatedFrames_ == duplicated &&
+        maximumDriftMilliseconds_ == driftMilliseconds &&
+        audioCorrectionPpm_ == correctionPpm &&
         encoderName_ == encoder && takeDuration_ == duration) {
         return;
     }
@@ -250,6 +260,10 @@ void LiveRecordingController::pollDiagnostics() {
     segmentCount_ = segments;
     queuedItems_ = queued;
     droppedFrames_ = dropped;
+    syncDroppedFrames_ = syncDropped;
+    duplicatedFrames_ = duplicated;
+    maximumDriftMilliseconds_ = driftMilliseconds;
+    audioCorrectionPpm_ = correctionPpm;
     diskAvailableBytes_ = disk;
     encoderName_ = encoder;
     takeDuration_ = duration;
@@ -275,6 +289,10 @@ void LiveRecordingController::resetDiagnostics() {
     trackCount_ = 0;
     queuedItems_ = 0;
     droppedFrames_ = 0;
+    syncDroppedFrames_ = 0;
+    duplicatedFrames_ = 0;
+    maximumDriftMilliseconds_ = 0.0;
+    audioCorrectionPpm_ = 0.0;
     diskAvailableBytes_ = 0;
     encoderName_ = tr("Selecting encoder");
     takeDuration_ = QStringLiteral("00:00:00");
