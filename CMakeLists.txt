@@ -99,6 +99,7 @@ configure_file(
 add_subdirectory(src/core)
 add_subdirectory(src/domain)
 add_subdirectory(src/media)
+add_subdirectory(src/sync)
 add_subdirectory(src/capture)
 add_subdirectory(src/recorder)
 if(CS_ENABLE_FFMPEG)

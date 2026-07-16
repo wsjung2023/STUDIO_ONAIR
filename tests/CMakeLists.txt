@@ -38,6 +38,7 @@ add_executable(cs_tests
     domain/ProjectManifestTest.cpp
     domain/RecordingSessionTest.cpp
     media/MediaTypesTest.cpp
+    sync/ClockCoordinatorTest.cpp
     capture/PortContractTest.cpp
     capture/CaptureTimestampMapperTest.cpp
     capture/ScreenCapturePortsTest.cpp
@@ -75,6 +76,7 @@ target_link_libraries(cs_tests
         cs_core
         cs_domain
         cs_media
+        cs_sync
         cs_capture
         cs_recorder
         cs_project_store
