@@ -1,4 +1,5 @@
 #include "capture/AudioLevelMeter.h"
+#include "capture/AudioCaptureMailbox.h"
 #include "capture/BoundedAudioBlockQueue.h"
 
 #include "core/Timebase.h"
@@ -18,6 +19,8 @@
 namespace {
 
 using creator::capture::AudioLevelMeter;
+using creator::capture::AudioCaptureMailbox;
+using creator::capture::AudioQueuePushResult;
 using creator::capture::BoundedAudioBlockQueue;
 using creator::media::AudioBlock;
 
@@ -40,8 +43,8 @@ AudioBlock blockAt(std::int64_t timestamp, std::vector<float> samples,
 TEST(BoundedAudioBlockQueueTest, PreservesFifoOrderAndMetadata) {
     BoundedAudioBlockQueue queue{3};
 
-    ASSERT_TRUE(queue.tryPush(blockAt(10, {0.1F})).hasValue());
-    ASSERT_TRUE(queue.tryPush(blockAt(20, {0.2F})).hasValue());
+    ASSERT_EQ(queue.tryPush(blockAt(10, {0.1F})), AudioQueuePushResult::Accepted);
+    ASSERT_EQ(queue.tryPush(blockAt(20, {0.2F})), AudioQueuePushResult::Accepted);
 
     auto first = queue.tryPop();
     auto second = queue.tryPop();
@@ -54,14 +57,13 @@ TEST(BoundedAudioBlockQueueTest, PreservesFifoOrderAndMetadata) {
 
 TEST(BoundedAudioBlockQueueTest, RejectsOverflowAndCountsEveryRejectedBlock) {
     BoundedAudioBlockQueue queue{1};
-    ASSERT_TRUE(queue.tryPush(blockAt(1, {0.1F})).hasValue());
+    ASSERT_EQ(queue.tryPush(blockAt(1, {0.1F})), AudioQueuePushResult::Accepted);
 
     const auto second = queue.tryPush(blockAt(2, {0.2F}));
     const auto third = queue.tryPush(blockAt(3, {0.3F}));
 
-    ASSERT_FALSE(second.hasValue());
-    ASSERT_FALSE(third.hasValue());
-    EXPECT_EQ(second.error().code(), creator::core::ErrorCode::InvalidState);
+    EXPECT_EQ(second, AudioQueuePushResult::Full);
+    EXPECT_EQ(third, AudioQueuePushResult::Full);
     EXPECT_EQ(queue.overruns(), 2u);
     EXPECT_EQ(queue.size(), 1u);
 }
@@ -74,7 +76,7 @@ TEST(BoundedAudioBlockQueueTest, ClearReleasesOwnedSamplesAndResetsSizeOnly) {
     block.frameCount = 1;
     block.channels = 1;
     block.samples = std::move(samples);
-    ASSERT_TRUE(queue.tryPush(std::move(block)).hasValue());
+    ASSERT_EQ(queue.tryPush(std::move(block)), AudioQueuePushResult::Accepted);
     ASSERT_FALSE(lifetime.expired());
 
     queue.clear();
@@ -95,7 +97,7 @@ TEST(BoundedAudioBlockQueueTest, SupportsOneProducerAndOneConsumerWithoutLoss) {
         while (!start.load(std::memory_order_acquire)) {
         }
         for (std::int64_t value = 0; value < count; ++value) {
-            if (!queue.tryPush(blockAt(value, {0.0F})).hasValue()) {
+            if (queue.tryPush(blockAt(value, {0.0F})) != AudioQueuePushResult::Accepted) {
                 orderCorrect.store(false, std::memory_order_relaxed);
             }
         }
@@ -169,6 +171,40 @@ TEST(AudioLevelMeterTest, RejectsNonFiniteSamples) {
 
     EXPECT_FALSE(AudioLevelMeter::measure(blockAt(0, {nan})).hasValue());
     EXPECT_FALSE(AudioLevelMeter::measure(blockAt(0, {infinity})).hasValue());
+}
+
+TEST(AudioCaptureMailboxTest, TransfersStartBlocksAndTerminalError) {
+    AudioCaptureMailbox mailbox{2};
+    mailbox.onCaptureStarted();
+    mailbox.onAudioBlock(blockAt(10, {0.1F}));
+    mailbox.onCaptureError({creator::core::ErrorCode::NotFound,
+                            "microphone disconnected"});
+
+    EXPECT_TRUE(mailbox.takeStarted());
+    EXPECT_FALSE(mailbox.takeStarted());
+    auto block = mailbox.tryPop();
+    ASSERT_TRUE(block.has_value());
+    EXPECT_EQ(block->timestamp.time_since_epoch().count(), 10);
+    auto error = mailbox.takeError();
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(error->message(), "microphone disconnected");
+    EXPECT_FALSE(mailbox.takeError().has_value());
+    EXPECT_EQ(mailbox.stats().receivedBlocks, 1u);
+}
+
+TEST(AudioCaptureMailboxTest, TurnsQueueOverflowIntoVisibleFirstError) {
+    AudioCaptureMailbox mailbox{1};
+    mailbox.onAudioBlock(blockAt(1, {0.1F}));
+    mailbox.onAudioBlock(blockAt(2, {0.2F}));
+    mailbox.onCaptureError({creator::core::ErrorCode::NotFound,
+                            "later native error"});
+
+    const auto stats = mailbox.stats();
+    auto error = mailbox.takeError();
+    EXPECT_EQ(stats.receivedBlocks, 1u);
+    EXPECT_EQ(stats.overruns, 1u);
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(error->message(), "audio capture queue capacity exceeded");
 }
 
 }  // namespace

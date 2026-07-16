@@ -1,16 +1,16 @@
 #pragma once
 
-#include "core/Result.h"
 #include "media/MediaTypes.h"
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
-#include <mutex>
 #include <optional>
+#include <vector>
 
 namespace creator::capture {
+
+enum class AudioQueuePushResult { Accepted, Full };
 
 /// Fixed-capacity FIFO handoff for one native audio producer and an
 /// application consumer. A full queue rejects visibly instead of dropping.
@@ -23,9 +23,8 @@ public:
     BoundedAudioBlockQueue(BoundedAudioBlockQueue&&) = delete;
     BoundedAudioBlockQueue& operator=(BoundedAudioBlockQueue&&) = delete;
 
-    [[nodiscard]] creator::core::Result<void> tryPush(
-        creator::media::AudioBlock block);
-    [[nodiscard]] std::optional<creator::media::AudioBlock> tryPop();
+    [[nodiscard]] AudioQueuePushResult tryPush(creator::media::AudioBlock block) noexcept;
+    [[nodiscard]] std::optional<creator::media::AudioBlock> tryPop() noexcept;
     void clear() noexcept;
 
     [[nodiscard]] std::size_t size() const noexcept;
@@ -36,8 +35,9 @@ public:
 
 private:
     const std::size_t capacity_;
-    mutable std::mutex mutex_;
-    std::deque<creator::media::AudioBlock> blocks_;
+    std::vector<std::optional<creator::media::AudioBlock>> slots_;
+    std::atomic<std::size_t> head_{0};
+    std::atomic<std::size_t> tail_{0};
     std::atomic<std::uint64_t> overruns_{0};
 };
 

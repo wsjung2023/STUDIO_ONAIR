@@ -1,46 +1,45 @@
 #include "capture/BoundedAudioBlockQueue.h"
 
-#include "core/AppError.h"
-
-#include <cassert>
 #include <utility>
 
 namespace creator::capture {
 
-BoundedAudioBlockQueue::BoundedAudioBlockQueue(std::size_t capacity) : capacity_(capacity) {
-    assert(capacity_ > 0 && "audio queue capacity must be positive");
-}
+BoundedAudioBlockQueue::BoundedAudioBlockQueue(std::size_t capacity)
+    : capacity_(capacity), slots_(capacity + 1) {}
 
-creator::core::Result<void> BoundedAudioBlockQueue::tryPush(
-    creator::media::AudioBlock block) {
-    std::scoped_lock lock{mutex_};
-    if (blocks_.size() >= capacity_) {
+AudioQueuePushResult BoundedAudioBlockQueue::tryPush(
+    creator::media::AudioBlock block) noexcept {
+    const auto tail = tail_.load(std::memory_order_relaxed);
+    const auto next = (tail + 1) % slots_.size();
+    if (next == head_.load(std::memory_order_acquire)) {
         overruns_.fetch_add(1, std::memory_order_relaxed);
-        return creator::core::AppError{creator::core::ErrorCode::InvalidState,
-                                       "audio capture queue capacity exceeded"};
+        return AudioQueuePushResult::Full;
     }
-    blocks_.push_back(std::move(block));
-    return creator::core::ok();
+    slots_[tail].emplace(std::move(block));
+    tail_.store(next, std::memory_order_release);
+    return AudioQueuePushResult::Accepted;
 }
 
-std::optional<creator::media::AudioBlock> BoundedAudioBlockQueue::tryPop() {
-    std::scoped_lock lock{mutex_};
-    if (blocks_.empty()) {
+std::optional<creator::media::AudioBlock> BoundedAudioBlockQueue::tryPop() noexcept {
+    const auto head = head_.load(std::memory_order_relaxed);
+    if (head == tail_.load(std::memory_order_acquire)) {
         return std::nullopt;
     }
-    auto block = std::move(blocks_.front());
-    blocks_.pop_front();
+    auto block = std::move(slots_[head]);
+    slots_[head].reset();
+    head_.store((head + 1) % slots_.size(), std::memory_order_release);
     return block;
 }
 
 void BoundedAudioBlockQueue::clear() noexcept {
-    std::scoped_lock lock{mutex_};
-    blocks_.clear();
+    while (tryPop().has_value()) {
+    }
 }
 
 std::size_t BoundedAudioBlockQueue::size() const noexcept {
-    std::scoped_lock lock{mutex_};
-    return blocks_.size();
+    const auto head = head_.load(std::memory_order_acquire);
+    const auto tail = tail_.load(std::memory_order_acquire);
+    return tail >= head ? tail - head : slots_.size() - head + tail;
 }
 
 }  // namespace creator::capture

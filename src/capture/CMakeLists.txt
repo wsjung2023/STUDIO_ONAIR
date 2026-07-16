@@ -6,6 +6,8 @@ cs_add_qtfree_library(cs_capture
         AudioLevelMeter.cpp
         AudioCaptureBlockAssembler.h
         AudioCaptureBlockAssembler.cpp
+        AudioCaptureMailbox.h
+        AudioCaptureMailbox.cpp
         BoundedAudioBlockQueue.h
         BoundedAudioBlockQueue.cpp
         CameraCaptureFrameAssembler.h
