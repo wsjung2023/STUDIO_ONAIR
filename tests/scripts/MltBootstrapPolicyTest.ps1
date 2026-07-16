@@ -7,12 +7,16 @@ param(
 $ErrorActionPreference = "Stop"
 $BootstrapPath = Join-Path $RepositoryRoot "scripts/bootstrap_mlt.ps1"
 $VerifierPath = Join-Path $RepositoryRoot "scripts/verify_mlt_runtime.ps1"
+$StagePath = Join-Path $RepositoryRoot "scripts/stage_mlt_runtime.ps1"
 
 if (-not (Test-Path -LiteralPath $BootstrapPath)) {
     throw "Missing MLT bootstrap: $BootstrapPath"
 }
 if (-not (Test-Path -LiteralPath $VerifierPath)) {
     throw "Missing MLT runtime verifier: $VerifierPath"
+}
+if (-not (Test-Path -LiteralPath $StagePath)) {
+    throw "Missing MLT runtime staging script: $StagePath"
 }
 
 $Bootstrap = Get-Content -LiteralPath $BootstrapPath -Raw -Encoding utf8
@@ -58,6 +62,44 @@ $Verifier = Get-Content -LiteralPath $VerifierPath -Raw -Encoding utf8
 foreach ($Pattern in @('SHA256', 'unexpected', 'forbidden', 'source_commit', '7\.40\.0')) {
     if ($Verifier -notmatch $Pattern) {
         throw "MLT verifier is missing fail-closed check: $Pattern"
+    }
+}
+
+$Stage = Get-Content -LiteralPath $StagePath -Raw -Encoding utf8
+foreach ($Pattern in @(
+    'runtime-library',
+    'runtime-module',
+    'runtime-data',
+    'evidence',
+    'development',
+    'verify_mlt_runtime\.ps1',
+    'mlt-runtime-manifest\.json',
+    'ConvertTo-Json'
+)) {
+    if ($Stage -notmatch $Pattern) {
+        throw "MLT staging script is missing runtime-only policy: $Pattern"
+    }
+}
+
+$CMake = Get-Content -LiteralPath (Join-Path $RepositoryRoot "CMakeLists.txt") `
+    -Raw -Encoding utf8
+$Main = Get-Content -LiteralPath (Join-Path $RepositoryRoot "src/main.cpp") `
+    -Raw -Encoding utf8
+foreach ($Pattern in @(
+    'stage_mlt_runtime\.ps1',
+    'DELAYLOAD:mlt\+\+-7\.dll',
+    'DELAYLOAD:mlt-7\.dll'
+)) {
+    if ($CMake -notmatch $Pattern) {
+        throw "Shipping CMake is missing the isolated MLT runtime boundary: $Pattern"
+    }
+}
+if ($CMake -match 'CS_APP_MLT_ROOT') {
+    throw "Shipping CMake must not compile a development-machine MLT path into the app"
+}
+foreach ($Pattern in @('applicationDirPath', 'mlt-runtime', 'AddDllDirectory')) {
+    if ($Main -notmatch $Pattern) {
+        throw "Application startup is missing the staged MLT runtime boundary: $Pattern"
     }
 }
 

@@ -188,22 +188,26 @@ if(CS_ENABLE_MLT)
     target_link_libraries(creator_studio PRIVATE cs_mlt_adapter)
     target_compile_definitions(creator_studio PRIVATE
         CS_APP_ENABLE_MLT=1
-        CS_APP_MLT_ROOT="${CS_MLT_ROOT}"
     )
-    file(GLOB CS_APP_MLT_RUNTIME_DLLS CONFIGURE_DEPENDS
-        "${CS_MLT_ROOT}/bin/*.dll")
-    add_custom_command(TARGET creator_studio POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CS_APP_MLT_RUNTIME_DLLS}
-            $<TARGET_FILE_DIR:creator_studio>
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CS_MLT_ROOT}/lib/mlt-7"
-            "$<TARGET_FILE_DIR:creator_studio>/lib/mlt-7"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CS_MLT_ROOT}/share/mlt-7"
-            "$<TARGET_FILE_DIR:creator_studio>/share/mlt-7"
-        COMMAND_EXPAND_LISTS
-    )
+    if(WIN32)
+        if(NOT MSVC)
+            message(FATAL_ERROR "The audited Windows MLT package requires MSVC")
+        endif()
+        target_link_libraries(creator_studio PRIVATE delayimp)
+        target_link_options(creator_studio PRIVATE
+            "/DELAYLOAD:mlt++-7.dll"
+            "/DELAYLOAD:mlt-7.dll"
+        )
+        add_custom_command(TARGET creator_studio POST_BUILD
+            COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/stage_mlt_runtime.ps1"
+                -SourceRoot "${CS_MLT_ROOT}"
+                -DestinationRoot "$<TARGET_FILE_DIR:creator_studio>/mlt-runtime"
+        )
+    else()
+        message(FATAL_ERROR
+            "Audited MLT application staging is currently implemented for Windows")
+    endif()
 endif()
 
 if(APPLE)

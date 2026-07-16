@@ -216,16 +216,33 @@ if(CS_ENABLE_MLT)
         CS_TEST_MLT_ROOT="${CS_MLT_ROOT}"
     )
     cs_apply_warnings(cs_mlt_tests)
-    file(GLOB CS_MLT_TEST_DLLS CONFIGURE_DEPENDS "${CS_MLT_ROOT}/bin/*.dll")
-    add_custom_command(TARGET cs_mlt_tests POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CS_MLT_TEST_DLLS}
-            $<TARGET_FILE_DIR:cs_mlt_tests>
-        COMMAND_EXPAND_LISTS
-    )
     gtest_discover_tests(cs_mlt_tests
         DISCOVERY_MODE PRE_TEST
         PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:${CS_MLT_ROOT}/bin"
+    )
+
+    add_executable(cs_r1_mlt_acceptance_tests
+        acceptance/R1MltPreviewAcceptanceTest.cpp
+    )
+    target_link_libraries(cs_r1_mlt_acceptance_tests PRIVATE
+        cs_app
+        cs_mlt_adapter
+        Qt6::Quick
+        Qt6::Test
+        GTest::gtest
+    )
+    target_compile_definitions(cs_r1_mlt_acceptance_tests PRIVATE
+        CS_TEST_STAGED_MLT_ROOT="$<TARGET_FILE_DIR:creator_studio>/mlt-runtime"
+    )
+    add_dependencies(cs_r1_mlt_acceptance_tests creator_studio)
+    cs_apply_warnings(cs_r1_mlt_acceptance_tests)
+    gtest_discover_tests(cs_r1_mlt_acceptance_tests
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:creator_studio>/mlt-runtime/bin"
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 endif()
