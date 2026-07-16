@@ -44,6 +44,17 @@ public:
     /// Produces the next frame. Fails with InvalidState unless started.
     [[nodiscard]] creator::core::Result<creator::media::VideoFrame> tick() override;
 
+    /// Makes the next start() call fail with `error` instead of taking effect,
+    /// then reverts to normal behaviour. No real capture device is available
+    /// to fail on demand, so StudioController's failure paths - the ones
+    /// CLAUDE.md 8 requires an error-path test for - are otherwise
+    /// unreachable from a test. Deliberately minimal: one pending error, no
+    /// policy engine.
+    void failNextStart(creator::core::AppError error);
+
+    /// Same as failNextStart, but for the next stop() call.
+    void failNextStop(creator::core::AppError error);
+
 private:
     creator::domain::SourceId id_;
     std::string displayName_;
@@ -51,6 +62,8 @@ private:
     creator::capture::CaptureConfig config_{};
     std::optional<creator::core::FrameRate> frameRate_;
     std::int64_t nextFrameIndex_{0};
+    std::optional<creator::core::AppError> failNextStart_;
+    std::optional<creator::core::AppError> failNextStop_;
 };
 
 }  // namespace creator::fakes

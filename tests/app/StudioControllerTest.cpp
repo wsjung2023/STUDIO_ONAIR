@@ -1,5 +1,6 @@
 #include "app/StudioController.h"
 
+#include "core/AppError.h"
 #include "domain/Identifiers.h"
 #include "fakes/FakeCaptureSource.h"
 #include "fakes/FakeRecorder.h"
@@ -14,6 +15,8 @@
 namespace {
 
 using creator::app::StudioController;
+using creator::core::AppError;
+using creator::core::ErrorCode;
 using creator::domain::SourceId;
 using creator::fakes::FakeCaptureSource;
 using creator::fakes::FakeRecorder;
@@ -117,10 +120,37 @@ TEST_F(StudioControllerTest, IgnoresStopWhileIdle) {
 }
 
 TEST_F(StudioControllerTest, SurfacesFailureInStatusMessage) {
-    // A recording failure must reach the UI, not just the log (CLAUDE.md 9).
-    controller_->stopRecording();
+    // A recording failure must reach the UI with its OWN message - not just
+    // some non-empty text, and not the unrelated "Not recording" idle guard -
+    // or CLAUDE.md 9's "expose device errors" requirement is unverifiable.
+    auto source = std::make_unique<FakeCaptureSource>(SourceId::create("screen-1").value(),
+                                                       "Fake Screen");
+    source->failNextStart(AppError{ErrorCode::Unknown, "injected start failure"});
+    StudioController controller{std::move(source), std::make_unique<FakeRecorder>()};
 
-    EXPECT_FALSE(controller_->statusMessage().isEmpty());
+    controller.startRecording();
+
+    EXPECT_EQ(controller.statusMessage(), QStringLiteral("injected start failure"));
+}
+
+TEST_F(StudioControllerTest, FailedStartStopsTheSourceAndLeavesControllerIdle) {
+    // A source that fails to start must still be released (ICaptureSource::
+    // stop()'s contract says it is safe to call on a source that never
+    // started, precisely so this unwind can rely on it unconditionally).
+    // Injecting a distinct failNextStop error and asserting THAT message (not
+    // the start failure's) reaches statusMessage() is what proves stop() was
+    // actually invoked during the unwind - the source's own state after a
+    // failed start is otherwise indistinguishable from "never touched".
+    auto source = std::make_unique<FakeCaptureSource>(SourceId::create("screen-1").value(),
+                                                       "Fake Screen");
+    source->failNextStart(AppError{ErrorCode::Unknown, "start denied"});
+    source->failNextStop(AppError{ErrorCode::Unknown, "stop also failed"});
+    StudioController controller{std::move(source), std::make_unique<FakeRecorder>()};
+
+    controller.startRecording();
+
+    EXPECT_FALSE(controller.isRecording());
+    EXPECT_EQ(controller.statusMessage(), QStringLiteral("stop also failed"));
 }
 
 TEST_F(StudioControllerTest, ClearsPreviousTakeOnRestart) {

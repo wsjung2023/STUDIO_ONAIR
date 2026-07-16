@@ -63,6 +63,13 @@ StudioController::~StudioController() {
     // matter here - it only has to be >= kSessionStart, the same value
     // startRecording() opened this take with, or RecordingSession::stop
     // rejects it as preceding the start time.
+    //
+    // Both Results are discarded here, error included, on purpose: this
+    // object is being destroyed, so there is no statusMessage() a QML binding
+    // will ever read again to show one in. That is different from
+    // stopRecording() and the startRecording() unwind below, where the same
+    // calls' Results are routed to setStatusMessage() because the UI is still
+    // there to see it.
     if (recording_) {
         static_cast<void>(recorder_->stop(kSessionStart));
         static_cast<void>(source_->stop());
@@ -105,9 +112,22 @@ void StudioController::startRecording() {
         return;
     }
     if (auto started = source_->start(kCaptureConfig); !started.hasValue()) {
-        // Unwind the recorder so a failed source does not leave a take half open.
+        // Unwind the recorder so a failed source does not leave a take half
+        // open. The source itself must be unwound too: ICaptureSource::stop()
+        // is documented safe to call on a source that was never started -
+        // precisely so this unconditional call is safe here - and a real
+        // SCK/WGC source that acquires a stream and then fails a later
+        // permission check would otherwise leak it.
         static_cast<void>(recorder_->stop(kSessionStart));
-        setStatusMessage(QString::fromStdString(started.error().message()));
+        if (auto stopped = source_->stop(); !stopped.hasValue()) {
+            // Releasing the source failed too. That is now the more
+            // actionable problem (CLAUDE.md 9 requires device errors reach
+            // the user), so it takes the status message instead of the
+            // start failure that triggered this unwind.
+            setStatusMessage(QString::fromStdString(stopped.error().message()));
+        } else {
+            setStatusMessage(QString::fromStdString(started.error().message()));
+        }
         return;
     }
 
@@ -145,7 +165,7 @@ void StudioController::stopRecording() {
     }
 
     auto session = recorder_->stop(stopAt);
-    static_cast<void>(source_->stop());
+    auto sourceStopped = source_->stop();
 
     if (!session.hasValue()) {
         setStatusMessage(QString::fromStdString(session.error().message()));
@@ -160,8 +180,17 @@ void StudioController::stopRecording() {
     if (const auto takeLength = session.value().duration()) {
         takeDuration_ = formatDuration(*takeLength);
     }
-    setStatusMessage(tr("Stopped"));
     emit takeSummaryChanged();
+
+    if (!sourceStopped.hasValue()) {
+        // The take itself is already safely finalised above; failing to
+        // release the source is a device-handle problem (CLAUDE.md 9: device
+        // errors must reach the user), not a recording-content problem, but it
+        // must still not be swallowed the way a bare static_cast<void> would.
+        setStatusMessage(QString::fromStdString(sourceStopped.error().message()));
+    } else {
+        setStatusMessage(tr("Stopped"));
+    }
     emit recordingChanged();
 }
 

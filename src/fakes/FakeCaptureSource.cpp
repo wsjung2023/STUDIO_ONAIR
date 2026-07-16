@@ -16,6 +16,11 @@ domain::SourceId FakeCaptureSource::id() const { return id_; }
 std::string FakeCaptureSource::displayName() const { return displayName_; }
 
 Result<void> FakeCaptureSource::start(const capture::CaptureConfig& config) {
+    if (failNextStart_.has_value()) {
+        AppError error = std::move(*failNextStart_);
+        failNextStart_.reset();
+        return error;
+    }
     if (started_) {
         return AppError{ErrorCode::InvalidState, "capture source is already started"};
     }
@@ -34,6 +39,11 @@ Result<void> FakeCaptureSource::start(const capture::CaptureConfig& config) {
 }
 
 Result<void> FakeCaptureSource::stop() {
+    if (failNextStop_.has_value()) {
+        AppError error = std::move(*failNextStop_);
+        failNextStop_.reset();
+        return error;
+    }
     // Not an error when never started: a real source whose start() failed still
     // has to be cleaned up, so stop() has to tolerate it.
     started_ = false;
@@ -67,5 +77,9 @@ Result<media::VideoFrame> FakeCaptureSource::tick() {
     ++nextFrameIndex_;
     return frame;
 }
+
+void FakeCaptureSource::failNextStart(AppError error) { failNextStart_ = std::move(error); }
+
+void FakeCaptureSource::failNextStop(AppError error) { failNextStop_ = std::move(error); }
 
 }  // namespace creator::fakes
