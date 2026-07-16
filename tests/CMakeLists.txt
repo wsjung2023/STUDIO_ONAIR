@@ -88,6 +88,7 @@ add_executable(cs_app_tests
     app/StudioControllerTest.cpp
     app/ProjectControllerTest.cpp
     app/ScreenCaptureControllerTest.cpp
+    app/PreviewGeometryTest.cpp
 )
 
 target_link_libraries(cs_app_tests
@@ -113,6 +114,7 @@ add_executable(cs_qml_tests
 
 target_link_libraries(cs_qml_tests
     PRIVATE
+        cs_app
         Qt6::Quick
         Qt6::Test
         GTest::gtest

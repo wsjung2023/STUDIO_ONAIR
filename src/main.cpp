@@ -1,5 +1,6 @@
 #include "app/ProjectController.h"
 #include "app/ScreenCaptureController.h"
+#include "app/ScreenPreviewItem.h"
 #include "app/StudioController.h"
 #include "capture/UnsupportedScreenCaptureBackend.h"
 #if defined(__APPLE__)
@@ -13,11 +14,14 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <qqml.h>
 
 int main(int argc, char* argv[]) {
     QGuiApplication app(argc, argv);
     QGuiApplication::setOrganizationName(QStringLiteral("CreatorStudio"));
     QGuiApplication::setApplicationName(QStringLiteral("Creator Studio"));
+    qmlRegisterType<creator::app::ScreenPreviewItem>("CreatorStudio.Native", 1, 0,
+                                                      "ScreenPreviewItem");
 
     auto packageStore = std::make_unique<creator::project_store::ProjectPackageStore>();
     creator::app::ProjectController projectController{std::move(packageStore), &app};

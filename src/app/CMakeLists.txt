@@ -10,6 +10,10 @@ add_library(cs_app STATIC
     StudioController.cpp
     ScreenCaptureController.h
     ScreenCaptureController.cpp
+    PreviewGeometry.h
+    PreviewGeometry.cpp
+    ScreenPreviewItem.h
+    ScreenPreviewItem.cpp
     RecentProjectRegistry.h
     RecentProjectRegistry.cpp
     ProjectWorker.h
@@ -17,6 +21,23 @@ add_library(cs_app STATIC
     ProjectController.h
     ProjectController.cpp
 )
+
+if(APPLE)
+    find_library(CS_APP_COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
+    find_library(CS_APP_IOSURFACE_FRAMEWORK IOSurface REQUIRED)
+    find_library(CS_APP_METAL_FRAMEWORK Metal REQUIRED)
+    target_sources(cs_app PRIVATE ScreenPreviewItem_macos.mm)
+    set_source_files_properties(ScreenPreviewItem_macos.mm PROPERTIES
+        COMPILE_OPTIONS "-fobjc-arc"
+    )
+    target_link_libraries(cs_app PRIVATE
+        ${CS_APP_COREVIDEO_FRAMEWORK}
+        ${CS_APP_IOSURFACE_FRAMEWORK}
+        ${CS_APP_METAL_FRAMEWORK}
+    )
+else()
+    target_sources(cs_app PRIVATE ScreenPreviewItem_stub.cpp)
+endif()
 add_library(CreatorStudio::cs_app ALIAS cs_app)
 
 target_include_directories(cs_app PUBLIC ${PROJECT_SOURCE_DIR}/src)
@@ -25,6 +46,7 @@ target_compile_features(cs_app PUBLIC cxx_std_20)
 target_link_libraries(cs_app
     PUBLIC
         Qt6::Core
+        Qt6::Quick
         cs_capture
         cs_recorder
     PRIVATE

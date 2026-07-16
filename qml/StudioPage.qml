@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import CreatorStudio.Native 1.0
 
 // Layout follows PRODUCT_BLUEPRINT 6.2: scenes and sources left, canvas centre,
 // inspector right, audio and stats along the bottom.
@@ -119,6 +120,14 @@ Item {
                     border.color: studioController.recording ? "#ff6b6b" : "#3a3f49"
                     border.width: studioController.recording ? 2 : 1
 
+                    ScreenPreviewItem {
+                        id: nativePreview
+                        objectName: "nativeScreenPreview"
+                        anchors.fill: parent
+                        captureController: screenCaptureController
+                        visible: Qt.platform.os === "osx"
+                    }
+
                     // R0-03 targets ScreenCaptureKit first. Windows keeps this
                     // visibly labelled synthetic surface; it is never presented
                     // as captured desktop content.
@@ -134,7 +143,10 @@ Item {
                         anchors.centerIn: parent
                         visible: Qt.platform.os === "osx"
                                  && screenCaptureController.previewing
-                        text: qsTr("Native preview surface is starting")
+                                 && !nativePreview.frameVisible
+                        text: nativePreview.rendererStatus.length > 0
+                              ? nativePreview.rendererStatus
+                              : qsTr("Native preview surface is starting")
                         color: "white"
                         font.pixelSize: 20
                     }

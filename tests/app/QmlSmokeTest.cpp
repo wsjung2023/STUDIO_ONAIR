@@ -1,3 +1,5 @@
+#include "app/ScreenPreviewItem.h"
+
 #include <QGuiApplication>
 #include <QQmlComponent>
 #include <QQmlContext>
@@ -5,6 +7,7 @@
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
+#include <qqml.h>
 
 #include <gtest/gtest.h>
 
@@ -168,8 +171,10 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     ASSERT_NE(object, nullptr) << component.errorString().toStdString();
     auto* selector = object->findChild<QObject*>(QStringLiteral("captureTargetSelector"));
     auto* status = object->findChild<QObject*>(QStringLiteral("captureStatusLabel"));
+    auto* preview = object->findChild<QObject*>(QStringLiteral("nativeScreenPreview"));
     ASSERT_NE(selector, nullptr);
     ASSERT_NE(status, nullptr);
+    ASSERT_NE(preview, nullptr);
     EXPECT_EQ(selector->property("count").toInt(), 1);
     EXPECT_EQ(status->property("text").toString(),
               QStringLiteral("captured window closed"));
@@ -179,6 +184,8 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
 
 int main(int argc, char** argv) {
     QGuiApplication app{argc, argv};
+    qmlRegisterType<creator::app::ScreenPreviewItem>("CreatorStudio.Native", 1, 0,
+                                                      "ScreenPreviewItem");
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
