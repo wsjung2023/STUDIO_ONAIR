@@ -42,6 +42,7 @@ add_executable(cs_tests
     domain/EditCommandTest.cpp
     domain/DeleteRangeCommandTest.cpp
     edit_engine/EditEngineTypesTest.cpp
+    mlt_adapter/MltGraphPlanTest.cpp
     domain/ProjectManifestTest.cpp
     domain/RecordingSessionTest.cpp
     media/MediaTypesTest.cpp
@@ -94,6 +95,7 @@ target_link_libraries(cs_tests
         cs_recorder
         cs_project_store
         cs_edit_engine
+        cs_mlt_graph_plan
         cs_fakes
         nlohmann_json::nlohmann_json
         GTest::gtest_main
@@ -150,6 +152,15 @@ gtest_discover_tests(cs_app_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+
+if(WIN32)
+    add_test(
+        NAME MltBootstrapPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/MltBootstrapPolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+endif()
 
 if(CS_ENABLE_FFMPEG)
     add_executable(cs_ffmpeg_tests
