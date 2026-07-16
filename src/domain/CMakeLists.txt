@@ -1,6 +1,8 @@
 cs_add_qtfree_library(cs_domain
     SOURCES
         Identifiers.h
+        MediaAsset.h
+        MediaAsset.cpp
         ProjectManifest.h
         ProjectManifest.cpp
         RecordingSession.h
@@ -8,6 +10,8 @@ cs_add_qtfree_library(cs_domain
         Segment.h
         TimelineTypes.h
         TimelineTypes.cpp
+        Timeline.h
+        Timeline.cpp
     DEPENDS
         cs_core
 )
