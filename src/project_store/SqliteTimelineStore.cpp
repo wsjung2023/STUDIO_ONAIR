@@ -2,6 +2,7 @@
 
 #include "core/AppError.h"
 #include "project_store/MigrationRunner.h"
+#include "project_store/internal/EditCommandCodec.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -612,6 +613,9 @@ Result<PersistedTimeline> SqliteTimelineStore::loadPrimaryTimeline() {
     auto historyCursor = toSize(checkpoint.columnInt64(2), "history cursor");
     if (!historyCount.hasValue()) return historyCount.error();
     if (!historyCursor.hasValue()) return historyCursor.error();
+    if (historyCursor.value() > historyCount.value()) {
+        return corrupt("history cursor exceeds history count");
+    }
     std::optional<std::size_t> cleanCursor;
     if (!checkpoint.columnIsNull(3)) {
         auto clean = toSize(checkpoint.columnInt64(3), "clean cursor");
@@ -658,6 +662,67 @@ Result<PersistedTimeline> SqliteTimelineStore::loadPrimaryTimeline() {
                              .cleanCursor = cleanCursor,
                              .explicitSavedRevision = explicitSavedRevision,
                              .events = std::move(events)};
+}
+
+Result<domain::EditHistory> SqliteTimelineStore::loadEditHistory(
+    std::size_t limit) {
+    if (limit == 0) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "edit history limit must be positive"};
+    }
+    auto persisted = loadPrimaryTimeline();
+    if (!persisted.hasValue()) return persisted.error();
+    if (persisted.value().historyCount > limit) {
+        return corrupt("history count exceeds configured limit");
+    }
+
+    std::vector<domain::EditCommandRecord> records;
+    std::size_t cursor = 0;
+    for (const auto& event : persisted.value().events) {
+        switch (event.kind) {
+            case EditEventKind::Apply:
+                if (cursor < records.size()) {
+                    records.erase(
+                        records.begin() + static_cast<std::ptrdiff_t>(cursor),
+                        records.end());
+                }
+                records.push_back(event.command);
+                cursor = records.size();
+                if (records.size() > limit) {
+                    records.erase(records.begin());
+                    --cursor;
+                }
+                break;
+            case EditEventKind::Undo:
+                if (cursor == 0 || records[cursor - 1] != event.command) {
+                    return corrupt("undo audit event does not match history");
+                }
+                --cursor;
+                break;
+            case EditEventKind::Redo:
+                if (cursor >= records.size() || records[cursor] != event.command) {
+                    return corrupt("redo audit event does not match history");
+                }
+                ++cursor;
+                break;
+        }
+    }
+    if (records.size() != persisted.value().historyCount ||
+        cursor != persisted.value().historyCursor) {
+        return corrupt("audit events differ from edit checkpoint");
+    }
+
+    internal::EditCommandCodec codec{
+        [this](const AssetId& id) { return asset(id); }};
+    std::vector<std::unique_ptr<domain::IEditCommand>> commands;
+    commands.reserve(records.size());
+    for (std::size_t index = 0; index < records.size(); ++index) {
+        auto decoded = codec.decode(records[index], index < cursor);
+        if (!decoded.hasValue()) return decoded.error();
+        commands.push_back(std::move(decoded).value());
+    }
+    return domain::EditHistory::restore(
+        limit, std::move(commands), cursor, persisted.value().cleanCursor);
 }
 
 Result<void> SqliteTimelineStore::commitEdit(const TimelineCommit& commit) {
@@ -746,6 +811,57 @@ Result<void> SqliteTimelineStore::commitEdit(const TimelineCommit& commit) {
     if (auto r = bindNullableInt64(checkpoint, 4, cleanCursor); !r.hasValue()) return r.error();
     if (auto r = checkpoint.bindText(5, commit.snapshot.id().value()); !r.hasValue()) return r.error();
     if (auto r = expectDone(checkpoint, "update edit checkpoint"); !r.hasValue()) return r.error();
+    return transaction.commit();
+}
+
+Result<void> SqliteTimelineStore::markExplicitSave(
+    const TimelineId& timelineId, std::int64_t expectedRevision,
+    std::size_t historyCursor) {
+    if (expectedRevision < 0) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "saved timeline revision must not be negative"};
+    }
+    auto sqlCursor = unsignedToSqlInteger(historyCursor, "history cursor");
+    if (!sqlCursor.hasValue()) return sqlCursor.error();
+    auto begun = SqliteTransaction::beginImmediate(connection_);
+    if (!begun.hasValue()) return begun.error();
+    auto transaction = std::move(begun).value();
+
+    auto selected = connection_.prepare(
+        "SELECT edit_checkpoints.revision,edit_checkpoints.history_count "
+        "FROM edit_checkpoints JOIN timelines USING(timeline_id) "
+        "WHERE edit_checkpoints.timeline_id=?1 AND timelines.project_id=?2");
+    if (!selected.hasValue()) return selected.error();
+    auto statement = std::move(selected).value();
+    if (auto r = statement.bindText(1, timelineId.value()); !r.hasValue()) return r.error();
+    if (auto r = statement.bindText(2, projectId_.value()); !r.hasValue()) return r.error();
+    auto row = statement.step();
+    if (!row.hasValue()) return row.error();
+    if (row.value() != SqliteStep::Row) {
+        return AppError{ErrorCode::NotFound,
+                        "timeline save checkpoint was not found"};
+    }
+    if (statement.columnInt64(0) != expectedRevision) {
+        return AppError{ErrorCode::InvalidState,
+                        "timeline revision is stale"};
+    }
+    if (sqlCursor.value() > statement.columnInt64(1)) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "saved history cursor exceeds history count"};
+    }
+    auto end = statement.step();
+    if (!end.hasValue()) return end.error();
+    if (end.value() != SqliteStep::Done) return corrupt("duplicate save checkpoint");
+
+    auto updated = connection_.prepare(
+        "UPDATE edit_checkpoints SET clean_cursor=?1,explicit_saved_revision=?2 "
+        "WHERE timeline_id=?3");
+    if (!updated.hasValue()) return updated.error();
+    auto update = std::move(updated).value();
+    if (auto r = update.bindInt64(1, sqlCursor.value()); !r.hasValue()) return r.error();
+    if (auto r = update.bindInt64(2, expectedRevision); !r.hasValue()) return r.error();
+    if (auto r = update.bindText(3, timelineId.value()); !r.hasValue()) return r.error();
+    if (auto r = expectDone(update, "mark explicit save"); !r.hasValue()) return r.error();
     return transaction.commit();
 }
 

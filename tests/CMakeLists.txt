@@ -108,6 +108,7 @@ gtest_discover_tests(cs_tests)
 # standing check that the layers below the application really do build without
 # Qt on the include path.
 add_executable(cs_app_tests
+    app/TimelineEditServiceTest.cpp
     app/StudioControllerTest.cpp
     app/LiveRecordingControllerTest.cpp
     app/ProjectControllerTest.cpp
@@ -121,6 +122,7 @@ add_executable(cs_app_tests
 target_link_libraries(cs_app_tests
     PRIVATE
         cs_app
+        cs_project_store
         cs_fakes
         # QSignalSpy lives in QtTest, not QtCore; cs_app itself only needs
         # Qt6::Core, so the test binary requests Test for itself rather than

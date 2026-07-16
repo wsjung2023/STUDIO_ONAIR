@@ -13,6 +13,8 @@ namespace creator::domain {
 
 class DeleteRangeCommand final : public IEditCommand {
 public:
+    using PreviousTrack = std::pair<TrackId, std::vector<Clip>>;
+
     DeleteRangeCommand(CommandId commandId, TimeRange deletion, bool ripple,
                        std::vector<ClipId> rightClipIds)
         : commandId_(std::move(commandId)),
@@ -24,10 +26,12 @@ public:
     [[nodiscard]] core::Result<void> undo(Timeline& timeline) override;
     [[nodiscard]] EditCommandRecord record() const override;
     [[nodiscard]] std::unique_ptr<IEditCommand> clone() const override;
+    [[nodiscard]] static std::unique_ptr<IEditCommand> rehydrate(
+        CommandId commandId, TimeRange deletion, bool ripple,
+        std::vector<ClipId> rightClipIds,
+        std::vector<PreviousTrack> previousTracks, bool applied);
 
 private:
-    using PreviousTrack = std::pair<TrackId, std::vector<Clip>>;
-
     CommandId commandId_;
     TimeRange deletion_;
     bool ripple_;

@@ -29,8 +29,13 @@ public:
     [[nodiscard]] core::Result<void> createTimeline(
         const domain::Timeline& timeline) override;
     [[nodiscard]] core::Result<PersistedTimeline> loadPrimaryTimeline() override;
+    [[nodiscard]] core::Result<domain::EditHistory> loadEditHistory(
+        std::size_t limit) override;
     [[nodiscard]] core::Result<void> commitEdit(
         const TimelineCommit& commit) override;
+    [[nodiscard]] core::Result<void> markExplicitSave(
+        const domain::TimelineId& timelineId, std::int64_t expectedRevision,
+        std::size_t historyCursor) override;
 
 private:
     SqliteTimelineStore(internal::SqliteConnection connection,

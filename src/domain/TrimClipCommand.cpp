@@ -1,6 +1,7 @@
 #include "domain/TrimClipCommand.h"
 
 #include "core/AppError.h"
+#include "domain/EditCommandJson.h"
 
 #include <iomanip>
 #include <memory>
@@ -38,17 +39,6 @@ std::string jsonQuoted(std::string_view value) {
     }
     output << '"';
     return output.str();
-}
-
-std::string originalJson(const Clip& clip) {
-    return "{\"sourceDurationNs\":" +
-           std::to_string(clip.sourceRange().duration().count()) +
-           ",\"sourceStartNs\":" +
-           std::to_string(clip.sourceRange().start().time_since_epoch().count()) +
-           ",\"timelineDurationNs\":" +
-           std::to_string(clip.timelineRange().duration().count()) +
-           ",\"timelineStartNs\":" +
-           std::to_string(clip.timelineRange().start().time_since_epoch().count()) + "}";
 }
 
 }  // namespace
@@ -120,12 +110,23 @@ EditCommandRecord TrimClipCommand::record() const {
                              .type = "TRIM_CLIP",
                              .payload = payload,
                              .undoPayload = original_.has_value()
-                                                ? originalJson(*original_)
+                                                ? internal::serializeClip(*original_)
                                                 : "{}"};
 }
 
 std::unique_ptr<IEditCommand> TrimClipCommand::clone() const {
     return std::make_unique<TrimClipCommand>(*this);
+}
+
+std::unique_ptr<IEditCommand> TrimClipCommand::rehydrate(
+    CommandId commandId, TrackId trackId, ClipId clipId, TrimEdge edge,
+    core::TimestampNs boundary, Clip original, bool applied) {
+    auto command = std::make_unique<TrimClipCommand>(
+        std::move(commandId), std::move(trackId), std::move(clipId), edge,
+        boundary);
+    command->original_ = std::move(original);
+    command->applied_ = applied;
+    return command;
 }
 
 }  // namespace creator::domain

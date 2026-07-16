@@ -1,6 +1,7 @@
 #include "domain/DeleteRangeCommand.h"
 
 #include "core/AppError.h"
+#include "domain/EditCommandJson.h"
 
 #include <iomanip>
 #include <memory>
@@ -184,13 +185,6 @@ EditCommandRecord DeleteRangeCommand::record() const {
     }
     rightIds.push_back(']');
 
-    std::string affectedTracks{"["};
-    for (std::size_t index = 0; index < previousTracks_.size(); ++index) {
-        if (index != 0) affectedTracks.push_back(',');
-        affectedTracks += jsonString(previousTracks_[index].first.value());
-    }
-    affectedTracks.push_back(']');
-
     const std::string payload =
         "{\"durationNs\":" + std::to_string(deletion_.duration().count()) +
         ",\"rightClipIds\":" + rightIds +
@@ -200,12 +194,23 @@ EditCommandRecord DeleteRangeCommand::record() const {
     return EditCommandRecord{.commandId = commandId_,
                              .type = "DELETE_RANGE",
                              .payload = payload,
-                             .undoPayload = "{\"affectedTrackIds\":" +
-                                            affectedTracks + "}"};
+                             .undoPayload =
+                                 internal::serializeTrackClips(previousTracks_)};
 }
 
 std::unique_ptr<IEditCommand> DeleteRangeCommand::clone() const {
     return std::make_unique<DeleteRangeCommand>(*this);
+}
+
+std::unique_ptr<IEditCommand> DeleteRangeCommand::rehydrate(
+    CommandId commandId, TimeRange deletion, bool ripple,
+    std::vector<ClipId> rightClipIds,
+    std::vector<PreviousTrack> previousTracks, bool applied) {
+    auto command = std::make_unique<DeleteRangeCommand>(
+        std::move(commandId), deletion, ripple, std::move(rightClipIds));
+    command->previousTracks_ = std::move(previousTracks);
+    command->applied_ = applied;
+    return command;
 }
 
 }  // namespace creator::domain

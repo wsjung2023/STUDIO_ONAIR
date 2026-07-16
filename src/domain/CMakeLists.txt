@@ -2,6 +2,8 @@ cs_add_qtfree_library(cs_domain
     SOURCES
         Identifiers.h
         EditCommand.h
+        EditCommandJson.h
+        EditCommandJson.cpp
         DeleteRangeCommand.h
         DeleteRangeCommand.cpp
         EditHistory.h
@@ -17,6 +19,7 @@ cs_add_qtfree_library(cs_domain
         TimelineTypes.cpp
         Timeline.h
         Timeline.cpp
+        TimelineRevision.h
         SplitClipCommand.h
         SplitClipCommand.cpp
         TrimClipCommand.h

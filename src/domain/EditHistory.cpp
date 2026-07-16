@@ -93,4 +93,30 @@ core::Result<void> EditHistory::redo(Timeline& timeline) {
     return core::ok();
 }
 
+core::Result<EditHistory> EditHistory::restore(
+    std::size_t limit, std::vector<std::unique_ptr<IEditCommand>> commands,
+    std::size_t cursor, std::optional<std::size_t> cleanCursor) {
+    if (limit == 0 || commands.size() > limit || cursor > commands.size() ||
+        (cleanCursor.has_value() && *cleanCursor > commands.size())) {
+        return core::AppError{core::ErrorCode::InvalidArgument,
+                              "restored edit history metadata is invalid"};
+    }
+    if (std::any_of(commands.begin(), commands.end(),
+                    [](const auto& command) { return command == nullptr; })) {
+        return core::AppError{core::ErrorCode::InvalidArgument,
+                              "restored edit history contains a null command"};
+    }
+    return EditHistory{limit, std::move(commands), cursor, cleanCursor};
+}
+
+std::optional<EditCommandRecord> EditHistory::undoRecord() const {
+    if (cursor_ == 0) return std::nullopt;
+    return commands_[cursor_ - 1]->record();
+}
+
+std::optional<EditCommandRecord> EditHistory::redoRecord() const {
+    if (cursor_ >= commands_.size()) return std::nullopt;
+    return commands_[cursor_]->record();
+}
+
 }  // namespace creator::domain

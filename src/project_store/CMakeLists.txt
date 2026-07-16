@@ -20,6 +20,8 @@ cs_add_qtfree_library(cs_project_store
         migrations/002_timeline_editing.sql
         internal/SqliteConnection.h
         internal/SqliteConnection.cpp
+        internal/EditCommandCodec.h
+        internal/EditCommandCodec.cpp
         internal/DurableFile.h
         internal/DurableFile.cpp
     DEPENDS

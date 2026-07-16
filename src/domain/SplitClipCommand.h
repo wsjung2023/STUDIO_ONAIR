@@ -24,6 +24,10 @@ public:
     [[nodiscard]] core::Result<void> undo(Timeline& timeline) override;
     [[nodiscard]] EditCommandRecord record() const override;
     [[nodiscard]] std::unique_ptr<IEditCommand> clone() const override;
+    [[nodiscard]] static std::unique_ptr<IEditCommand> rehydrate(
+        CommandId commandId, TrackId trackId, ClipId clipId,
+        ClipId rightClipId, core::TimestampNs splitAt, Clip original,
+        bool applied);
 
 private:
     CommandId commandId_;

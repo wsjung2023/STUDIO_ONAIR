@@ -34,6 +34,8 @@ add_library(cs_app STATIC
     ProjectWorker.cpp
     ProjectController.h
     ProjectController.cpp
+    TimelineEditService.h
+    TimelineEditService.cpp
 )
 
 if(CS_ENABLE_FFMPEG)

@@ -3,6 +3,7 @@
 #include "core/Result.h"
 #include "core/Utc.h"
 #include "domain/EditCommand.h"
+#include "domain/EditHistory.h"
 #include "domain/Identifiers.h"
 #include "domain/MediaAsset.h"
 #include "domain/Timeline.h"
@@ -57,8 +58,13 @@ public:
     [[nodiscard]] virtual core::Result<void> createTimeline(
         const domain::Timeline& timeline) = 0;
     [[nodiscard]] virtual core::Result<PersistedTimeline> loadPrimaryTimeline() = 0;
+    [[nodiscard]] virtual core::Result<domain::EditHistory> loadEditHistory(
+        std::size_t limit) = 0;
     [[nodiscard]] virtual core::Result<void> commitEdit(
         const TimelineCommit& commit) = 0;
+    [[nodiscard]] virtual core::Result<void> markExplicitSave(
+        const domain::TimelineId& timelineId, std::int64_t expectedRevision,
+        std::size_t historyCursor) = 0;
     virtual ~ITimelineStore() = default;
 };
 
