@@ -1,4 +1,9 @@
+#include "app/ProjectController.h"
 #include "app/StudioController.h"
+#include "domain/Identifiers.h"
+#include "fakes/FakeCaptureSource.h"
+#include "fakes/FakeRecorder.h"
+#include "project_store/ProjectPackageStore.h"
 
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
@@ -9,13 +14,18 @@ int main(int argc, char* argv[]) {
     QGuiApplication::setOrganizationName(QStringLiteral("CreatorStudio"));
     QGuiApplication::setApplicationName(QStringLiteral("Creator Studio"));
 
-    // The one object QML may talk to. Parented to the app so it outlives the
-    // engine's QML objects and is destroyed exactly once.
-    creator::app::StudioController studioController{&app};
+    auto packageStore = std::make_unique<creator::project_store::ProjectPackageStore>();
+    creator::app::ProjectController projectController{std::move(packageStore), &app};
+    creator::app::StudioController studioController{
+        std::make_unique<creator::fakes::FakeCaptureSource>(
+            creator::domain::SourceId::create("screen-1").value(), "Test Pattern"),
+        std::make_unique<creator::fakes::FakeRecorder>(), &projectController, &app};
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
                                              &studioController);
+    engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
+                                             &projectController);
 
     QObject::connect(
         &engine,

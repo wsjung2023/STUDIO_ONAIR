@@ -105,6 +105,7 @@ qt_add_qml_module(creator_studio
     QML_FILES
         qml/Main.qml
         qml/HomePage.qml
+        qml/RecoveryPage.qml
         qml/StudioPage.qml
         qml/EditorPage.qml
         qml/TestPattern.qml

@@ -29,6 +29,10 @@ ProjectController::ProjectController(QObject* parent)
                         productionRegistryPath(), true, parent) {}
 
 ProjectController::ProjectController(
+    std::unique_ptr<project_store::IProjectPackageStore> store, QObject* parent)
+    : ProjectController(std::move(store), productionRegistryPath(), true, parent) {}
+
+ProjectController::ProjectController(
     std::unique_ptr<project_store::IProjectPackageStore> store,
     std::filesystem::path registryPath, bool refreshOnStartup, QObject* parent)
     : QObject(parent),

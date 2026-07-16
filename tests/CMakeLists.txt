@@ -98,3 +98,25 @@ target_include_directories(cs_app_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 cs_apply_warnings(cs_app_tests)
 
 gtest_discover_tests(cs_app_tests)
+
+add_executable(cs_qml_tests
+    app/QmlSmokeTest.cpp
+)
+
+target_link_libraries(cs_qml_tests
+    PRIVATE
+        Qt6::Quick
+        Qt6::Test
+        GTest::gtest
+)
+
+target_compile_definitions(cs_qml_tests PRIVATE
+    CS_QML_SOURCE_DIR="${PROJECT_SOURCE_DIR}/qml"
+)
+
+cs_apply_warnings(cs_qml_tests)
+
+gtest_discover_tests(cs_qml_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)

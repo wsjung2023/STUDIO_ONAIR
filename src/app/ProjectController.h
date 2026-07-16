@@ -31,6 +31,8 @@ class ProjectController final : public QObject, public IRecordingPersistence {
 public:
     explicit ProjectController(QObject* parent = nullptr);
     ProjectController(std::unique_ptr<project_store::IProjectPackageStore> store,
+                      QObject* parent);
+    ProjectController(std::unique_ptr<project_store::IProjectPackageStore> store,
                       std::filesystem::path registryPath, bool refreshOnStartup = true,
                       QObject* parent = nullptr);
     ~ProjectController() override;
