@@ -6,6 +6,8 @@ cs_add_qtfree_library(cs_domain
         RecordingSession.h
         RecordingSession.cpp
         Segment.h
+        TimelineTypes.h
+        TimelineTypes.cpp
     DEPENDS
         cs_core
 )

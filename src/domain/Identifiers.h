@@ -50,6 +50,13 @@ struct SourceIdTag;
 struct SessionIdTag;
 struct CaptureTargetIdTag;
 struct CaptureDeviceIdTag;
+struct AssetIdTag;
+struct TimelineIdTag;
+struct TrackIdTag;
+struct ClipIdTag;
+struct SceneIdTag;
+struct CommandIdTag;
+struct RenderJobIdTag;
 
 using ProjectId = Identifier<ProjectIdTag>;
 using SourceId = Identifier<SourceIdTag>;
@@ -62,5 +69,12 @@ using CaptureTargetId = Identifier<CaptureTargetIdTag>;
 /// Device identity is not project source identity and is never inferred from a
 /// user-visible device name.
 using CaptureDeviceId = Identifier<CaptureDeviceIdTag>;
+using AssetId = Identifier<AssetIdTag>;
+using TimelineId = Identifier<TimelineIdTag>;
+using TrackId = Identifier<TrackIdTag>;
+using ClipId = Identifier<ClipIdTag>;
+using SceneId = Identifier<SceneIdTag>;
+using CommandId = Identifier<CommandIdTag>;
+using RenderJobId = Identifier<RenderJobIdTag>;
 
 }  // namespace creator::domain

@@ -35,6 +35,7 @@ add_executable(cs_tests
     core/UuidTest.cpp
     core/UtcTest.cpp
     domain/IdentifiersTest.cpp
+    domain/TimelineTypesTest.cpp
     domain/ProjectManifestTest.cpp
     domain/RecordingSessionTest.cpp
     media/MediaTypesTest.cpp
