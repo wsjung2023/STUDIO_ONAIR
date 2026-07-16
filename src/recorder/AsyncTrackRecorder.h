@@ -68,7 +68,9 @@ public:
     [[nodiscard]] core::Result<void> accept(media::VideoFrame frame);
     [[nodiscard]] core::Result<void> accept(media::AudioBlock block);
     void stopAsync(core::TimestampNs endTime, StopCompletion completion = {});
+    void observeCompletion(StopCompletion observer);
     [[nodiscard]] TrackRecorderSnapshot snapshot() const;
+    [[nodiscard]] const RecordingTrack& track() const noexcept { return config_.track; }
 
 private:
     void run();
@@ -97,6 +99,7 @@ private:
     std::optional<core::AppError> inputError_;
     std::optional<core::Result<TrackRecordingSummary>> finalResult_;
     std::vector<StopCompletion> stopCompletions_;
+    StopCompletion completionObserver_;
     TrackRecordingSummary summary_;
     std::thread worker_;
 

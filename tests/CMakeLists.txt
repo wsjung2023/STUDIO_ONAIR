@@ -101,6 +101,7 @@ add_executable(cs_app_tests
     app/PreviewGeometryTest.cpp
     app/DeviceCaptureControllerTest.cpp
     app/ProjectSegmentLifecycleSinkTest.cpp
+    app/MultiTrackRecordingServiceTest.cpp
 )
 
 target_link_libraries(cs_app_tests

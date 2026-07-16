@@ -8,6 +8,8 @@ add_library(cs_app STATIC
     IRecordingPersistence.h
     ProjectSegmentLifecycleSink.h
     ProjectSegmentLifecycleSink.cpp
+    MultiTrackRecordingService.h
+    MultiTrackRecordingService.cpp
     StudioController.h
     StudioController.cpp
     ScreenCaptureController.h

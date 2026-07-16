@@ -315,4 +315,20 @@ TEST(AsyncTrackRecorderTest, DestructorDrainsAcceptedMediaAndPublishesTail) {
     EXPECT_EQ(fixture.lifecycleState->failedCalls, 0u);
 }
 
+TEST(AsyncTrackRecorderTest, CompletionObserverSeesWorkerFailureWithoutExplicitStop) {
+    RecorderFixture fixture{TrackRole::Screen};
+    fixture.encoderState->acceptError = AppError{ErrorCode::IoFailure, "worker failed"};
+    auto promise = std::make_shared<std::promise<Result<TrackRecordingSummary>>>();
+    auto future = promise->get_future();
+    fixture.recorder->observeCompletion(
+        [promise](const auto& result) { promise->set_value(result); });
+    ASSERT_TRUE(fixture.recorder->start().hasValue());
+    ASSERT_TRUE(fixture.recorder->accept(videoAt(std::chrono::milliseconds{0})).hasValue());
+
+    const auto result = future.get();
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().message(), "worker failed");
+}
+
 }  // namespace

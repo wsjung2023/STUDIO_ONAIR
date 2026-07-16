@@ -147,6 +147,18 @@ void AsyncTrackRecorder::stopAsync(core::TimestampNs endTime, StopCompletion com
     if (immediate && completion) completion(*immediate);
 }
 
+void AsyncTrackRecorder::observeCompletion(StopCompletion observer) {
+    std::optional<core::Result<TrackRecordingSummary>> immediate;
+    {
+        std::lock_guard lock{mutex_};
+        completionObserver_ = observer;
+        if (completionObserver_ && state_ == TrackRecorderState::Stopped) {
+            immediate = finalResult_;
+        }
+    }
+    if (immediate && observer) observer(*immediate);
+}
+
 TrackRecorderSnapshot AsyncTrackRecorder::snapshot() const {
     std::lock_guard lock{mutex_};
     return TrackRecorderSnapshot{
@@ -348,6 +360,7 @@ void AsyncTrackRecorder::abortSegment() noexcept {
 
 void AsyncTrackRecorder::complete(core::Result<TrackRecordingSummary> result) {
     std::vector<StopCompletion> completions;
+    StopCompletion observer;
     {
         std::lock_guard lock{mutex_};
         if (state_ == TrackRecorderState::Stopped) return;
@@ -355,7 +368,9 @@ void AsyncTrackRecorder::complete(core::Result<TrackRecordingSummary> result) {
         stopRequested_ = true;
         finalResult_ = result;
         completions = std::move(stopCompletions_);
+        observer = std::move(completionObserver_);
     }
+    if (observer) observer(result);
     for (const auto& completion : completions) {
         if (completion) completion(result);
     }
