@@ -18,6 +18,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         screenCaptureController.initialize()
+        deviceCaptureController.initialize()
         if (projectController.recoveries.length > 0)
             window.currentPage = "Recovery"
     }

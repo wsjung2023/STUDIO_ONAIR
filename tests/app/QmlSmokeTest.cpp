@@ -128,6 +128,87 @@ public:
     Q_INVOKABLE void stopPreview() {}
 };
 
+class FakeDeviceCaptureController final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(QVariantList cameras READ cameras CONSTANT)
+    Q_PROPERTY(QVariantList microphones READ microphones CONSTANT)
+    Q_PROPERTY(QString selectedCameraId READ selectedCameraId CONSTANT)
+    Q_PROPERTY(QString selectedMicrophoneId READ selectedMicrophoneId CONSTANT)
+    Q_PROPERTY(bool cameraPermissionRequired READ cameraPermissionRequired CONSTANT)
+    Q_PROPERTY(bool microphonePermissionRequired READ microphonePermissionRequired CONSTANT)
+    Q_PROPERTY(bool cameraCapturing READ cameraCapturing CONSTANT)
+    Q_PROPERTY(bool microphoneCapturing READ microphoneCapturing CONSTANT)
+    Q_PROPERTY(bool systemAudioCapturing READ systemAudioCapturing CONSTANT)
+    Q_PROPERTY(bool cameraBusy READ cameraBusy CONSTANT)
+    Q_PROPERTY(bool microphoneBusy READ microphoneBusy CONSTANT)
+    Q_PROPERTY(bool systemAudioBusy READ systemAudioBusy CONSTANT)
+    Q_PROPERTY(QString cameraStatus READ cameraStatus CONSTANT)
+    Q_PROPERTY(QString microphoneStatus READ microphoneStatus CONSTANT)
+    Q_PROPERTY(QString systemAudioStatus READ systemAudioStatus CONSTANT)
+    Q_PROPERTY(quint32 cameraWidth READ cameraWidth CONSTANT)
+    Q_PROPERTY(quint32 cameraHeight READ cameraHeight CONSTANT)
+    Q_PROPERTY(double cameraFps READ cameraFps CONSTANT)
+    Q_PROPERTY(double microphonePeakDbfs READ microphonePeakDbfs CONSTANT)
+    Q_PROPERTY(double microphoneRmsDbfs READ microphoneRmsDbfs CONSTANT)
+    Q_PROPERTY(double systemAudioPeakDbfs READ systemAudioPeakDbfs CONSTANT)
+    Q_PROPERTY(double systemAudioRmsDbfs READ systemAudioRmsDbfs CONSTANT)
+    Q_PROPERTY(qulonglong microphoneBlocks READ microphoneBlocks CONSTANT)
+    Q_PROPERTY(qulonglong systemAudioBlocks READ systemAudioBlocks CONSTANT)
+    Q_PROPERTY(qulonglong microphoneOverruns READ microphoneOverruns CONSTANT)
+    Q_PROPERTY(qulonglong systemAudioOverruns READ systemAudioOverruns CONSTANT)
+
+public:
+    using QObject::QObject;
+    [[nodiscard]] QVariantList cameras() const {
+        return {QVariantMap{{QStringLiteral("id"), QStringLiteral("camera:1")},
+                            {QStringLiteral("name"), QStringLiteral("Studio Camera")},
+                            {QStringLiteral("default"), true}}};
+    }
+    [[nodiscard]] QVariantList microphones() const {
+        return {QVariantMap{{QStringLiteral("id"), QStringLiteral("mic:1")},
+                            {QStringLiteral("name"), QStringLiteral("Studio Microphone")},
+                            {QStringLiteral("default"), true}}};
+    }
+    [[nodiscard]] QString selectedCameraId() const { return QStringLiteral("camera:1"); }
+    [[nodiscard]] QString selectedMicrophoneId() const { return QStringLiteral("mic:1"); }
+    [[nodiscard]] bool cameraPermissionRequired() const noexcept { return false; }
+    [[nodiscard]] bool microphonePermissionRequired() const noexcept { return false; }
+    [[nodiscard]] bool cameraCapturing() const noexcept { return true; }
+    [[nodiscard]] bool microphoneCapturing() const noexcept { return true; }
+    [[nodiscard]] bool systemAudioCapturing() const noexcept { return true; }
+    [[nodiscard]] bool cameraBusy() const noexcept { return false; }
+    [[nodiscard]] bool microphoneBusy() const noexcept { return false; }
+    [[nodiscard]] bool systemAudioBusy() const noexcept { return false; }
+    [[nodiscard]] QString cameraStatus() const { return QStringLiteral("Camera capturing"); }
+    [[nodiscard]] QString microphoneStatus() const {
+        return QStringLiteral("Microphone capturing");
+    }
+    [[nodiscard]] QString systemAudioStatus() const {
+        return QStringLiteral("System audio capturing");
+    }
+    [[nodiscard]] quint32 cameraWidth() const noexcept { return 1920; }
+    [[nodiscard]] quint32 cameraHeight() const noexcept { return 1080; }
+    [[nodiscard]] double cameraFps() const noexcept { return 30.0; }
+    [[nodiscard]] double microphonePeakDbfs() const noexcept { return -6.0; }
+    [[nodiscard]] double microphoneRmsDbfs() const noexcept { return -12.0; }
+    [[nodiscard]] double systemAudioPeakDbfs() const noexcept { return -9.0; }
+    [[nodiscard]] double systemAudioRmsDbfs() const noexcept { return -18.0; }
+    [[nodiscard]] qulonglong microphoneBlocks() const noexcept { return 42; }
+    [[nodiscard]] qulonglong systemAudioBlocks() const noexcept { return 43; }
+    [[nodiscard]] qulonglong microphoneOverruns() const noexcept { return 0; }
+    [[nodiscard]] qulonglong systemAudioOverruns() const noexcept { return 1; }
+
+    Q_INVOKABLE void initialize() {}
+    Q_INVOKABLE void refreshDevices() {}
+    Q_INVOKABLE void requestCameraPermission() {}
+    Q_INVOKABLE void requestMicrophonePermission() {}
+    Q_INVOKABLE void selectCamera(const QString&) {}
+    Q_INVOKABLE void selectMicrophone(const QString&) {}
+    Q_INVOKABLE void setCameraEnabled(bool) {}
+    Q_INVOKABLE void setMicrophoneEnabled(bool) {}
+    Q_INVOKABLE void setSystemAudioEnabled(bool) {}
+};
+
 TEST(QmlSmokeTest, RecoveryPageLoadsWithProjectControllerContract) {
     QQmlEngine engine;
     FakeProjectController controller;
@@ -146,12 +227,15 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
     FakeProjectController projectController;
     FakeStudioController studioController;
     FakeScreenCaptureController screenCaptureController;
+    FakeDeviceCaptureController deviceCaptureController;
     engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
                                              &projectController);
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
                                              &studioController);
     engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),
                                              &screenCaptureController);
+    engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
+                                             &deviceCaptureController);
     QQmlComponent component{
         &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/Main.qml"))};
 
@@ -165,10 +249,13 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     QQmlEngine engine;
     FakeStudioController studioController;
     FakeScreenCaptureController screenCaptureController;
+    FakeDeviceCaptureController deviceCaptureController;
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
                                              &studioController);
     engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),
                                              &screenCaptureController);
+    engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
+                                             &deviceCaptureController);
     QQmlComponent component{
         &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/StudioPage.qml"))};
 
@@ -178,12 +265,22 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     auto* selector = object->findChild<QObject*>(QStringLiteral("captureTargetSelector"));
     auto* status = object->findChild<QObject*>(QStringLiteral("captureStatusLabel"));
     auto* preview = object->findChild<QObject*>(QStringLiteral("nativeScreenPreview"));
+    auto* cameraSelector = object->findChild<QObject*>(QStringLiteral("cameraDeviceSelector"));
+    auto* microphoneSelector =
+        object->findChild<QObject*>(QStringLiteral("microphoneDeviceSelector"));
+    auto* microphoneMeter = object->findChild<QObject*>(QStringLiteral("microphoneLevelMeter"));
     ASSERT_NE(selector, nullptr);
     ASSERT_NE(status, nullptr);
     ASSERT_NE(preview, nullptr);
+    ASSERT_NE(cameraSelector, nullptr);
+    ASSERT_NE(microphoneSelector, nullptr);
+    ASSERT_NE(microphoneMeter, nullptr);
     EXPECT_EQ(selector->property("count").toInt(), 1);
     EXPECT_EQ(status->property("text").toString(),
               QStringLiteral("captured window closed"));
+    EXPECT_EQ(cameraSelector->property("count").toInt(), 1);
+    EXPECT_EQ(microphoneSelector->property("count").toInt(), 1);
+    EXPECT_GT(microphoneMeter->property("value").toDouble(), 0.0);
 }
 
 }  // namespace

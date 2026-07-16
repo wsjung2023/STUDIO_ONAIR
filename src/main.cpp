@@ -1,8 +1,10 @@
 #include "app/ProjectController.h"
+#include "app/DeviceCaptureController.h"
 #include "app/ScreenCaptureController.h"
 #include "app/ScreenPreviewItem.h"
 #include "app/StudioController.h"
 #include "capture/UnsupportedScreenCaptureBackend.h"
+#include "capture/UnsupportedDeviceCaptureBackend.h"
 #if defined(__APPLE__)
 #include "capture/macos/MacScreenCaptureBackend.h"
 #endif
@@ -25,6 +27,8 @@ int main(int argc, char* argv[]) {
 
     auto packageStore = std::make_unique<creator::project_store::ProjectPackageStore>();
     creator::app::ProjectController projectController{std::move(packageStore), &app};
+    creator::app::DeviceCaptureController deviceCaptureController{
+        std::make_unique<creator::capture::UnsupportedDeviceCaptureBackend>(), &app};
 #if defined(__APPLE__)
     auto screenCaptureBackend = creator::capture::macos::makeMacScreenCaptureBackend();
     creator::app::ScreenCaptureController screenCaptureController{
@@ -48,6 +52,8 @@ int main(int argc, char* argv[]) {
                                              &projectController);
     engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),
                                              &screenCaptureController);
+    engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
+                                             &deviceCaptureController);
 
     QObject::connect(
         &engine,

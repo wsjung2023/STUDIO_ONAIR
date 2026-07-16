@@ -43,15 +43,124 @@ Item {
 
                     Label { text: qsTr("Sources"); font.bold: true }
 
-                    Repeater {
-                        model: ["Screen", "Camera", "Microphone", "System Audio"]
-                        CheckBox {
-                            required property string modelData
-                            text: modelData
-                            checked: true
-                            // Source toggling needs real devices (R0-04).
-                            enabled: false
+                    Label { text: qsTr("Camera"); font.bold: true }
+
+                    ComboBox {
+                        id: cameraDeviceSelector
+                        objectName: "cameraDeviceSelector"
+                        Layout.fillWidth: true
+                        model: deviceCaptureController.cameras
+                        textRole: "name"
+                        enabled: !deviceCaptureController.cameraBusy
+                                 && !deviceCaptureController.cameraCapturing
+                        currentIndex: {
+                            for (let i = 0; i < deviceCaptureController.cameras.length; ++i) {
+                                if (deviceCaptureController.cameras[i].id
+                                        === deviceCaptureController.selectedCameraId)
+                                    return i
+                            }
+                            return -1
                         }
+                        onActivated: function(index) {
+                            if (index >= 0)
+                                deviceCaptureController.selectCamera(
+                                    deviceCaptureController.cameras[index].id)
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Button {
+                            visible: deviceCaptureController.cameraPermissionRequired
+                            text: qsTr("Grant Camera")
+                            enabled: !deviceCaptureController.cameraBusy
+                            onClicked: deviceCaptureController.requestCameraPermission()
+                        }
+                        Button {
+                            Layout.fillWidth: true
+                            text: deviceCaptureController.cameraCapturing
+                                  ? qsTr("Stop Camera") : qsTr("Start Camera")
+                            enabled: deviceCaptureController.cameraCapturing
+                                     || (!deviceCaptureController.cameraBusy
+                                         && !deviceCaptureController.cameraPermissionRequired
+                                         && deviceCaptureController.selectedCameraId.length > 0)
+                            onClicked: deviceCaptureController.setCameraEnabled(
+                                           !deviceCaptureController.cameraCapturing)
+                        }
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: deviceCaptureController.cameraStatus
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                    }
+
+                    Label { text: qsTr("Microphone"); font.bold: true }
+
+                    ComboBox {
+                        id: microphoneDeviceSelector
+                        objectName: "microphoneDeviceSelector"
+                        Layout.fillWidth: true
+                        model: deviceCaptureController.microphones
+                        textRole: "name"
+                        enabled: !deviceCaptureController.microphoneBusy
+                                 && !deviceCaptureController.microphoneCapturing
+                        currentIndex: {
+                            for (let i = 0; i < deviceCaptureController.microphones.length; ++i) {
+                                if (deviceCaptureController.microphones[i].id
+                                        === deviceCaptureController.selectedMicrophoneId)
+                                    return i
+                            }
+                            return -1
+                        }
+                        onActivated: function(index) {
+                            if (index >= 0)
+                                deviceCaptureController.selectMicrophone(
+                                    deviceCaptureController.microphones[index].id)
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Button {
+                            visible: deviceCaptureController.microphonePermissionRequired
+                            text: qsTr("Grant Mic")
+                            enabled: !deviceCaptureController.microphoneBusy
+                            onClicked: deviceCaptureController.requestMicrophonePermission()
+                        }
+                        Button {
+                            Layout.fillWidth: true
+                            text: deviceCaptureController.microphoneCapturing
+                                  ? qsTr("Stop Mic") : qsTr("Start Mic")
+                            enabled: deviceCaptureController.microphoneCapturing
+                                     || (!deviceCaptureController.microphoneBusy
+                                         && !deviceCaptureController.microphonePermissionRequired
+                                         && deviceCaptureController.selectedMicrophoneId.length > 0)
+                            onClicked: deviceCaptureController.setMicrophoneEnabled(
+                                           !deviceCaptureController.microphoneCapturing)
+                        }
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: deviceCaptureController.microphoneStatus
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                    }
+
+                    Button {
+                        Layout.fillWidth: true
+                        text: deviceCaptureController.systemAudioCapturing
+                              ? qsTr("Stop System Audio") : qsTr("Start System Audio")
+                        enabled: deviceCaptureController.systemAudioCapturing
+                                 || !deviceCaptureController.systemAudioBusy
+                        onClicked: deviceCaptureController.setSystemAudioEnabled(
+                                       !deviceCaptureController.systemAudioCapturing)
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: deviceCaptureController.systemAudioStatus
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
                     }
                 }
             }
@@ -213,13 +322,44 @@ Item {
         // CLAUDE.md 9 forbids hiding recording failures.
         Pane {
             Layout.fillWidth: true
-            Layout.preferredHeight: 72
+            Layout.preferredHeight: 104
 
             RowLayout {
                 anchors.fill: parent
                 spacing: 24
 
-                Label { text: qsTr("Audio Mixer: —") }
+                ColumnLayout {
+                    Label {
+                        text: qsTr("Mic %1 dBFS · %2 blocks · %3 overruns")
+                              .arg(deviceCaptureController.microphonePeakDbfs.toFixed(1))
+                              .arg(deviceCaptureController.microphoneBlocks)
+                              .arg(deviceCaptureController.microphoneOverruns)
+                        font.pixelSize: 11
+                    }
+                    ProgressBar {
+                        objectName: "microphoneLevelMeter"
+                        Layout.preferredWidth: 180
+                        from: 0
+                        to: 1
+                        value: Math.max(0, Math.min(1,
+                                   (deviceCaptureController.microphonePeakDbfs + 96) / 96))
+                    }
+                    Label {
+                        text: qsTr("System %1 dBFS · %2 blocks · %3 overruns")
+                              .arg(deviceCaptureController.systemAudioPeakDbfs.toFixed(1))
+                              .arg(deviceCaptureController.systemAudioBlocks)
+                              .arg(deviceCaptureController.systemAudioOverruns)
+                        font.pixelSize: 11
+                    }
+                    ProgressBar {
+                        objectName: "systemAudioLevelMeter"
+                        Layout.preferredWidth: 180
+                        from: 0
+                        to: 1
+                        value: Math.max(0, Math.min(1,
+                                   (deviceCaptureController.systemAudioPeakDbfs + 96) / 96))
+                    }
+                }
                 Label {
                     text: qsTr("Reported Capture Drops: %1").arg(
                               screenCaptureController.droppedFrames)
