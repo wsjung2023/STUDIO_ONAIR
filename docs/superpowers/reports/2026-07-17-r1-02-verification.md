@@ -56,4 +56,10 @@ load ahead of queued playback/updates. A regression proves the exact order
 `update(fail) -> recovery load -> play`. Independent re-review confirmed the
 finding resolved.
 
-The integrated-branch result is appended after that gate runs.
+## Integrated R1 branch gate
+
+- Merged to `feat/r1-usable-recorder-editor` as `2503cd6`.
+- Integrated `--clean-first` build: 234/234 steps passed, including the
+  shipping application and both test executables.
+- Integrated CTest: **447/447 passed** in 37.59 seconds.
+- The three user-owned PNG files remained untracked and untouched.
