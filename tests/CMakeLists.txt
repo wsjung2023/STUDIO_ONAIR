@@ -79,6 +79,7 @@ gtest_discover_tests(cs_tests)
 # Qt on the include path.
 add_executable(cs_app_tests
     app/StudioControllerTest.cpp
+    app/ProjectControllerTest.cpp
 )
 
 target_link_libraries(cs_app_tests
@@ -91,6 +92,8 @@ target_link_libraries(cs_app_tests
         Qt6::Test
         GTest::gtest
 )
+
+target_include_directories(cs_app_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 
 cs_apply_warnings(cs_app_tests)
 

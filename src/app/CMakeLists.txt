@@ -7,6 +7,12 @@
 add_library(cs_app STATIC
     StudioController.h
     StudioController.cpp
+    RecentProjectRegistry.h
+    RecentProjectRegistry.cpp
+    ProjectWorker.h
+    ProjectWorker.cpp
+    ProjectController.h
+    ProjectController.cpp
 )
 add_library(CreatorStudio::cs_app ALIAS cs_app)
 
