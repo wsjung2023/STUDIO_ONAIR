@@ -148,6 +148,7 @@ if(CS_ENABLE_FFMPEG)
         ffmpeg_adapter/FfmpegCapabilityProbeTest.cpp
         ffmpeg_adapter/FfmpegVideoSegmentEncoderTest.cpp
         ffmpeg_adapter/FfmpegAudioSegmentEncoderTest.cpp
+        ffmpeg_adapter/BgraFrameMappersTest.cpp
     )
     target_link_libraries(cs_ffmpeg_tests PRIVATE cs_ffmpeg_adapter GTest::gtest_main)
     target_include_directories(cs_ffmpeg_tests SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})

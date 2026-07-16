@@ -5,7 +5,15 @@ add_library(cs_ffmpeg_adapter STATIC
     FfmpegVideoSegmentEncoder.cpp
     FfmpegAudioSegmentEncoder.h
     FfmpegAudioSegmentEncoder.cpp
+    BgraFrameMappers.h
+    BgraFrameMappers.cpp
 )
+
+if(APPLE)
+    target_sources(cs_ffmpeg_adapter PRIVATE BgraFrameMappers_macos.mm)
+    find_library(CS_FFMPEG_COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
+    target_link_libraries(cs_ffmpeg_adapter PRIVATE ${CS_FFMPEG_COREVIDEO_FRAMEWORK})
+endif()
 add_library(CreatorStudio::cs_ffmpeg_adapter ALIAS cs_ffmpeg_adapter)
 
 target_include_directories(cs_ffmpeg_adapter
