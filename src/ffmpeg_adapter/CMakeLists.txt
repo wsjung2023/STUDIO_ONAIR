@@ -1,6 +1,8 @@
 add_library(cs_ffmpeg_adapter STATIC
     FfmpegCapabilityProbe.h
     FfmpegCapabilityProbe.cpp
+    FfmpegVideoSegmentEncoder.h
+    FfmpegVideoSegmentEncoder.cpp
 )
 add_library(CreatorStudio::cs_ffmpeg_adapter ALIAS cs_ffmpeg_adapter)
 
