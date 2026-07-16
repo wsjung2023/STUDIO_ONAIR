@@ -36,5 +36,15 @@ that revision 2 remains durable while a full engine load clears stale preview.
 - `src/edit_engine` contains no Qt, MLT, or FFmpeg includes.
 - `git diff --check` passed.
 
-The final clean build, complete CTest result, independent review, and integrated
-branch result are appended after those gates run.
+## Final clean gate
+
+- `cmake --build --preset windows-debug --clean-first`: passed; 232 build
+  steps, including `creator_studio.exe`, with `/WX` and zero warnings.
+- `ctest --preset windows-debug`: **446/446 passed** in 47.01 seconds.
+- Domain/edit-engine include boundary scan: no Qt, MLT, FFmpeg, application,
+  project-store, or fake includes crossed into the product-truth layers.
+- Shipping link graph scan: `creator_studio.exe` has no `cs_fakes` dependency.
+- `git diff --check`: passed.
+
+Independent review and integrated-branch results are appended after those gates
+run.
