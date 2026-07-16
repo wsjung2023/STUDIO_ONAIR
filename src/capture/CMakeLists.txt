@@ -52,6 +52,7 @@ if(APPLE)
     find_library(CS_COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
     find_library(CS_FOUNDATION_FRAMEWORK Foundation REQUIRED)
     find_library(CS_AVFOUNDATION_FRAMEWORK AVFoundation REQUIRED)
+    find_library(CS_AUDIOTOOLBOX_FRAMEWORK AudioToolbox REQUIRED)
 
     add_library(cs_capture_macos STATIC
         macos/MacScreenCaptureBackend.h
@@ -72,6 +73,7 @@ if(APPLE)
             ${CS_COREVIDEO_FRAMEWORK}
             ${CS_FOUNDATION_FRAMEWORK}
             ${CS_AVFOUNDATION_FRAMEWORK}
+            ${CS_AUDIOTOOLBOX_FRAMEWORK}
     )
     cs_apply_warnings(cs_capture_macos)
     cs_assert_qt_free(cs_capture_macos)
