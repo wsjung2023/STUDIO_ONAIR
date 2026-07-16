@@ -5,6 +5,8 @@ cs_add_qtfree_library(cs_fakes
     SOURCES
         FakeCaptureSource.h
         FakeCaptureSource.cpp
+        ManualPushCaptureSource.h
+        ManualPushCaptureSource.cpp
         FakeRecorder.h
         FakeRecorder.cpp
     DEPENDS

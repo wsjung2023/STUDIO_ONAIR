@@ -41,6 +41,7 @@ add_executable(cs_tests
     capture/PortContractTest.cpp
     capture/CaptureTimestampMapperTest.cpp
     capture/ScreenCapturePortsTest.cpp
+    capture/LatestVideoFrameMailboxTest.cpp
     project_store/ManifestSchemaValidatorTest.cpp
     project_store/JsonProjectStoreTest.cpp
     project_store/SqliteConnectionTest.cpp
@@ -51,6 +52,7 @@ add_executable(cs_tests
     project_store/ProjectPackageStoreTest.cpp
     project_store/CrashRecoveryIntegrationTest.cpp
     fakes/FakeCaptureSourceTest.cpp
+    fakes/ManualPushCaptureSourceTest.cpp
     fakes/FakeRecorderTest.cpp
 )
 

@@ -6,6 +6,9 @@ cs_add_qtfree_library(cs_capture
         IPullCaptureSource.h
         IScreenCaptureDiscovery.h
         IScreenCapturePermission.h
+        IVideoFrameSink.h
+        LatestVideoFrameMailbox.h
+        LatestVideoFrameMailbox.cpp
         ScreenCaptureTypes.h
         ScreenCaptureTypes.cpp
     DEPENDS
