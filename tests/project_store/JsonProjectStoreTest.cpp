@@ -152,11 +152,29 @@ TEST_F(JsonProjectStoreTest, SaveIsAtomicAndLeavesNoPartFile) {
     const auto created = store_.create(packageDir_, "MyTutorial");
     ASSERT_TRUE(created.hasValue());
 
-    ASSERT_TRUE(store_.save(packageDir_, created.value()).hasValue());
-
+    // This used to pass with writeFileAtomically replaced by a plain
+    // ofstream straight over the target: with no failure injected, there is
+    // no .part file to find left behind either way, so the old version of
+    // this test could not tell "atomic" from "not atomic". Pre-creating
+    // manifest.json.part as a directory forces the write path to fail (a
+    // directory cannot stand in for the regular file writeFileAtomically
+    // expects), which is what actually exercises the property this class
+    // promises: a failed write must not destroy the good file already there.
     const fs::path partFile =
         packageDir_ / (std::string{JsonProjectStore::kManifestFileName} + ".part");
-    EXPECT_FALSE(fs::exists(partFile));
+    fs::create_directory(partFile);
+
+    ProjectManifest updated = created.value();
+    updated.name = "Renamed";
+    const auto saved = store_.save(packageDir_, updated);
+
+    ASSERT_FALSE(saved.hasValue());
+    EXPECT_EQ(saved.error().code(), ErrorCode::IoFailure);
+
+    // The original manifest must survive a failed save untouched.
+    const auto loaded = store_.load(packageDir_);
+    ASSERT_TRUE(loaded.hasValue()) << loaded.error().message();
+    EXPECT_EQ(loaded.value().name, "MyTutorial");
 }
 
 TEST_F(JsonProjectStoreTest, CreateRefusesToOverwriteExistingProject) {
@@ -178,6 +196,16 @@ TEST_F(JsonProjectStoreTest, CreateRejectsInvalidName) {
 
     ASSERT_FALSE(created.hasValue());
     EXPECT_EQ(created.error().code(), ErrorCode::InvalidArgument);
+    // Nothing may be left behind by a rejected create - not the manifest, and
+    // not the directory tree either. create()'s own comment claims the
+    // validate-before-create_directories ordering exists for exactly this,
+    // but moving serialiseManifest()/validate() back below create_directories
+    // would still pass a check that only looked for manifest.json: it is
+    // never written either way, since JSON serialisation only happens after
+    // both checks. Only checking that a subdirectory was not created actually
+    // exercises the ordering.
+    EXPECT_FALSE(fs::exists(packageDir_ / JsonProjectStore::kManifestFileName));
+    EXPECT_FALSE(fs::exists(packageDir_ / "media"));
 }
 
 TEST_F(JsonProjectStoreTest, RejectsMalformedUtf8Name) {
@@ -189,8 +217,15 @@ TEST_F(JsonProjectStoreTest, RejectsMalformedUtf8Name) {
 
     ASSERT_FALSE(created.hasValue());
     EXPECT_EQ(created.error().code(), ErrorCode::InvalidArgument);
-    // Nothing may be left behind by a rejected create.
+    // Nothing may be left behind by a rejected create. Checking manifest.json
+    // alone is not enough: this name passes validate() (it only counts UTF-8
+    // lead bytes for the length limit) and is rejected later, by
+    // serialiseManifest()'s dump() - so if create_directories() ever moved
+    // ahead of that check, this file would still never get written, but a
+    // whole tree of empty media/audio/telemetry/... directories would be left
+    // behind unnoticed.
     EXPECT_FALSE(fs::exists(packageDir_ / JsonProjectStore::kManifestFileName));
+    EXPECT_FALSE(fs::exists(packageDir_ / "media"));
 }
 
 TEST_F(JsonProjectStoreTest, LoadReportsMissingManifest) {

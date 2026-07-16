@@ -3,8 +3,6 @@
 #include "project_store/IProjectStore.h"
 #include "recorder/IRecorder.h"
 
-#include <gtest/gtest.h>
-
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -94,8 +92,15 @@ static_assert(std::is_abstract_v<IRecorder>);
 static_assert(std::is_abstract_v<IProjectStore>);
 
 // A pull source is a capture source: the application can hold one and still
-// start/stop it through the base port, with no downcast anywhere.
-static_assert(std::is_base_of_v<ICaptureSource, IPullCaptureSource>);
+// start/stop it through the base port, with no downcast anywhere. That needs
+// is_convertible_v<Derived*, Base*>, not is_base_of_v: is_base_of_v is true
+// for ANY inheritance relationship - public, protected or private alike - so
+// it would not notice if IPullCaptureSource inherited privately, which would
+// make the very upcast this comment claims works fail to compile everywhere
+// outside the class itself. is_convertible_v on the pointer types only holds
+// when the base is publicly (accessibly) reachable, which is what "with no
+// downcast anywhere" actually depends on.
+static_assert(std::is_convertible_v<IPullCaptureSource*, ICaptureSource*>);
 static_assert(std::has_virtual_destructor_v<IPullCaptureSource>);
 
 // start() returning Result is only worth anything if dropping it is an error.
@@ -110,18 +115,19 @@ static_assert(std::is_same_v<decltype(std::declval<ICaptureSource&>().stop()),
 static_assert(std::is_same_v<decltype(std::declval<IPullCaptureSource&>().tick()),
                              creator::core::Result<creator::media::VideoFrame>>);
 
-// The suite needs one runtime test or the file links nothing into cs_tests.
-TEST(PortContractTest, PortsAreHeldByUniquePointer) {
-    // Compiles only if the interfaces are usable the way the app uses them.
-    std::unique_ptr<ICaptureSource> source;
-    std::unique_ptr<IPullCaptureSource> pullSource;
-    std::unique_ptr<IRecorder> recorder;
-    std::unique_ptr<IProjectStore> store;
-
-    EXPECT_EQ(source, nullptr);
-    EXPECT_EQ(pullSource, nullptr);
-    EXPECT_EQ(recorder, nullptr);
-    EXPECT_EQ(store, nullptr);
-}
+// Compiles only if the interfaces are usable the way the app uses them:
+// unique_ptr<T>'s destructor instantiates default_delete<T>, which requires T
+// to have an accessible destructor. That instantiation is the actual check;
+// there is nothing to assert about it at runtime; a default-constructed
+// unique_ptr is null by definition, and the four EXPECT_EQ(..., nullptr)
+// calls previously here asserted exactly that and nothing more (the comment
+// justifying their existence - "the suite needs one runtime test or the file
+// links nothing into cs_tests" - was also false: a .cpp file listed directly
+// on add_executable compiles and links whether or not it defines a TEST(), as
+// MediaTypesTest.cpp in this same repo already correctly notes).
+std::unique_ptr<ICaptureSource> gPortContractSource;
+std::unique_ptr<IPullCaptureSource> gPortContractPullSource;
+std::unique_ptr<IRecorder> gPortContractRecorder;
+std::unique_ptr<IProjectStore> gPortContractStore;
 
 }  // namespace

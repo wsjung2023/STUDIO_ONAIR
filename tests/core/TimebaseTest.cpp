@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <type_traits>
 
 namespace {
@@ -29,7 +30,24 @@ static_assert(std::is_same_v<decltype(std::declval<TimestampNs>() + std::declval
 
 TEST(TimebaseTest, ClockIsSteady) {
     // Wall clock must never drive A/V sync (ARCHITECTURE.md 5.1, CLAUDE.md 9).
+    //
+    // EXPECT_TRUE(ProjectClock::is_steady) alone cannot catch a regression:
+    // is_steady is just a `static constexpr bool is_steady = true;` read back
+    // from the header, so a swap to system_clock that carried that same
+    // (now-lying) constant along would still pass it. ClockAdvancesMonotonically
+    // below cannot catch it either - system_clock also advances between two
+    // reads. What actually distinguishes the two clocks is their epoch:
+    // system_clock's is 1970 (~1.8e18ns today), steady_clock's is boot or
+    // some other arbitrary point (~1e13-1e16ns on a real machine, orders of
+    // magnitude smaller). Comparing ProjectClock::now() against
+    // steady_clock::now() directly makes a system_clock swap impossible to
+    // miss: the two would differ by decades' worth of nanoseconds instead of
+    // by a few instructions' worth.
     EXPECT_TRUE(ProjectClock::is_steady);
+    const auto drift = (ProjectClock::now().time_since_epoch() -
+                         std::chrono::steady_clock::now().time_since_epoch())
+                            .count();
+    EXPECT_LT(std::abs(drift), 1'000'000'000LL);
 }
 
 TEST(TimebaseTest, ClockAdvancesMonotonically) {
