@@ -8,6 +8,8 @@ cs_add_qtfree_library(cs_recorder
         DiskSpaceMonitor.cpp
         DurableSegmentPublisher.h
         DurableSegmentPublisher.cpp
+        AsyncTrackRecorder.h
+        AsyncTrackRecorder.cpp
     DEPENDS
         cs_domain
         cs_media

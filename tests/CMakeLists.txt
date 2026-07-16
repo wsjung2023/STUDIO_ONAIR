@@ -54,6 +54,7 @@ add_executable(cs_tests
     recorder/RecordingTrackTest.cpp
     recorder/DiskSpaceMonitorTest.cpp
     recorder/DurableSegmentPublisherTest.cpp
+    recorder/AsyncTrackRecorderTest.cpp
     project_store/ManifestSchemaValidatorTest.cpp
     project_store/JsonProjectStoreTest.cpp
     project_store/SqliteConnectionTest.cpp
