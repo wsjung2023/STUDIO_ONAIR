@@ -50,6 +50,20 @@ TEST(LatestVideoFrameMailboxTest, KeepsOnlyNewestPendingFrame) {
     EXPECT_EQ(stats.replacedFrames, 2u);
 }
 
+TEST(LatestVideoFrameMailboxTest, ReportsStreamStartOnceAndNotAfterTerminalError) {
+    LatestVideoFrameMailbox mailbox;
+
+    mailbox.onCaptureStarted();
+    mailbox.onCaptureStarted();
+    EXPECT_TRUE(mailbox.takeStarted());
+    EXPECT_FALSE(mailbox.takeStarted());
+
+    mailbox.onCaptureError(AppError{ErrorCode::NotFound, "window closed"});
+    mailbox.onCaptureStarted();
+    EXPECT_FALSE(mailbox.takeStarted());
+    EXPECT_EQ(mailbox.stats().startNotifications, 2u);
+}
+
 TEST(LatestVideoFrameMailboxTest, ReleasesReplacedPlatformHandleExactlyOnce) {
     LatestVideoFrameMailbox mailbox;
     std::atomic<int> releases{0};
@@ -122,4 +136,3 @@ TEST(LatestVideoFrameMailboxTest, ProducerAndConsumerCoordinateWithoutPollingOrS
 }
 
 }  // namespace
-

@@ -19,6 +19,8 @@ public:
     IVideoFrameSink(IVideoFrameSink&&) = delete;
     IVideoFrameSink& operator=(IVideoFrameSink&&) = delete;
 
+    /// Confirms that the native stream's asynchronous start completed.
+    virtual void onCaptureStarted() noexcept = 0;
     virtual void onVideoFrame(creator::media::VideoFrame frame) noexcept = 0;
     virtual void onCaptureError(creator::core::AppError error) noexcept = 0;
 
@@ -27,4 +29,3 @@ protected:
 };
 
 }  // namespace creator::capture
-

@@ -4,6 +4,13 @@
 
 namespace creator::capture {
 
+void LatestVideoFrameMailbox::onCaptureStarted() noexcept {
+    std::scoped_lock lock{mutex_};
+    if (terminal_) return;
+    ++stats_.startNotifications;
+    startedPending_ = true;
+}
+
 void LatestVideoFrameMailbox::onVideoFrame(media::VideoFrame frame) noexcept {
     std::scoped_lock lock{mutex_};
     if (terminal_) {
@@ -26,8 +33,16 @@ void LatestVideoFrameMailbox::onCaptureError(core::AppError error) noexcept {
         return;
     }
     terminal_ = true;
+    startedPending_ = false;
     pendingFrame_.reset();
     pendingError_ = std::move(error);
+}
+
+bool LatestVideoFrameMailbox::takeStarted() noexcept {
+    std::scoped_lock lock{mutex_};
+    const bool started = startedPending_;
+    startedPending_ = false;
+    return started;
 }
 
 std::optional<media::VideoFrame> LatestVideoFrameMailbox::takeLatest() {

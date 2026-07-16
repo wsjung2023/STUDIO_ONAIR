@@ -104,6 +104,28 @@ public:
     std::optional<Completion> pending;
 };
 
+class DeferredStartSource final : public creator::capture::ICaptureSource {
+public:
+    explicit DeferredStartSource(std::shared_ptr<IVideoFrameSink> sink)
+        : sink_(std::move(sink)) {}
+
+    [[nodiscard]] SourceId id() const override {
+        return SourceId::create("deferred-screen").value();
+    }
+    [[nodiscard]] std::string displayName() const override { return "Deferred Screen"; }
+    Result<void> start(const creator::capture::CaptureConfig&) override {
+        return creator::core::ok();
+    }
+    Result<void> stop() override { return creator::core::ok(); }
+    [[nodiscard]] creator::capture::CaptureStats stats() const noexcept override {
+        return {};
+    }
+    void confirmStarted() { sink_->onCaptureStarted(); }
+
+private:
+    std::shared_ptr<IVideoFrameSink> sink_;
+};
+
 class SourceFactoryFake final : public IScreenCaptureSourceFactory {
 public:
     Result<std::unique_ptr<creator::capture::ICaptureSource>> create(
@@ -116,6 +138,11 @@ public:
             nextError.reset();
             return error;
         }
+        if (deferStart) {
+            auto source = std::make_unique<DeferredStartSource>(std::move(sink));
+            lastDeferredSource = source.get();
+            return std::unique_ptr<creator::capture::ICaptureSource>{std::move(source)};
+        }
         auto source = std::make_unique<ManualPushCaptureSource>(
             SourceId::create("preview-screen").value(), "Preview Screen", std::move(sink));
         lastSource = source.get();
@@ -125,6 +152,8 @@ public:
     int createCalls{0};
     std::string lastTargetId;
     ManualPushCaptureSource* lastSource{nullptr};
+    DeferredStartSource* lastDeferredSource{nullptr};
+    bool deferStart{false};
     std::optional<AppError> nextError;
 };
 
@@ -234,6 +263,26 @@ TEST(ScreenCaptureControllerTest, StartsSelectedPushSourceAndPublishesLiveGeomet
     EXPECT_EQ(fixture.controller->receivedFrames(), 1u);
 }
 
+TEST(ScreenCaptureControllerTest, DoesNotClaimPreviewBeforeNativeStartConfirmation) {
+    ControllerFixture fixture{ScreenCapturePermissionStatus::Granted};
+    fixture.controller->initialize();
+    fixture.finishDiscovery({displayTarget()});
+    fixture.factoryFake->deferStart = true;
+
+    fixture.controller->startPreview();
+
+    ASSERT_EQ(fixture.controller->state(), ScreenCaptureState::Starting);
+    EXPECT_TRUE(fixture.controller->busy());
+    EXPECT_FALSE(fixture.controller->previewing());
+    ASSERT_NE(fixture.factoryFake->lastDeferredSource, nullptr);
+
+    fixture.factoryFake->lastDeferredSource->confirmStarted();
+    fixture.controller->pollCapture();
+
+    EXPECT_EQ(fixture.controller->state(), ScreenCaptureState::Previewing);
+    EXPECT_FALSE(fixture.controller->busy());
+}
+
 TEST(ScreenCaptureControllerTest, TerminalSourceFailureStopsAndSurfacesError) {
     ControllerFixture fixture{ScreenCapturePermissionStatus::Granted};
     fixture.controller->initialize();
@@ -280,4 +329,3 @@ TEST(ScreenCaptureControllerTest, FactoryFailureDoesNotLeaveStartingState) {
 }
 
 }  // namespace
-

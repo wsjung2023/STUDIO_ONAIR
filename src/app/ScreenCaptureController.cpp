@@ -214,13 +214,18 @@ void ScreenCaptureController::startPreview() {
     replacedPreviewFrames_ = 0;
     currentFps_ = 0.0;
     emit statsChanged();
-    setState(ScreenCaptureState::Previewing);
-    setStatusMessage(tr("Previewing"));
     pollTimer_.start();
+    pollCapture();
+    if (state_ == ScreenCaptureState::Starting) {
+        setStatusMessage(tr("Waiting for the native capture stream"));
+    }
 }
 
 void ScreenCaptureController::stopPreview() {
-    if (!previewing()) return;
+    if (state_ != ScreenCaptureState::Starting &&
+        state_ != ScreenCaptureState::Previewing) {
+        return;
+    }
     setState(ScreenCaptureState::Stopping);
     pollTimer_.stop();
     updateStats();
@@ -240,7 +245,13 @@ void ScreenCaptureController::pollCapture() {
     if (!mailbox_) return;
     updateStats();
     auto error = mailbox_->takeError();
-    if (!error) return;
+    if (!error) {
+        if (state_ == ScreenCaptureState::Starting && mailbox_->takeStarted()) {
+            setState(ScreenCaptureState::Previewing);
+            setStatusMessage(tr("Previewing"));
+        }
+        return;
+    }
 
     pollTimer_.stop();
     releaseSource();
@@ -319,4 +330,3 @@ const capture::ScreenCaptureTarget* ScreenCaptureController::selectedTarget() co
 }
 
 }  // namespace creator::app
-

@@ -11,6 +11,7 @@ namespace creator::capture {
 struct LatestVideoFrameMailboxStats final {
     std::uint64_t publishedFrames{0};
     std::uint64_t replacedFrames{0};
+    std::uint64_t startNotifications{0};
     std::uint64_t terminalErrors{0};
     std::uint64_t framesAfterTerminalError{0};
     std::uint32_t lastWidth{0};
@@ -30,10 +31,12 @@ class LatestVideoFrameMailbox final : public IVideoFrameSink {
 public:
     LatestVideoFrameMailbox() = default;
 
+    void onCaptureStarted() noexcept override;
     void onVideoFrame(creator::media::VideoFrame frame) noexcept override;
     void onCaptureError(creator::core::AppError error) noexcept override;
 
     [[nodiscard]] std::optional<creator::media::VideoFrame> takeLatest();
+    [[nodiscard]] bool takeStarted() noexcept;
     [[nodiscard]] std::optional<creator::core::AppError> takeError();
     [[nodiscard]] LatestVideoFrameMailboxStats stats() const noexcept;
 
@@ -41,6 +44,7 @@ private:
     mutable std::mutex mutex_;
     std::optional<creator::media::VideoFrame> pendingFrame_;
     std::optional<creator::core::AppError> pendingError_;
+    bool startedPending_{false};
     bool terminal_{false};
     LatestVideoFrameMailboxStats stats_;
 };

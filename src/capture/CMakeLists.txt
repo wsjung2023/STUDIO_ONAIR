@@ -14,6 +14,8 @@ cs_add_qtfree_library(cs_capture
         NumericCaptureTargetId.cpp
         ScreenCaptureTypes.h
         ScreenCaptureTypes.cpp
+        ScreenCaptureFrameAssembler.h
+        ScreenCaptureFrameAssembler.cpp
         UnsupportedScreenCaptureBackend.h
         UnsupportedScreenCaptureBackend.cpp
     DEPENDS
@@ -24,6 +26,8 @@ cs_add_qtfree_library(cs_capture
 if(APPLE)
     find_library(CS_SCK_FRAMEWORK ScreenCaptureKit REQUIRED)
     find_library(CS_COREGRAPHICS_FRAMEWORK CoreGraphics REQUIRED)
+    find_library(CS_COREMEDIA_FRAMEWORK CoreMedia REQUIRED)
+    find_library(CS_COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
     find_library(CS_FOUNDATION_FRAMEWORK Foundation REQUIRED)
 
     add_library(cs_capture_macos STATIC
@@ -39,6 +43,8 @@ if(APPLE)
         PRIVATE
             ${CS_SCK_FRAMEWORK}
             ${CS_COREGRAPHICS_FRAMEWORK}
+            ${CS_COREMEDIA_FRAMEWORK}
+            ${CS_COREVIDEO_FRAMEWORK}
             ${CS_FOUNDATION_FRAMEWORK}
     )
     cs_apply_warnings(cs_capture_macos)

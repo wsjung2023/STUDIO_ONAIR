@@ -32,6 +32,7 @@ Result<void> ManualPushCaptureSource::start(const capture::CaptureConfig& config
     }
     stats_ = {};
     started_ = true;
+    sink_->onCaptureStarted();
     return core::ok();
 }
 
@@ -61,4 +62,3 @@ Result<void> ManualPushCaptureSource::fail(AppError error) {
 }
 
 }  // namespace creator::fakes
-

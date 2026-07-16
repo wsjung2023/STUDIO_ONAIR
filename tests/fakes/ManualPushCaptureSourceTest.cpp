@@ -26,6 +26,8 @@ using creator::media::VideoFrame;
 
 class SinkSpy final : public IVideoFrameSink {
 public:
+    void onCaptureStarted() noexcept override { ++startCalls; }
+
     void onVideoFrame(VideoFrame frame) noexcept override {
         ++frameCalls;
         lastFrame = std::move(frame);
@@ -36,6 +38,7 @@ public:
         lastError = std::move(error);
     }
 
+    int startCalls{0};
     int frameCalls{0};
     int errorCalls{0};
     std::optional<VideoFrame> lastFrame;
@@ -59,6 +62,7 @@ TEST(ManualPushCaptureSourceTest, PushesFramesOnlyWhileStarted) {
 
     EXPECT_FALSE(source->pushFrame(frameAt(1)).hasValue());
     ASSERT_TRUE(source->start(CaptureConfig{}).hasValue());
+    EXPECT_EQ(sink->startCalls, 1);
     ASSERT_TRUE(source->pushFrame(frameAt(2)).hasValue());
     ASSERT_TRUE(source->stop().hasValue());
     EXPECT_FALSE(source->pushFrame(frameAt(3)).hasValue());
@@ -97,4 +101,3 @@ TEST(ManualPushCaptureSourceTest, CountsDeliveredFramesAndStopIsIdempotent) {
 }
 
 }  // namespace
-
