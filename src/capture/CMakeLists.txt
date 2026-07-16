@@ -2,7 +2,12 @@ cs_add_qtfree_library(cs_capture
     SOURCES
         CaptureTimestampMapper.h
         CaptureTimestampMapper.cpp
+        DeviceCaptureTypes.h
+        DeviceCaptureTypes.cpp
         ICaptureSource.h
+        IAudioBlockSink.h
+        IDeviceCaptureBackend.h
+        IDeviceCaptureSource.h
         IPullCaptureSource.h
         IScreenCaptureDiscovery.h
         IScreenCapturePermission.h
@@ -21,6 +26,8 @@ cs_add_qtfree_library(cs_capture
         ScreenCaptureStopCoordinator.cpp
         UnsupportedScreenCaptureBackend.h
         UnsupportedScreenCaptureBackend.cpp
+        UnsupportedDeviceCaptureBackend.h
+        UnsupportedDeviceCaptureBackend.cpp
     DEPENDS
         cs_domain
         cs_media

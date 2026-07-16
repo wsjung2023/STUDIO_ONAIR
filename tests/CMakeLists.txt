@@ -46,6 +46,7 @@ add_executable(cs_tests
     capture/NumericCaptureTargetIdTest.cpp
     capture/ScreenCaptureFrameAssemblerTest.cpp
     capture/ScreenCaptureStopCoordinatorTest.cpp
+    capture/DeviceCapturePortsTest.cpp
     project_store/ManifestSchemaValidatorTest.cpp
     project_store/JsonProjectStoreTest.cpp
     project_store/SqliteConnectionTest.cpp

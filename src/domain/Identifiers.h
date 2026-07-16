@@ -49,6 +49,7 @@ struct ProjectIdTag;
 struct SourceIdTag;
 struct SessionIdTag;
 struct CaptureTargetIdTag;
+struct CaptureDeviceIdTag;
 
 using ProjectId = Identifier<ProjectIdTag>;
 using SourceId = Identifier<SourceIdTag>;
@@ -57,5 +58,9 @@ using SessionId = Identifier<SessionIdTag>;
 /// It is deliberately distinct from SourceId: a selected OS window may become
 /// a project source, but the two lifetimes and persistence rules are different.
 using CaptureTargetId = Identifier<CaptureTargetIdTag>;
+/// Opaque identity supplied by a native camera/microphone discovery adapter.
+/// Device identity is not project source identity and is never inferred from a
+/// user-visible device name.
+using CaptureDeviceId = Identifier<CaptureDeviceIdTag>;
 
 }  // namespace creator::domain
