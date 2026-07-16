@@ -81,6 +81,7 @@ add_executable(cs_tests
     fakes/FakeCaptureSourceTest.cpp
     fakes/ManualPushCaptureSourceTest.cpp
     fakes/FakeRecorderTest.cpp
+    fakes/FakeEditEngineTest.cpp
 )
 
 target_link_libraries(cs_tests
