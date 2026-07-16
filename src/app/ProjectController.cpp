@@ -42,7 +42,7 @@ ProjectController::ProjectController(
     connect(worker_, &ProjectWorker::openFinished, this,
             &ProjectController::handleOpenFinished);
     connect(worker_, &ProjectWorker::recoveryFinished, this,
-            [this](bool success, const QVariantMap&, const QString& error) {
+            [this](bool success, const QVariantMap& recovery, const QString& error) {
                 setBusy(false);
                 if (!success) {
                     setStatus(error);
@@ -54,7 +54,14 @@ ProjectController::ProjectController(
                 emit recoveriesChanged();
                 emit projectChanged();
                 emit projectOpened();
-                setStatus(QString{});
+                setStatus(QStringLiteral(
+                              "Recovered %1 ready segments; quarantined %2 interrupted and %3 orphan part files")
+                              .arg(recovery.value(QStringLiteral("readySegments"))
+                                       .toULongLong())
+                              .arg(recovery.value(QStringLiteral("quarantinedParts"))
+                                       .toULongLong())
+                              .arg(recovery.value(QStringLiteral("orphanParts"))
+                                       .toULongLong()));
             });
     connect(worker_, &ProjectWorker::recentScanFinished, this,
             [this](const QVariantList& recent, const QVariantList& recovery,

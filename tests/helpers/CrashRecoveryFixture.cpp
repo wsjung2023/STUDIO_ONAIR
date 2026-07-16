@@ -65,12 +65,16 @@ int run(const fs::path& packagePath) {
     std::error_code ec;
     fs::create_directories(packagePath / "media" / "screen-1", ec);
     if (ec) return 16;
+    fs::create_directories(packagePath / ".tmp" / "media" / "screen-1", ec);
+    if (ec) return 19;
     std::ofstream readyFile{packagePath / ready.relativePath, std::ios::binary};
     readyFile << "ready-fixture-bytes";
     readyFile.flush();
     if (!readyFile.good()) return 17;
     readyFile.close();
-    std::ofstream writingFile{packagePath / writing.relativePath, std::ios::binary};
+    fs::path writingPart = packagePath / ".tmp" / writing.relativePath;
+    writingPart += ".part";
+    std::ofstream writingFile{writingPart, std::ios::binary};
     writingFile << "writing-fixture-bytes";
     writingFile.flush();
     if (!writingFile.good()) return 18;

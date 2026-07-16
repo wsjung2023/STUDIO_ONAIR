@@ -50,6 +50,7 @@ public:
         std::uint64_t segmentIndex);
     [[nodiscard]] core::Result<std::vector<RecoveryCandidate>> scanRecovery(
         const std::filesystem::path& packagePath, std::string_view projectName);
+    [[nodiscard]] core::Result<std::vector<InterruptedSegment>> writingSegments();
     [[nodiscard]] core::Result<RecoveryResult> recover(
         const domain::SessionId& sessionId, const core::Utc& finishedAt);
 

@@ -1,4 +1,5 @@
 #include "project_store/SqliteProjectDatabase.h"
+#include "project_store/internal/SqliteConnection.h"
 
 #include "core/AppError.h"
 #include "core/Timebase.h"
@@ -31,6 +32,7 @@ using creator::domain::SessionId;
 using creator::domain::SourceId;
 using creator::project_store::PersistedSessionState;
 using creator::project_store::SqliteProjectDatabase;
+using creator::project_store::internal::SqliteConnection;
 
 Utc utc(std::string_view text) {
     return Utc::parseRfc3339(text).value();
@@ -136,6 +138,51 @@ TEST_F(RecoveryTest, RecoverKeepsReadyAndFailsOnlyWriting) {
     EXPECT_EQ(recovered.value().failedSegments, 1u);
     EXPECT_EQ(database.session(sessionId_).value().state, PersistedSessionState::Recovered);
     EXPECT_TRUE(database.scanRecovery(packagePath_, "Recovery").value().empty());
+}
+
+TEST_F(RecoveryTest, WritingSegmentsReturnsUnicodePathsAcrossSourcesOnlyWhileWriting) {
+    auto database = recordingDatabase();
+    auto screen = segment(SegmentStatus::Writing, 0);
+    screen.relativePath = "media/강의/화면_00.mkv";
+    auto camera = segment(SegmentStatus::Writing, 1);
+    camera.sourceId = SourceId::create("camera-1").value();
+    camera.relativePath = "media/camera/camera_00.mkv";
+    ASSERT_TRUE(database.beginSegment(sessionId_, screen).hasValue());
+    ASSERT_TRUE(database.beginSegment(sessionId_, camera).hasValue());
+    auto ready = screen;
+    ready.status = SegmentStatus::Ready;
+    ASSERT_TRUE(database.markSegmentReady(sessionId_, ready).hasValue());
+
+    const auto writing = database.writingSegments();
+
+    ASSERT_TRUE(writing.hasValue());
+    ASSERT_EQ(writing.value().size(), 1u);
+    EXPECT_EQ(writing.value()[0].sessionId, sessionId_);
+    EXPECT_EQ(writing.value()[0].sourceId, camera.sourceId);
+    EXPECT_EQ(writing.value()[0].segmentIndex, camera.index);
+    EXPECT_EQ(writing.value()[0].relativePath, camera.relativePath);
+
+    ASSERT_TRUE(database.recover(sessionId_, utc("2026-07-16T11:00:00Z"))
+                    .hasValue());
+    EXPECT_TRUE(database.writingSegments().value().empty());
+}
+
+TEST_F(RecoveryTest, WritingSegmentsRejectsMalformedPersistedPath) {
+    auto database = recordingDatabase();
+    ASSERT_TRUE(database.beginSegment(sessionId_, segment(SegmentStatus::Writing, 0))
+                    .hasValue());
+    auto rawResult = SqliteConnection::open(packagePath_ / "project.db");
+    ASSERT_TRUE(rawResult.hasValue());
+    auto raw = std::move(rawResult).value();
+    ASSERT_TRUE(raw.execute(
+                       "UPDATE segments SET relative_path='../outside.mkv' "
+                       "WHERE status='WRITING'")
+                    .hasValue());
+
+    const auto writing = database.writingSegments();
+
+    ASSERT_FALSE(writing.hasValue());
+    EXPECT_EQ(writing.error().code(), ErrorCode::IoFailure);
 }
 
 TEST_F(RecoveryTest, RecoverIsIdempotent) {

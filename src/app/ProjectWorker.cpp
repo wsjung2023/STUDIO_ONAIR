@@ -78,7 +78,11 @@ void ProjectWorker::recoverSession(std::filesystem::path path, domain::SessionId
                     {QStringLiteral("readySegments"),
                      static_cast<qulonglong>(recovered.value().readySegments)},
                     {QStringLiteral("failedSegments"),
-                     static_cast<qulonglong>(recovered.value().failedSegments)}},
+                     static_cast<qulonglong>(recovered.value().failedSegments)},
+                    {QStringLiteral("quarantinedParts"),
+                     static_cast<qulonglong>(recovered.value().quarantinedParts)},
+                    {QStringLiteral("orphanParts"),
+                     static_cast<qulonglong>(recovered.value().orphanParts)}},
         {});
 }
 

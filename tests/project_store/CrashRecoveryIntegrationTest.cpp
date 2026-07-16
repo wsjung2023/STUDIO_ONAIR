@@ -112,12 +112,21 @@ TEST_F(CrashRecoveryIntegrationTest, ReopensAndRecoversAfterExitWithoutDestructo
 
     const auto candidate = opened.value().recoveryCandidates.front();
     const auto before = snapshotFixtureFiles(packagePath_);
-    ASSERT_EQ(before.size(), 2u);
+    ASSERT_EQ(before.size(), 1u);
+    const fs::path interruptedPart =
+        packagePath_ / ".tmp/media/screen-1/writing.mkv.part";
+    ASSERT_TRUE(fs::is_regular_file(interruptedPart));
     const auto recovered = store.recover(packagePath_, candidate.sessionId, Utc::now());
     ASSERT_TRUE(recovered.hasValue()) << recovered.error().message();
     EXPECT_EQ(recovered.value().readySegments, 1u);
     EXPECT_EQ(recovered.value().failedSegments, 1u);
+    EXPECT_EQ(recovered.value().quarantinedParts, 1u);
+    EXPECT_EQ(recovered.value().orphanParts, 0u);
     EXPECT_EQ(snapshotFixtureFiles(packagePath_), before);
+    EXPECT_FALSE(fs::exists(interruptedPart));
+    EXPECT_TRUE(fs::is_regular_file(
+        packagePath_ /
+        "recovery/quarantine/session-crash/media/screen-1/writing.mkv.part"));
     const auto reopened = store.open(packagePath_);
     ASSERT_TRUE(reopened.hasValue());
     EXPECT_TRUE(reopened.value().recoveryCandidates.empty());

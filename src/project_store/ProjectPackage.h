@@ -7,8 +7,10 @@
 
 #include <filesystem>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace creator::project_store {
 
@@ -43,6 +45,15 @@ struct RecoveryResult final {
     creator::core::TimestampNs stoppedAt{};
     std::size_t readySegments{0};
     std::size_t failedSegments{0};
+    std::size_t quarantinedParts{0};
+    std::size_t orphanParts{0};
+};
+
+struct InterruptedSegment final {
+    creator::domain::SessionId sessionId;
+    creator::domain::SourceId sourceId;
+    std::uint64_t segmentIndex{0};
+    std::string relativePath;
 };
 
 }  // namespace creator::project_store

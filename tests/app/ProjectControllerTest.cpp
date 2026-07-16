@@ -31,6 +31,7 @@ using creator::domain::SessionId;
 using creator::project_store::OpenProjectResult;
 using creator::project_store::ProjectPackage;
 using creator::project_store::RecoveryCandidate;
+using creator::project_store::RecoveryResult;
 
 class ProjectControllerTest : public ::testing::Test {
 protected:
@@ -94,6 +95,37 @@ TEST_F(ProjectControllerTest, OpenPublishesRecoveryCandidates) {
 
     ASSERT_TRUE(required.wait(3000));
     EXPECT_EQ(controller_->recoveries().size(), 1);
+}
+
+TEST_F(ProjectControllerTest, RecoveryPublishesQuarantineSummary) {
+    auto result = fake_->create(packagePath_, "Recovery").value();
+    result.recoveryCandidates.push_back(RecoveryCandidate{
+        .packagePath = packagePath_,
+        .projectName = "Recovery",
+        .sessionId = SessionId::create("session-1").value(),
+        .createdAt = creator::core::Utc::parseRfc3339("2026-07-16T12:00:00Z").value(),
+        .readySegments = 2,
+        .writingSegments = 1,
+    });
+    fake_->setOpenResult(std::move(result));
+    fake_->setRecoveryResult(RecoveryResult{
+        .sessionId = SessionId::create("session-1").value(),
+        .readySegments = 2,
+        .failedSegments = 1,
+        .quarantinedParts = 1,
+        .orphanParts = 3,
+    });
+    QSignalSpy required{controller_.get(), &ProjectController::recoveryRequired};
+    QSignalSpy opened{controller_.get(), &ProjectController::projectOpened};
+
+    controller_->openProject(
+        QUrl::fromLocalFile(QString::fromStdWString(packagePath_.wstring())));
+    ASSERT_TRUE(required.wait(3000));
+    controller_->recoverSession(QStringLiteral("session-1"));
+
+    ASSERT_TRUE(opened.wait(3000));
+    EXPECT_EQ(controller_->statusMessage(),
+              QStringLiteral("Recovered 2 ready segments; quarantined 1 interrupted and 3 orphan part files"));
 }
 
 TEST_F(ProjectControllerTest, RejectsSecondCommandWhileBusy) {

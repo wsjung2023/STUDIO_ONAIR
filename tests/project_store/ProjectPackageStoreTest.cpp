@@ -76,6 +76,13 @@ protected:
         out << json.dump(2);
     }
 
+    void writeBytes(const fs::path& path, std::string_view bytes) {
+        fs::create_directories(path.parent_path());
+        std::ofstream out{path, std::ios::binary};
+        out << bytes;
+        ASSERT_TRUE(out.good());
+    }
+
     fs::path root_;
     fs::path packagePath_;
     ProjectPackageStore store_;
@@ -193,6 +200,163 @@ TEST_F(ProjectPackageStoreTest, OpenReportsInterruptedRecordingThroughValidatedP
     ASSERT_TRUE(opened.hasValue()) << opened.error().message();
     ASSERT_EQ(opened.value().recoveryCandidates.size(), 1u);
     EXPECT_EQ(opened.value().recoveryCandidates[0].writingSegments, 1u);
+}
+
+TEST_F(ProjectPackageStoreTest, RecoverQuarantinesKnownAndOrphanPartFiles) {
+    ASSERT_TRUE(store_.create(packagePath_, "Recovery files").hasValue());
+    const auto session = SessionId::create("session-1").value();
+    ASSERT_TRUE(store_.beginRecording(packagePath_, session, TimestampNs{},
+                                      utc("2026-07-16T10:00:00Z"))
+                    .hasValue());
+    const SegmentInfo writing{
+        .index = 0,
+        .sourceId = SourceId::create("screen-1").value(),
+        .startTime = TimestampNs{},
+        .duration = std::chrono::seconds{2},
+        .status = SegmentStatus::Writing,
+        .relativePath = "media/screen/screen-1/segment_000000.mkv",
+    };
+    ASSERT_TRUE(store_.beginSegment(packagePath_, session, writing).hasValue());
+    const fs::path knownSource =
+        packagePath_ / ".tmp" / fs::path{writing.relativePath + ".part"};
+    const fs::path orphanSource = packagePath_ / ".tmp/loose/orphan.mkv.part";
+    writeBytes(knownSource, "known-part");
+    writeBytes(orphanSource, "orphan-part");
+
+    const auto recovered =
+        store_.recover(packagePath_, session, utc("2026-07-16T11:00:00Z"));
+
+    ASSERT_TRUE(recovered.hasValue()) << recovered.error().message();
+    EXPECT_EQ(recovered.value().quarantinedParts, 1u);
+    EXPECT_EQ(recovered.value().orphanParts, 1u);
+    EXPECT_FALSE(fs::exists(knownSource));
+    EXPECT_FALSE(fs::exists(orphanSource));
+    EXPECT_TRUE(fs::is_regular_file(
+        packagePath_ / "recovery/quarantine/session-1/media/screen/screen-1/segment_000000.mkv.part"));
+    EXPECT_TRUE(fs::is_regular_file(
+        packagePath_ / "recovery/quarantine/orphans/loose/orphan.mkv.part"));
+
+    const auto again =
+        store_.recover(packagePath_, session, utc("2026-07-16T11:05:00Z"));
+    ASSERT_TRUE(again.hasValue());
+    EXPECT_EQ(again.value().quarantinedParts, 0u);
+    EXPECT_EQ(again.value().orphanParts, 0u);
+}
+
+TEST_F(ProjectPackageStoreTest, RecoverNeverOverwritesExistingQuarantineFile) {
+    ASSERT_TRUE(store_.create(packagePath_, "No overwrite").hasValue());
+    const auto session = SessionId::create("session-1").value();
+    ASSERT_TRUE(store_.beginRecording(packagePath_, session, TimestampNs{},
+                                      utc("2026-07-16T10:00:00Z"))
+                    .hasValue());
+    const SegmentInfo writing{
+        .index = 0,
+        .sourceId = SourceId::create("screen-1").value(),
+        .startTime = TimestampNs{},
+        .duration = std::chrono::seconds{2},
+        .status = SegmentStatus::Writing,
+        .relativePath = "media/screen/screen-1/segment_000000.mkv",
+    };
+    ASSERT_TRUE(store_.beginSegment(packagePath_, session, writing).hasValue());
+    const fs::path source =
+        packagePath_ / ".tmp" / fs::path{writing.relativePath + ".part"};
+    const fs::path destination = packagePath_ /
+        "recovery/quarantine/session-1/media/screen/screen-1/segment_000000.mkv.part";
+    writeBytes(source, "new-bytes");
+    writeBytes(destination, "keep-bytes");
+
+    const auto recovered =
+        store_.recover(packagePath_, session, utc("2026-07-16T11:00:00Z"));
+
+    ASSERT_FALSE(recovered.hasValue());
+    EXPECT_EQ(recovered.error().code(), ErrorCode::AlreadyExists);
+    EXPECT_TRUE(fs::is_regular_file(source));
+    std::ifstream existing{destination, std::ios::binary};
+    const std::string existingBytes{std::istreambuf_iterator<char>{existing},
+                                    std::istreambuf_iterator<char>{}};
+    EXPECT_EQ(existingBytes, "keep-bytes");
+    EXPECT_EQ(store_.open(packagePath_).value().recoveryCandidates.size(), 1u);
+}
+
+TEST_F(ProjectPackageStoreTest, RecoverDoesNotTreatAnotherSessionPartAsOrphan) {
+    ASSERT_TRUE(store_.create(packagePath_, "Two recoveries").hasValue());
+    const auto first = SessionId::create("session-1").value();
+    const auto second = SessionId::create("session-2").value();
+    const auto source = SourceId::create("screen-1").value();
+    ASSERT_TRUE(store_.beginRecording(packagePath_, first, TimestampNs{},
+                                      utc("2026-07-16T10:00:00Z"))
+                    .hasValue());
+    ASSERT_TRUE(store_.beginRecording(packagePath_, second, TimestampNs{},
+                                      utc("2026-07-16T10:01:00Z"))
+                    .hasValue());
+    const SegmentInfo firstWriting{
+        .index = 0, .sourceId = source, .startTime = TimestampNs{},
+        .duration = std::chrono::seconds{2}, .status = SegmentStatus::Writing,
+        .relativePath = "media/screen/screen-1/first.mkv"};
+    const SegmentInfo secondWriting{
+        .index = 0, .sourceId = source, .startTime = TimestampNs{},
+        .duration = std::chrono::seconds{2}, .status = SegmentStatus::Writing,
+        .relativePath = "media/screen/screen-1/second.mkv"};
+    ASSERT_TRUE(store_.beginSegment(packagePath_, first, firstWriting).hasValue());
+    ASSERT_TRUE(store_.beginSegment(packagePath_, second, secondWriting).hasValue());
+    const fs::path secondPart =
+        packagePath_ / ".tmp" / fs::path{secondWriting.relativePath + ".part"};
+    writeBytes(secondPart, "second-session");
+
+    const auto recovered =
+        store_.recover(packagePath_, first, utc("2026-07-16T11:00:00Z"));
+
+    ASSERT_TRUE(recovered.hasValue()) << recovered.error().message();
+    EXPECT_EQ(recovered.value().orphanParts, 0u);
+    EXPECT_TRUE(fs::is_regular_file(secondPart));
+}
+
+TEST_F(ProjectPackageStoreTest, RecoverRejectsHardLinkedPartWithoutChangingDatabase) {
+    ASSERT_TRUE(store_.create(packagePath_, "Unsafe part").hasValue());
+    const auto session = SessionId::create("session-1").value();
+    ASSERT_TRUE(store_.beginRecording(packagePath_, session, TimestampNs{},
+                                      utc("2026-07-16T10:00:00Z"))
+                    .hasValue());
+    const SegmentInfo writing{
+        .index = 0,
+        .sourceId = SourceId::create("screen-1").value(),
+        .startTime = TimestampNs{},
+        .duration = std::chrono::seconds{2},
+        .status = SegmentStatus::Writing,
+        .relativePath = "media/screen/screen-1/segment_000000.mkv",
+    };
+    ASSERT_TRUE(store_.beginSegment(packagePath_, session, writing).hasValue());
+    const fs::path outside = root_ / "outside.part";
+    writeBytes(outside, "shared-bytes");
+    const fs::path source =
+        packagePath_ / ".tmp" / fs::path{writing.relativePath + ".part"};
+    fs::create_directories(source.parent_path());
+    std::error_code error;
+    fs::create_hard_link(outside, source, error);
+    if (error) GTEST_SKIP() << "hard link creation is unavailable: " << error.message();
+
+    const auto recovered =
+        store_.recover(packagePath_, session, utc("2026-07-16T11:00:00Z"));
+
+    ASSERT_FALSE(recovered.hasValue());
+    EXPECT_EQ(recovered.error().code(), ErrorCode::InvalidArgument);
+    EXPECT_EQ(store_.open(packagePath_).value().recoveryCandidates.size(), 1u);
+    EXPECT_EQ(fs::hard_link_count(outside), 2u);
+}
+
+TEST_F(ProjectPackageStoreTest, RecoverUnknownSessionDoesNotMoveOrphanParts) {
+    ASSERT_TRUE(store_.create(packagePath_, "Unknown recovery").hasValue());
+    const fs::path orphan = packagePath_ / ".tmp/loose/orphan.mkv.part";
+    writeBytes(orphan, "keep-until-valid-recovery");
+
+    const auto recovered = store_.recover(
+        packagePath_, SessionId::create("unknown-session").value(),
+        utc("2026-07-16T11:00:00Z"));
+
+    ASSERT_FALSE(recovered.hasValue());
+    EXPECT_EQ(recovered.error().code(), ErrorCode::NotFound);
+    EXPECT_TRUE(fs::is_regular_file(orphan));
+    EXPECT_FALSE(fs::exists(packagePath_ / "recovery/quarantine/orphans"));
 }
 
 TEST_F(ProjectPackageStoreTest, CompleteRecordingPersistsExactNonZeroStopTime) {

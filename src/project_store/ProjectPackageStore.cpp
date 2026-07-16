@@ -6,7 +6,12 @@
 #include "project_store/SqliteProjectDatabase.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <cstdint>
 #include <filesystem>
+#include <iterator>
+#include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -15,6 +20,11 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <Windows.h>
+#else
+#include <unistd.h>
+#ifdef __APPLE__
+#include <stdio.h>
+#endif
 #endif
 
 namespace creator::project_store {
@@ -176,6 +186,249 @@ void removeGeneratedStaging(const fs::path& staging, const fs::path& target) noe
     fs::remove_all(staging, ignored);
 }
 
+Result<std::string> safeRecoveryComponent(std::string_view value) {
+    constexpr char hex[] = "0123456789ABCDEF";
+    constexpr std::size_t maximumBytes = 128;
+    std::string encoded;
+    for (const unsigned char byte : value) {
+        const bool portable =
+            (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+            (byte >= '0' && byte <= '9') || byte == '-' || byte == '_';
+        if (portable) {
+            encoded.push_back(static_cast<char>(byte));
+        } else {
+            encoded.push_back('%');
+            encoded.push_back(hex[byte >> 4U]);
+            encoded.push_back(hex[byte & 0x0FU]);
+        }
+        if (encoded.size() > maximumBytes) {
+            return AppError{ErrorCode::InvalidArgument,
+                            "recovery session identifier is too long for quarantine"};
+        }
+    }
+    return encoded;
+}
+
+Result<std::optional<fs::file_status>> inspectedStatus(const fs::path& path) {
+    std::error_code error;
+    const auto status = fs::symlink_status(path, error);
+    if (error == std::errc::no_such_file_or_directory ||
+        status.type() == fs::file_type::not_found) {
+        return std::optional<fs::file_status>{};
+    }
+    if (error) return filesystemError("inspect recovery path", error);
+    return std::optional<fs::file_status>{status};
+}
+
+Result<void> rejectReparsePoint(const fs::path& path) {
+#ifdef _WIN32
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+        return filesystemError(
+            "inspect recovery attributes",
+            std::error_code{static_cast<int>(GetLastError()), std::system_category()});
+    }
+    if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "recovery paths must not contain reparse points"};
+    }
+#else
+    static_cast<void>(path);
+#endif
+    return core::ok();
+}
+
+Result<void> ensureSafeDirectory(const fs::path& packagePath,
+                                 const fs::path& relativeDirectory) {
+    fs::path current = packagePath;
+    for (const auto& component : relativeDirectory) {
+        current /= component;
+        auto inspected = inspectedStatus(current);
+        if (!inspected.hasValue()) return inspected.error();
+        if (!inspected.value()) {
+            std::error_code error;
+            if (!fs::create_directory(current, error) && error) {
+                return filesystemError("create recovery directory", error);
+            }
+            inspected = inspectedStatus(current);
+            if (!inspected.hasValue()) return inspected.error();
+        }
+        if (!inspected.value() || fs::is_symlink(*inspected.value()) ||
+            !fs::is_directory(*inspected.value())) {
+            return AppError{ErrorCode::InvalidArgument,
+                            "recovery directory path is not a plain directory"};
+        }
+        if (auto reparse = rejectReparsePoint(current); !reparse.hasValue()) {
+            return reparse.error();
+        }
+    }
+    return core::ok();
+}
+
+Result<std::optional<fs::path>> validatedPlainFile(
+    const fs::path& packagePath, const fs::path& relativePath) {
+    fs::path current = packagePath;
+    for (auto component = relativePath.begin(); component != relativePath.end();
+         ++component) {
+        current /= *component;
+        auto inspected = inspectedStatus(current);
+        if (!inspected.hasValue()) return inspected.error();
+        if (!inspected.value()) return std::optional<fs::path>{};
+        if (fs::is_symlink(*inspected.value())) {
+            return AppError{ErrorCode::InvalidArgument,
+                            "recovery paths must not contain symbolic links"};
+        }
+        if (auto reparse = rejectReparsePoint(current); !reparse.hasValue()) {
+            return reparse.error();
+        }
+        const bool last = std::next(component) == relativePath.end();
+        if (!last && !fs::is_directory(*inspected.value())) {
+            return AppError{ErrorCode::InvalidArgument,
+                            "recovery parent path is not a directory"};
+        }
+        if (last && !fs::is_regular_file(*inspected.value())) {
+            return AppError{ErrorCode::InvalidArgument,
+                            "recovery part path is not a regular file"};
+        }
+    }
+    std::error_code error;
+    const auto links = fs::hard_link_count(current, error);
+    if (error) return filesystemError("inspect recovery file links", error);
+    if (links != 1) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "recovery part files must not have hard links"};
+    }
+    const auto resolvedPackage = fs::canonical(packagePath, error);
+    if (error) return filesystemError("resolve recovery package", error);
+    const auto resolvedFile = fs::canonical(current, error);
+    if (error) return filesystemError("resolve recovery file", error);
+    if (!isPathInside(resolvedPackage, resolvedFile)) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "recovery part file resolves outside the package"};
+    }
+    return std::optional<fs::path>{current};
+}
+
+Result<void> moveWithoutOverwrite(const fs::path& source,
+                                  const fs::path& destination) {
+#ifdef _WIN32
+    if (!MoveFileExW(source.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH)) {
+        const DWORD code = GetLastError();
+        if (code == ERROR_ALREADY_EXISTS || code == ERROR_FILE_EXISTS) {
+            return AppError{ErrorCode::AlreadyExists,
+                            "recovery quarantine destination already exists"};
+        }
+        return filesystemError(
+            "move part to quarantine",
+            std::error_code{static_cast<int>(code), std::system_category()});
+    }
+#elif defined(__APPLE__)
+    if (::renamex_np(source.c_str(), destination.c_str(), RENAME_EXCL) != 0) {
+        if (errno == EEXIST) {
+            return AppError{ErrorCode::AlreadyExists,
+                            "recovery quarantine destination already exists"};
+        }
+        return filesystemError("move part to quarantine",
+                               std::error_code{errno, std::generic_category()});
+    }
+#else
+    if (::link(source.c_str(), destination.c_str()) != 0) {
+        if (errno == EEXIST) {
+            return AppError{ErrorCode::AlreadyExists,
+                            "recovery quarantine destination already exists"};
+        }
+        return filesystemError("link part into quarantine",
+                               std::error_code{errno, std::generic_category()});
+    }
+    if (::unlink(source.c_str()) != 0) {
+        const int sourceError = errno;
+        // The destination was created by the successful link above. Remove it
+        // on failure so a retry does not see a two-link file and become stuck.
+        static_cast<void>(::unlink(destination.c_str()));
+        return filesystemError(
+            "remove quarantined part source",
+            std::error_code{sourceError, std::generic_category()});
+    }
+#endif
+    return core::ok();
+}
+
+Result<bool> quarantinePart(const fs::path& packagePath,
+                            const fs::path& sourceRelative,
+                            const fs::path& destinationRelative) {
+    auto source = validatedPlainFile(packagePath, sourceRelative);
+    if (!source.hasValue()) return source.error();
+    auto destination = validatedPlainFile(packagePath, destinationRelative);
+    if (!destination.hasValue()) return destination.error();
+    if (!source.value()) {
+        // Either no encoder created the part, or a prior recovery already moved it.
+        return false;
+    }
+    if (destination.value()) {
+        return AppError{ErrorCode::AlreadyExists,
+                        "recovery quarantine destination already exists"};
+    }
+    if (auto directories =
+            ensureSafeDirectory(packagePath, destinationRelative.parent_path());
+        !directories.hasValue()) {
+        return directories.error();
+    }
+    if (auto moved = moveWithoutOverwrite(*source.value(),
+                                          packagePath / destinationRelative);
+        !moved.hasValue()) {
+        return moved.error();
+    }
+    return true;
+}
+
+Result<std::vector<fs::path>> orphanPartCandidates(const fs::path& packagePath) {
+    const fs::path temporaryRelative{".tmp"};
+    const fs::path temporaryRoot = packagePath / temporaryRelative;
+    auto rootStatus = inspectedStatus(temporaryRoot);
+    if (!rootStatus.hasValue()) return rootStatus.error();
+    if (!rootStatus.value()) return std::vector<fs::path>{};
+    if (fs::is_symlink(*rootStatus.value()) ||
+        !fs::is_directory(*rootStatus.value())) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "recovery temporary root is not a plain directory"};
+    }
+    if (auto reparse = rejectReparsePoint(temporaryRoot); !reparse.hasValue()) {
+        return reparse.error();
+    }
+
+    std::vector<fs::path> result;
+    std::error_code error;
+    for (fs::recursive_directory_iterator iterator{temporaryRoot, error};
+         !error && iterator != fs::recursive_directory_iterator{};
+         iterator.increment(error)) {
+        const auto status = iterator->symlink_status(error);
+        if (error) break;
+        if (fs::is_symlink(status)) {
+            return AppError{ErrorCode::InvalidArgument,
+                            "recovery temporary tree contains a symbolic link"};
+        }
+        if (auto reparse = rejectReparsePoint(iterator->path());
+            !reparse.hasValue()) {
+            return reparse.error();
+        }
+        if (fs::is_directory(status)) continue;
+        if (!fs::is_regular_file(status)) {
+            return AppError{ErrorCode::InvalidArgument,
+                            "recovery temporary tree contains a non-regular entry"};
+        }
+        if (iterator->path().extension() != fs::path{".part"}) continue;
+        const auto withinTemporary = iterator->path().lexically_relative(temporaryRoot);
+        if (withinTemporary.empty()) {
+            return AppError{ErrorCode::IoFailure,
+                            "recovery could not relativize an orphan part"};
+        }
+        result.push_back(temporaryRelative / withinTemporary);
+    }
+    if (error) return filesystemError("scan temporary recovery files", error);
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
 }  // namespace
 
 Result<OpenProjectResult> ProjectPackageStore::create(const fs::path& packagePath,
@@ -288,7 +541,62 @@ Result<RecoveryResult> ProjectPackageStore::recover(const fs::path& packagePath,
                                                     const core::Utc& finishedAt) {
     auto opened = openValidatedDatabase(packagePath);
     if (!opened.hasValue()) return opened.error();
-    return opened.value().database.recover(sessionId, finishedAt);
+    auto session = opened.value().database.session(sessionId);
+    if (!session.hasValue()) return session.error();
+    if (session.value().state != PersistedSessionState::Recording) {
+        // Recovered sessions are idempotent, while completed/aborted sessions
+        // are rejected by the database. Neither case may mutate temp files.
+        return opened.value().database.recover(sessionId, finishedAt);
+    }
+    auto writing = opened.value().database.writingSegments();
+    if (!writing.hasValue()) return writing.error();
+    auto sessionComponent = safeRecoveryComponent(sessionId.value());
+    if (!sessionComponent.hasValue()) return sessionComponent.error();
+
+    std::set<fs::path> referencedParts;
+    std::size_t quarantinedParts = 0;
+    for (const auto& segment : writing.value()) {
+        auto relative = validatedRelativeDatabasePath(segment.relativePath);
+        if (!relative.hasValue()) return relative.error();
+        fs::path sourceRelative = fs::path{".tmp"} / relative.value();
+        sourceRelative += ".part";
+        sourceRelative = sourceRelative.lexically_normal();
+        referencedParts.insert(sourceRelative);
+        if (segment.sessionId != sessionId) continue;
+        fs::path destinationRelative =
+            fs::path{"recovery/quarantine"} / sessionComponent.value() /
+            relative.value();
+        destinationRelative += ".part";
+        auto quarantined = quarantinePart(packagePath, sourceRelative,
+                                          destinationRelative.lexically_normal());
+        if (!quarantined.hasValue()) return quarantined.error();
+        if (quarantined.value()) ++quarantinedParts;
+    }
+
+    auto orphanCandidates = orphanPartCandidates(packagePath);
+    if (!orphanCandidates.hasValue()) return orphanCandidates.error();
+    std::size_t orphanParts = 0;
+    for (const auto& sourceRelative : orphanCandidates.value()) {
+        if (referencedParts.contains(sourceRelative)) continue;
+        const auto withinTemporary =
+            sourceRelative.lexically_relative(fs::path{".tmp"});
+        if (withinTemporary.empty()) {
+            return AppError{ErrorCode::IoFailure,
+                            "recovery orphan path escaped the temporary root"};
+        }
+        const fs::path destinationRelative =
+            fs::path{"recovery/quarantine/orphans"} / withinTemporary;
+        auto quarantined = quarantinePart(packagePath, sourceRelative,
+                                          destinationRelative.lexically_normal());
+        if (!quarantined.hasValue()) return quarantined.error();
+        if (quarantined.value()) ++orphanParts;
+    }
+
+    auto recovered = opened.value().database.recover(sessionId, finishedAt);
+    if (!recovered.hasValue()) return recovered.error();
+    recovered.value().quarantinedParts = quarantinedParts;
+    recovered.value().orphanParts = orphanParts;
+    return recovered;
 }
 
 }  // namespace creator::project_store

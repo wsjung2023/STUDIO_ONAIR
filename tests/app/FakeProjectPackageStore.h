@@ -26,6 +26,11 @@ public:
         openResult_ = std::move(value);
     }
 
+    void setRecoveryResult(project_store::RecoveryResult value) {
+        std::scoped_lock lock{mutex_};
+        recoveryResult_ = std::move(value);
+    }
+
     void holdNextCall() {
         std::scoped_lock lock{mutex_};
         release_ = std::make_shared<std::promise<void>>();
@@ -121,6 +126,8 @@ public:
         const std::filesystem::path&, const domain::SessionId& sessionId,
         const core::Utc&) override {
         observeAndMaybeHold();
+        std::scoped_lock lock{mutex_};
+        if (recoveryResult_) return *recoveryResult_;
         return project_store::RecoveryResult{.sessionId = sessionId};
     }
 
@@ -170,6 +177,7 @@ private:
     mutable std::mutex mutex_;
     std::atomic<Qt::HANDLE> lastThreadId_{nullptr};
     std::optional<project_store::OpenProjectResult> openResult_;
+    std::optional<project_store::RecoveryResult> recoveryResult_;
     std::optional<core::AppError> markSegmentReadyError_;
     std::shared_ptr<std::promise<void>> release_;
     std::shared_future<void> held_;

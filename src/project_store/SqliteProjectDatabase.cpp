@@ -897,4 +897,34 @@ Result<RecoveryResult> SqliteProjectDatabase::recover(const SessionId& sessionId
                           .failedSegments = counts.value().failed};
 }
 
+Result<std::vector<InterruptedSegment>> SqliteProjectDatabase::writingSegments() {
+    auto prepared = connection_.prepare(
+        "SELECT session_id, source_id, segment_index, relative_path FROM segments "
+        "WHERE status='WRITING' ORDER BY session_id, source_id, segment_index");
+    if (!prepared.hasValue()) return prepared.error();
+    auto query = std::move(prepared).value();
+    std::vector<InterruptedSegment> result;
+    while (true) {
+        auto stepped = query.step();
+        if (!stepped.hasValue()) return stepped.error();
+        if (stepped.value() == SqliteStep::Done) break;
+        auto sessionId = SessionId::create(query.columnText(0));
+        auto sourceId = SourceId::create(query.columnText(1));
+        const auto index = query.columnInt64(2);
+        auto relativePath = normalizeRelativePath(query.columnText(3));
+        if (!sessionId.hasValue() || !sourceId.hasValue() || index < 0 ||
+            !relativePath.hasValue()) {
+            return AppError{ErrorCode::IoFailure,
+                            "sqlite writing segment identity or path is invalid"};
+        }
+        result.push_back(InterruptedSegment{
+            .sessionId = std::move(sessionId).value(),
+            .sourceId = std::move(sourceId).value(),
+            .segmentIndex = static_cast<std::uint64_t>(index),
+            .relativePath = std::move(relativePath).value(),
+        });
+    }
+    return result;
+}
+
 }  // namespace creator::project_store
