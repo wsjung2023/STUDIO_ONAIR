@@ -24,6 +24,12 @@ public:
     void openProject(std::filesystem::path path);
     void recoverSession(std::filesystem::path path, domain::SessionId sessionId);
     void refreshRecentProjects();
+    void beginRecording(quint64 commandId, std::filesystem::path path,
+                        domain::SessionId sessionId, core::TimestampNs startedAt);
+    void completeRecording(quint64 commandId, std::filesystem::path path,
+                           domain::RecordingSession session);
+    void abortRecording(quint64 commandId, std::filesystem::path path,
+                        domain::SessionId sessionId, std::string reason);
 
 signals:
     void openFinished(bool success, QVariantMap project, QVariantList recoveries,
@@ -31,7 +37,8 @@ signals:
     void recoveryFinished(bool success, QVariantMap recovery, QString errorMessage);
     void recentScanFinished(QVariantList recentProjects, QVariantList recoveries,
                             QString errorMessage);
-    void recordingCommandFinished(quint64 commandId, bool success, QString errorMessage);
+    void recordingCommandFinished(quint64 commandId, bool success, int errorCode,
+                                  QString errorMessage);
 
 private:
     void publishOpen(core::Result<project_store::OpenProjectResult> result);

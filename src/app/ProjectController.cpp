@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QMetaObject>
 #include <QStandardPaths>
+#include <QTimer>
 
 #include <optional>
 #include <utility>
@@ -60,6 +61,20 @@ ProjectController::ProjectController(
                 emit recoveriesChanged();
                 if (!error.isEmpty()) setStatus(error);
                 if (!recoveries_.isEmpty()) emit recoveryRequired();
+            });
+    connect(worker_, &ProjectWorker::recordingCommandFinished, this,
+            [this](quint64 commandId, bool success, int errorCode,
+                   const QString& error) {
+                auto found = recordingCompletions_.find(commandId);
+                if (found == recordingCompletions_.end()) return;
+                auto completion = std::move(found->second);
+                recordingCompletions_.erase(found);
+                if (success) {
+                    completion(core::ok());
+                } else {
+                    completion(core::AppError{static_cast<core::ErrorCode>(errorCode),
+                                              error.toStdString()});
+                }
             });
     workerThread_.start();
     if (refreshOnStartup) refreshRecentProjects();
@@ -197,6 +212,75 @@ void ProjectController::leaveRecoveryForLater() {
 void ProjectController::refreshRecentProjects() {
     QMetaObject::invokeMethod(worker_, [worker = worker_] { worker->refreshRecentProjects(); },
                               Qt::QueuedConnection);
+}
+
+std::optional<std::filesystem::path> ProjectController::recordingPath() const {
+    if (project_.isEmpty()) return std::nullopt;
+    const QUrl url = project_.value(QStringLiteral("url")).toUrl();
+    if (!url.isLocalFile()) return std::nullopt;
+    return pathFromQString(url.toLocalFile());
+}
+
+void ProjectController::failRecordingCommandAsync(Completion completion) {
+    QTimer::singleShot(0, this, [completion = std::move(completion)]() mutable {
+        completion(core::AppError{core::ErrorCode::InvalidState,
+                                  "no project is open for recording"});
+    });
+}
+
+quint64 ProjectController::retainRecordingCompletion(Completion completion) {
+    const quint64 commandId = nextRecordingCommandId_++;
+    recordingCompletions_.emplace(commandId, std::move(completion));
+    return commandId;
+}
+
+void ProjectController::begin(const domain::SessionId& sessionId,
+                              core::TimestampNs startedAt, Completion completion) {
+    auto path = recordingPath();
+    if (!path) {
+        failRecordingCommandAsync(std::move(completion));
+        return;
+    }
+    const quint64 commandId = retainRecordingCompletion(std::move(completion));
+    QMetaObject::invokeMethod(
+        worker_,
+        [worker = worker_, commandId, path = std::move(*path), sessionId, startedAt] {
+            worker->beginRecording(commandId, path, sessionId, startedAt);
+        },
+        Qt::QueuedConnection);
+}
+
+void ProjectController::complete(const domain::RecordingSession& session,
+                                 Completion completion) {
+    auto path = recordingPath();
+    if (!path) {
+        failRecordingCommandAsync(std::move(completion));
+        return;
+    }
+    const quint64 commandId = retainRecordingCompletion(std::move(completion));
+    QMetaObject::invokeMethod(
+        worker_,
+        [worker = worker_, commandId, path = std::move(*path), session] {
+            worker->completeRecording(commandId, path, session);
+        },
+        Qt::QueuedConnection);
+}
+
+void ProjectController::abort(const domain::SessionId& sessionId, std::string reason,
+                              Completion completion) {
+    auto path = recordingPath();
+    if (!path) {
+        failRecordingCommandAsync(std::move(completion));
+        return;
+    }
+    const quint64 commandId = retainRecordingCompletion(std::move(completion));
+    QMetaObject::invokeMethod(
+        worker_,
+        [worker = worker_, commandId, path = std::move(*path), sessionId,
+         reason = std::move(reason)] {
+            worker->abortRecording(commandId, path, sessionId, reason);
+        },
+        Qt::QueuedConnection);
 }
 
 }  // namespace creator::app

@@ -7,6 +7,7 @@
 #include "recorder/IRecorder.h"
 
 #include <chrono>
+#include <QPointer>
 #include <utility>
 
 namespace creator::app {
@@ -51,7 +52,15 @@ StudioController::StudioController(QObject* parent)
 
 StudioController::StudioController(std::unique_ptr<capture::IPullCaptureSource> source,
                                    std::unique_ptr<recorder::IRecorder> recorder, QObject* parent)
-    : QObject(parent), source_(std::move(source)), recorder_(std::move(recorder)) {
+    : StudioController(std::move(source), std::move(recorder), nullptr, parent) {}
+
+StudioController::StudioController(std::unique_ptr<capture::IPullCaptureSource> source,
+                                   std::unique_ptr<recorder::IRecorder> recorder,
+                                   IRecordingPersistence* persistence, QObject* parent)
+    : QObject(parent),
+      source_(std::move(source)),
+      recorder_(std::move(recorder)),
+      persistence_(persistence) {
     captureTimer_.setInterval(kCaptureIntervalMs);
     connect(&captureTimer_, &QTimer::timeout, this, &StudioController::onCaptureTick);
 }
@@ -70,14 +79,14 @@ StudioController::~StudioController() {
     // stopRecording() and the startRecording() unwind below, where the same
     // calls' Results are routed to setStatusMessage() because the UI is still
     // there to see it.
-    if (recording_) {
+    if (isRecording()) {
         static_cast<void>(recorder_->stop(kSessionStart));
         static_cast<void>(source_->stop());
     }
 }
 
 void StudioController::startRecording() {
-    if (recording_) {
+    if (operationState_ != RecordingOperationState::Idle) {
         return;
     }
 
@@ -88,8 +97,31 @@ void StudioController::startRecording() {
         return;
     }
 
+    pendingSessionId_ = std::move(sessionId).value();
+    setOperationState(RecordingOperationState::Preparing);
+    setStatusMessage(tr("Preparing recording"));
+    QPointer<StudioController> self{this};
+    auto completion = [self](core::Result<void> result) mutable {
+        if (self) self->handleBeginFinished(std::move(result));
+    };
+    if (persistence_) {
+        persistence_->begin(*pendingSessionId_, kSessionStart, std::move(completion));
+    } else {
+        completion(core::ok());
+    }
+}
+
+void StudioController::handleBeginFinished(core::Result<void> result) {
+    if (operationState_ != RecordingOperationState::Preparing || !pendingSessionId_) return;
+    if (!result.hasValue()) {
+        pendingSessionId_.reset();
+        setOperationState(RecordingOperationState::Idle);
+        setStatusMessage(QString::fromStdString(result.error().message()));
+        return;
+    }
+
     const recorder::RecorderConfig config{
-        .sessionId = std::move(sessionId).value(),
+        .sessionId = *pendingSessionId_,
         .sourceId = source_->id(),
         .segmentDuration = std::chrono::seconds{2},
     };
@@ -108,7 +140,7 @@ void StudioController::startRecording() {
     // relationship to the media's own timeline. Anchoring at kSessionStart
     // (zero) keeps both timelines on the same footing.
     if (auto started = recorder_->start(config, kSessionStart); !started.hasValue()) {
-        setStatusMessage(QString::fromStdString(started.error().message()));
+        abortFailedStart(QString::fromStdString(started.error().message()));
         return;
     }
     if (auto started = source_->start(kCaptureConfig); !started.hasValue()) {
@@ -124,28 +156,56 @@ void StudioController::startRecording() {
             // actionable problem (CLAUDE.md 9 requires device errors reach
             // the user), so it takes the status message instead of the
             // start failure that triggered this unwind.
-            setStatusMessage(QString::fromStdString(stopped.error().message()));
+            abortFailedStart(QString::fromStdString(stopped.error().message()));
         } else {
-            setStatusMessage(QString::fromStdString(started.error().message()));
+            abortFailedStart(QString::fromStdString(started.error().message()));
         }
         return;
     }
 
     resetTakeSummary();
-    recording_ = true;
+    pendingSessionId_.reset();
+    setOperationState(RecordingOperationState::Recording);
     captureTimer_.start();
     setStatusMessage(tr("Recording"));
-    emit recordingChanged();
+}
+
+void StudioController::abortFailedStart(QString startError) {
+    if (!pendingSessionId_) {
+        setOperationState(RecordingOperationState::Idle);
+        setStatusMessage(std::move(startError));
+        return;
+    }
+    if (!persistence_) {
+        pendingSessionId_.reset();
+        setOperationState(RecordingOperationState::Idle);
+        setStatusMessage(std::move(startError));
+        return;
+    }
+    QPointer<StudioController> self{this};
+    persistence_->abort(
+        *pendingSessionId_, startError.toStdString(),
+        [self, startError = std::move(startError)](core::Result<void> result) mutable {
+            if (!self) return;
+            self->pendingSessionId_.reset();
+            self->setOperationState(RecordingOperationState::Idle);
+            self->setStatusMessage(result.hasValue()
+                                       ? std::move(startError)
+                                       : QString::fromStdString(result.error().message()));
+        });
 }
 
 void StudioController::stopRecording() {
-    if (!recording_) {
-        setStatusMessage(tr("Not recording"));
+    if (!isRecording()) {
+        if (operationState_ == RecordingOperationState::Idle) {
+            setStatusMessage(tr("Not recording"));
+        }
         return;
     }
 
     captureTimer_.stop();
-    recording_ = false;
+    setOperationState(RecordingOperationState::Finalizing);
+    setStatusMessage(tr("Finalizing recording"));
 
     // Stop on the same frame-timestamp scale the take started on (see
     // startRecording()). stats().receivedFrames is the count of frames the
@@ -168,34 +228,64 @@ void StudioController::stopRecording() {
     auto sourceStopped = source_->stop();
 
     if (!session.hasValue()) {
+        setOperationState(RecordingOperationState::Idle);
         setStatusMessage(QString::fromStdString(session.error().message()));
-        emit recordingChanged();
         return;
     }
 
-    segmentCount_ = static_cast<int>(session.value().segmentCount());
+    pendingFinalSession_ = std::move(session).value();
+    pendingSourceStopError_ = sourceStopped.hasValue()
+                                  ? QString{}
+                                  : QString::fromStdString(sourceStopped.error().message());
+    QPointer<StudioController> self{this};
+    auto completion = [self](core::Result<void> result) mutable {
+        if (self) self->handleCompleteFinished(std::move(result));
+    };
+    if (persistence_) {
+        persistence_->complete(*pendingFinalSession_, std::move(completion));
+    } else {
+        completion(core::ok());
+    }
+}
+
+void StudioController::handleCompleteFinished(core::Result<void> result) {
+    if (operationState_ != RecordingOperationState::Finalizing || !pendingFinalSession_) return;
+    if (!result.hasValue()) {
+        pendingFinalSession_.reset();
+        pendingSourceStopError_.clear();
+        setOperationState(RecordingOperationState::Idle);
+        setStatusMessage(QString::fromStdString(result.error().message()));
+        return;
+    }
+
+    segmentCount_ = static_cast<int>(pendingFinalSession_->segmentCount());
     // Always engaged here: the session just stopped successfully. Handling the
     // nullopt branch anyway rather than value_or-ing a zero, because a zero
     // would be indistinguishable from a real zero-length take on screen.
-    if (const auto takeLength = session.value().duration()) {
+    if (const auto takeLength = pendingFinalSession_->duration()) {
         takeDuration_ = formatDuration(*takeLength);
     }
     emit takeSummaryChanged();
 
-    if (!sourceStopped.hasValue()) {
+    const QString finalStatus = pendingSourceStopError_.isEmpty()
+                                    ? tr("Stopped")
+                                    : pendingSourceStopError_;
+    pendingFinalSession_.reset();
+    pendingSourceStopError_.clear();
+    setOperationState(RecordingOperationState::Idle);
+    if (finalStatus != tr("Stopped")) {
         // The take itself is already safely finalised above; failing to
         // release the source is a device-handle problem (CLAUDE.md 9: device
         // errors must reach the user), not a recording-content problem, but it
         // must still not be swallowed the way a bare static_cast<void> would.
-        setStatusMessage(QString::fromStdString(sourceStopped.error().message()));
+        setStatusMessage(finalStatus);
     } else {
         setStatusMessage(tr("Stopped"));
     }
-    emit recordingChanged();
 }
 
 void StudioController::onCaptureTick() {
-    if (!recording_) {
+    if (!isRecording()) {
         return;
     }
 
@@ -207,6 +297,14 @@ void StudioController::onCaptureTick() {
     if (auto accepted = recorder_->accept(frame.value()); !accepted.hasValue()) {
         setStatusMessage(QString::fromStdString(accepted.error().message()));
     }
+}
+
+void StudioController::setOperationState(RecordingOperationState state) {
+    if (operationState_ == state) return;
+    const bool wasRecording = isRecording();
+    operationState_ = state;
+    emit operationStateChanged();
+    if (wasRecording != isRecording()) emit recordingChanged();
 }
 
 void StudioController::setStatusMessage(QString message) {

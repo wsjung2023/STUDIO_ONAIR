@@ -116,4 +116,32 @@ void ProjectWorker::refreshRecentProjects() {
     emit recentScanFinished(rows, recoveries, {});
 }
 
+void ProjectWorker::beginRecording(quint64 commandId, std::filesystem::path path,
+                                   domain::SessionId sessionId,
+                                   core::TimestampNs startedAt) {
+    auto result = store_->beginRecording(path, sessionId, startedAt, core::Utc::now());
+    emit recordingCommandFinished(
+        commandId, result.hasValue(),
+        result.hasValue() ? 0 : static_cast<int>(result.error().code()),
+        result.hasValue() ? QString{} : QString::fromStdString(result.error().message()));
+}
+
+void ProjectWorker::completeRecording(quint64 commandId, std::filesystem::path path,
+                                      domain::RecordingSession session) {
+    auto result = store_->completeRecording(path, session, core::Utc::now());
+    emit recordingCommandFinished(
+        commandId, result.hasValue(),
+        result.hasValue() ? 0 : static_cast<int>(result.error().code()),
+        result.hasValue() ? QString{} : QString::fromStdString(result.error().message()));
+}
+
+void ProjectWorker::abortRecording(quint64 commandId, std::filesystem::path path,
+                                   domain::SessionId sessionId, std::string reason) {
+    auto result = store_->abortRecording(path, sessionId, reason, core::Utc::now());
+    emit recordingCommandFinished(
+        commandId, result.hasValue(),
+        result.hasValue() ? 0 : static_cast<int>(result.error().code()),
+        result.hasValue() ? QString{} : QString::fromStdString(result.error().message()));
+}
+
 }  // namespace creator::app

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/IRecordingPersistence.h"
 #include "capture/IPullCaptureSource.h"
 #include "recorder/IRecorder.h"
 
@@ -8,8 +9,11 @@
 #include <QTimer>
 
 #include <memory>
+#include <optional>
 
 namespace creator::app {
+
+enum class RecordingOperationState { Idle, Preparing, Recording, Finalizing };
 
 /// The only object QML is allowed to talk to.
 ///
@@ -26,6 +30,7 @@ namespace creator::app {
 /// this class changes to register a frame callback instead of ticking a timer.
 class StudioController final : public QObject {
     Q_OBJECT
+    Q_PROPERTY(bool busy READ isBusy NOTIFY operationStateChanged)
     Q_PROPERTY(bool recording READ isRecording NOTIFY recordingChanged)
     Q_PROPERTY(int segmentCount READ segmentCount NOTIFY takeSummaryChanged)
     Q_PROPERTY(QString takeDuration READ takeDuration NOTIFY takeSummaryChanged)
@@ -40,10 +45,19 @@ public:
     StudioController(std::unique_ptr<creator::capture::IPullCaptureSource> source,
                      std::unique_ptr<creator::recorder::IRecorder> recorder,
                      QObject* parent = nullptr);
+    StudioController(std::unique_ptr<creator::capture::IPullCaptureSource> source,
+                     std::unique_ptr<creator::recorder::IRecorder> recorder,
+                     IRecordingPersistence* persistence, QObject* parent = nullptr);
 
     ~StudioController() override;
 
-    [[nodiscard]] bool isRecording() const noexcept { return recording_; }
+    [[nodiscard]] bool isBusy() const noexcept {
+        return operationState_ == RecordingOperationState::Preparing ||
+               operationState_ == RecordingOperationState::Finalizing;
+    }
+    [[nodiscard]] bool isRecording() const noexcept {
+        return operationState_ == RecordingOperationState::Recording;
+    }
     [[nodiscard]] int segmentCount() const noexcept { return segmentCount_; }
     [[nodiscard]] QString takeDuration() const { return takeDuration_; }
     [[nodiscard]] QString statusMessage() const { return statusMessage_; }
@@ -61,18 +75,27 @@ public slots:
     void onCaptureTick();
 
 signals:
+    void operationStateChanged();
     void recordingChanged();
     void takeSummaryChanged();
     void statusMessageChanged();
 
 private:
+    void setOperationState(RecordingOperationState state);
+    void handleBeginFinished(core::Result<void> result);
+    void abortFailedStart(QString startError);
+    void handleCompleteFinished(core::Result<void> result);
     void setStatusMessage(QString message);
     void resetTakeSummary();
 
     std::unique_ptr<creator::capture::IPullCaptureSource> source_;
     std::unique_ptr<creator::recorder::IRecorder> recorder_;
+    IRecordingPersistence* persistence_{};
     QTimer captureTimer_;
-    bool recording_{false};
+    RecordingOperationState operationState_{RecordingOperationState::Idle};
+    std::optional<domain::SessionId> pendingSessionId_;
+    std::optional<domain::RecordingSession> pendingFinalSession_;
+    QString pendingSourceStopError_;
     int segmentCount_{0};
     QString takeDuration_{QStringLiteral("00:00:00")};
     QString statusMessage_;

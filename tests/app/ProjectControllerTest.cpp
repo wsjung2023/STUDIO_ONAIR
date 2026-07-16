@@ -6,6 +6,8 @@
 
 #include <QSignalSpy>
 #include <QThread>
+#include <QEventLoop>
+#include <QTimer>
 #include <QUrl>
 
 #include <gtest/gtest.h>
@@ -153,6 +155,62 @@ TEST_F(ProjectControllerTest, RegistryBacksUpMalformedFileOnNextRemember) {
         }
     }
     EXPECT_TRUE(foundBackup);
+}
+
+TEST_F(ProjectControllerTest, NoOpenProjectFailsAsynchronouslyExactlyOnce) {
+    int completionCount = 0;
+    creator::core::ErrorCode errorCode = creator::core::ErrorCode::Unknown;
+    Qt::HANDLE completionThread = nullptr;
+    QEventLoop loop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+
+    controller_->begin(SessionId::create("session-1").value(), {},
+                       [&](creator::core::Result<void> result) {
+                           ++completionCount;
+                           completionThread = QThread::currentThreadId();
+                           if (!result.hasValue()) errorCode = result.error().code();
+                           loop.quit();
+                       });
+
+    EXPECT_EQ(completionCount, 0);
+    timeout.start(3000);
+    loop.exec();
+    EXPECT_EQ(completionCount, 1);
+    EXPECT_EQ(errorCode, creator::core::ErrorCode::InvalidState);
+    EXPECT_EQ(completionThread, QThread::currentThreadId());
+}
+
+TEST_F(ProjectControllerTest, RecordingPersistenceLeavesAndReturnsToUiThread) {
+    QSignalSpy opened{controller_.get(), &ProjectController::projectOpened};
+    controller_->createProject(
+        QUrl::fromLocalFile(QString::fromStdWString(packagePath_.wstring())),
+        QStringLiteral("Recording"));
+    ASSERT_TRUE(opened.wait(3000));
+    fake_->holdNextCall();
+
+    int completionCount = 0;
+    Qt::HANDLE completionThread = nullptr;
+    QEventLoop loop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    controller_->begin(SessionId::create("session-1").value(), {},
+                       [&](creator::core::Result<void> result) {
+                           EXPECT_TRUE(result.hasValue());
+                           ++completionCount;
+                           completionThread = QThread::currentThreadId();
+                           loop.quit();
+                       });
+
+    EXPECT_EQ(completionCount, 0);
+    fake_->releaseHeldCall();
+    timeout.start(3000);
+    loop.exec();
+    EXPECT_EQ(completionCount, 1);
+    EXPECT_NE(fake_->lastThreadId(), QThread::currentThreadId());
+    EXPECT_EQ(completionThread, QThread::currentThreadId());
 }
 
 }  // namespace

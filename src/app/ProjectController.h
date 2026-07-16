@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/IRecordingPersistence.h"
 #include "project_store/IProjectPackageStore.h"
 
 #include <QObject>
@@ -11,12 +12,13 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 
 namespace creator::app {
 
 class ProjectWorker;
 
-class ProjectController final : public QObject {
+class ProjectController final : public QObject, public IRecordingPersistence {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(bool hasOpenProject READ hasOpenProject NOTIFY projectChanged)
@@ -47,6 +49,13 @@ public:
     Q_INVOKABLE void leaveRecoveryForLater();
     Q_INVOKABLE void refreshRecentProjects();
 
+    void begin(const domain::SessionId& sessionId, core::TimestampNs startedAt,
+               Completion completion) override;
+    void complete(const domain::RecordingSession& session,
+                  Completion completion) override;
+    void abort(const domain::SessionId& sessionId, std::string reason,
+               Completion completion) override;
+
 signals:
     void busyChanged();
     void projectChanged();
@@ -64,6 +73,9 @@ private:
     [[nodiscard]] std::optional<std::filesystem::path> localPath(const QUrl& url);
     void handleOpenFinished(bool success, QVariantMap project, QVariantList recoveries,
                             QString errorMessage);
+    [[nodiscard]] std::optional<std::filesystem::path> recordingPath() const;
+    void failRecordingCommandAsync(Completion completion);
+    [[nodiscard]] quint64 retainRecordingCompletion(Completion completion);
 
     QThread workerThread_;
     ProjectWorker* worker_{};
@@ -73,6 +85,8 @@ private:
     QVariantList recentProjects_;
     QVariantList recoveries_;
     QString statusMessage_;
+    quint64 nextRecordingCommandId_{1};
+    std::unordered_map<quint64, Completion> recordingCompletions_;
 };
 
 }  // namespace creator::app
