@@ -28,5 +28,13 @@ Using MLT as the product data model would couple project migrations and UX to an
 - The selected runtime is copied instead of running upstream's broad install
   target. A complete SHA-256 manifest is verified before MLT factory
   initialization.
+- Shipping builds stage only runtime roles under the application-local
+  `mlt-runtime` directory. On Windows the two MLT imports are delay-loaded,
+  the verified runtime `bin` directory is registered explicitly, and no
+  development-machine MLT path is compiled into the application.
+- Video layering uses MLT's LGPL core `composite` transition because the other
+  compositors belong to excluded optional modules. Audio layering uses the
+  LGPL core `mix` transition. Service identifiers are selected only by the
+  product-owned graph builder; project data cannot choose arbitrary services.
 - This is an engineering distribution boundary, not a conclusion about codec
   patent or royalty obligations; those remain an R4 release gate.
