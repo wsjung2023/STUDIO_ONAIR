@@ -2,6 +2,7 @@
 
 #include "capture/IScreenCaptureDiscovery.h"
 #include "capture/IScreenCapturePermission.h"
+#include "capture/IScreenCaptureSource.h"
 #include "capture/IScreenCaptureSourceFactory.h"
 #include "capture/ScreenCaptureTypes.h"
 #include "core/AppError.h"
@@ -29,6 +30,7 @@ using creator::app::ScreenCaptureState;
 using creator::capture::IScreenCaptureDiscovery;
 using creator::capture::IScreenCapturePermission;
 using creator::capture::IScreenCaptureSourceFactory;
+using creator::capture::IScreenCaptureSource;
 using creator::capture::IVideoFrameSink;
 using creator::capture::ScreenCapturePermissionStatus;
 using creator::capture::ScreenCaptureTarget;
@@ -104,7 +106,7 @@ public:
     std::optional<Completion> pending;
 };
 
-class DeferredStartSource final : public creator::capture::ICaptureSource {
+class DeferredStartSource final : public IScreenCaptureSource {
 public:
     explicit DeferredStartSource(std::shared_ptr<IVideoFrameSink> sink)
         : sink_(std::move(sink)) {}
@@ -113,14 +115,28 @@ public:
         return SourceId::create("deferred-screen").value();
     }
     [[nodiscard]] std::string displayName() const override { return "Deferred Screen"; }
-    Result<void> start(const creator::capture::CaptureConfig&) override {
+    Result<void> start(const creator::capture::CaptureConfig& config) override {
+        lastConfig = config;
         return creator::core::ok();
     }
     Result<void> stop() override { return creator::core::ok(); }
+    void stopAsync(StopCompletion completion) override {
+        ++stopCalls;
+        pendingStop = std::move(completion);
+    }
     [[nodiscard]] creator::capture::CaptureStats stats() const noexcept override {
         return {};
     }
     void confirmStarted() { sink_->onCaptureStarted(); }
+    void completeStop(Result<void> result = creator::core::ok()) {
+        auto completion = std::move(*pendingStop);
+        pendingStop.reset();
+        completion(std::move(result));
+    }
+
+    creator::capture::CaptureConfig lastConfig;
+    int stopCalls{0};
+    std::optional<StopCompletion> pendingStop;
 
 private:
     std::shared_ptr<IVideoFrameSink> sink_;
@@ -128,7 +144,7 @@ private:
 
 class SourceFactoryFake final : public IScreenCaptureSourceFactory {
 public:
-    Result<std::unique_ptr<creator::capture::ICaptureSource>> create(
+    Result<std::unique_ptr<IScreenCaptureSource>> create(
         const CaptureTargetId& targetId,
         std::shared_ptr<IVideoFrameSink> sink) override {
         ++createCalls;
@@ -141,12 +157,12 @@ public:
         if (deferStart) {
             auto source = std::make_unique<DeferredStartSource>(std::move(sink));
             lastDeferredSource = source.get();
-            return std::unique_ptr<creator::capture::ICaptureSource>{std::move(source)};
+            return std::unique_ptr<IScreenCaptureSource>{std::move(source)};
         }
         auto source = std::make_unique<ManualPushCaptureSource>(
             SourceId::create("preview-screen").value(), "Preview Screen", std::move(sink));
         lastSource = source.get();
-        return std::unique_ptr<creator::capture::ICaptureSource>{std::move(source)};
+        return std::unique_ptr<IScreenCaptureSource>{std::move(source)};
     }
 
     int createCalls{0};
@@ -283,6 +299,38 @@ TEST(ScreenCaptureControllerTest, DoesNotClaimPreviewBeforeNativeStartConfirmati
     EXPECT_FALSE(fixture.controller->busy());
 }
 
+TEST(ScreenCaptureControllerTest, PassesSelectedTargetSizeToNativeSource) {
+    ControllerFixture fixture{ScreenCapturePermissionStatus::Granted};
+    fixture.controller->initialize();
+    fixture.finishDiscovery({windowTarget()});
+    fixture.factoryFake->deferStart = true;
+
+    fixture.controller->startPreview();
+
+    ASSERT_NE(fixture.factoryFake->lastDeferredSource, nullptr);
+    EXPECT_EQ(fixture.factoryFake->lastDeferredSource->lastConfig.targetWidth, 1280u);
+    EXPECT_EQ(fixture.factoryFake->lastDeferredSource->lastConfig.targetHeight, 720u);
+}
+
+TEST(ScreenCaptureControllerTest, CanStopWhileNativeStartIsPending) {
+    ControllerFixture fixture{ScreenCapturePermissionStatus::Granted};
+    fixture.controller->initialize();
+    fixture.finishDiscovery({displayTarget()});
+    fixture.factoryFake->deferStart = true;
+    fixture.controller->startPreview();
+    auto* source = fixture.factoryFake->lastDeferredSource;
+    ASSERT_NE(source, nullptr);
+    ASSERT_TRUE(fixture.controller->canStopPreview());
+
+    fixture.controller->stopPreview();
+    source->confirmStarted();
+
+    EXPECT_EQ(fixture.controller->state(), ScreenCaptureState::Stopping);
+    source->completeStop();
+    drainQueuedCalls();
+    EXPECT_EQ(fixture.controller->state(), ScreenCaptureState::Ready);
+}
+
 TEST(ScreenCaptureControllerTest, TerminalSourceFailureStopsAndSurfacesError) {
     ControllerFixture fixture{ScreenCapturePermissionStatus::Granted};
     fixture.controller->initialize();
@@ -308,10 +356,54 @@ TEST(ScreenCaptureControllerTest, StopReturnsToReadyAndReleasesSource) {
     ASSERT_TRUE(fixture.controller->previewing());
 
     fixture.controller->stopPreview();
+    drainQueuedCalls();
 
     EXPECT_EQ(fixture.controller->state(), ScreenCaptureState::Ready);
     EXPECT_FALSE(fixture.controller->previewing());
     EXPECT_EQ(fixture.controller->statusMessage(), QStringLiteral("Preview stopped"));
+}
+
+TEST(ScreenCaptureControllerTest, RemainsStoppingUntilNativeStopCompletes) {
+    ControllerFixture fixture{ScreenCapturePermissionStatus::Granted};
+    fixture.controller->initialize();
+    fixture.finishDiscovery({displayTarget()});
+    fixture.factoryFake->deferStart = true;
+    fixture.controller->startPreview();
+    auto* source = fixture.factoryFake->lastDeferredSource;
+    ASSERT_NE(source, nullptr);
+    source->confirmStarted();
+    fixture.controller->pollCapture();
+
+    fixture.controller->stopPreview();
+
+    EXPECT_EQ(fixture.controller->state(), ScreenCaptureState::Stopping);
+    EXPECT_TRUE(fixture.controller->busy());
+    EXPECT_EQ(source->stopCalls, 1);
+
+    source->completeStop();
+    drainQueuedCalls();
+
+    EXPECT_EQ(fixture.controller->state(), ScreenCaptureState::Ready);
+    EXPECT_EQ(fixture.controller->statusMessage(), QStringLiteral("Preview stopped"));
+}
+
+TEST(ScreenCaptureControllerTest, SurfacesNativeStopFailureAfterCompletion) {
+    ControllerFixture fixture{ScreenCapturePermissionStatus::Granted};
+    fixture.controller->initialize();
+    fixture.finishDiscovery({displayTarget()});
+    fixture.factoryFake->deferStart = true;
+    fixture.controller->startPreview();
+    auto* source = fixture.factoryFake->lastDeferredSource;
+    ASSERT_NE(source, nullptr);
+
+    fixture.controller->stopPreview();
+    source->completeStop(
+        AppError{ErrorCode::IoFailure, "ScreenCaptureKit stop failed"});
+    drainQueuedCalls();
+
+    EXPECT_EQ(fixture.controller->state(), ScreenCaptureState::Error);
+    EXPECT_EQ(fixture.controller->statusMessage(),
+              QStringLiteral("ScreenCaptureKit stop failed"));
 }
 
 TEST(ScreenCaptureControllerTest, FactoryFailureDoesNotLeaveStartingState) {

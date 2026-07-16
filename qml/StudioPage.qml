@@ -102,12 +102,12 @@ Item {
                     }
 
                     Button {
-                        text: screenCaptureController.previewing
+                        text: screenCaptureController.canStopPreview
                               ? qsTr("Stop Preview") : qsTr("Start Preview")
-                        enabled: !screenCaptureController.busy
-                                 && (screenCaptureController.previewing
-                                     || screenCaptureController.selectedTargetId.length > 0)
-                        onClicked: screenCaptureController.previewing
+                        enabled: screenCaptureController.canStopPreview
+                                 || (!screenCaptureController.busy
+                                     && screenCaptureController.selectedTargetId.length > 0)
+                        onClicked: screenCaptureController.canStopPreview
                                    ? screenCaptureController.stopPreview()
                                    : screenCaptureController.startPreview()
                     }
@@ -173,12 +173,14 @@ Item {
 
                 Label {
                     Layout.fillWidth: true
-                    text: qsTr("%1×%2  %3 fps  received %4  capture drops %5  preview replacements %6")
+                    text: qsTr("%1×%2  %3 fps  received %4  reported drops %5  ignored %6  invalid %7  preview replacements %8")
                           .arg(screenCaptureController.actualWidth)
                           .arg(screenCaptureController.actualHeight)
                           .arg(screenCaptureController.currentFps.toFixed(1))
                           .arg(screenCaptureController.receivedFrames)
                           .arg(screenCaptureController.droppedFrames)
+                          .arg(screenCaptureController.ignoredFrames)
+                          .arg(screenCaptureController.invalidFrames)
                           .arg(screenCaptureController.replacedPreviewFrames)
                     font.family: "monospace"
                     font.pixelSize: 12
@@ -219,7 +221,7 @@ Item {
 
                 Label { text: qsTr("Audio Mixer: —") }
                 Label {
-                    text: qsTr("Capture Drops: %1").arg(
+                    text: qsTr("Reported Capture Drops: %1").arg(
                               screenCaptureController.droppedFrames)
                 }
                 Label { text: qsTr("Disk: —") }

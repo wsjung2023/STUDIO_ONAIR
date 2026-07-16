@@ -16,6 +16,20 @@ namespace {
 constexpr int kPollIntervalMs = 16;
 constexpr capture::CaptureConfig kPreviewConfig{};
 
+capture::CaptureConfig previewConfigFor(const capture::ScreenCaptureTarget& target) {
+    auto config = kPreviewConfig;
+    const auto widthScale = static_cast<double>(config.targetWidth) /
+                            static_cast<double>(target.width());
+    const auto heightScale = static_cast<double>(config.targetHeight) /
+                             static_cast<double>(target.height());
+    const auto scale = std::min({1.0, widthScale, heightScale});
+    config.targetWidth = std::max(
+        1u, static_cast<std::uint32_t>(static_cast<double>(target.width()) * scale));
+    config.targetHeight = std::max(
+        1u, static_cast<std::uint32_t>(static_cast<double>(target.height()) * scale));
+    return config;
+}
+
 QString fromUtf8(const std::string& value) {
     return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
 }
@@ -197,7 +211,7 @@ void ScreenCaptureController::startPreview() {
         return;
     }
     source_ = std::move(created).value();
-    auto started = source_->start(kPreviewConfig);
+    auto started = source_->start(previewConfigFor(*target));
     if (!started.hasValue()) {
         const QString error = fromUtf8(started.error().message());
         releaseSource();
@@ -211,6 +225,8 @@ void ScreenCaptureController::startPreview() {
     actualHeight_ = 0;
     receivedFrames_ = 0;
     droppedFrames_ = 0;
+    ignoredFrames_ = 0;
+    invalidFrames_ = 0;
     replacedPreviewFrames_ = 0;
     currentFps_ = 0.0;
     emit statsChanged();
@@ -229,12 +245,28 @@ void ScreenCaptureController::stopPreview() {
     setState(ScreenCaptureState::Stopping);
     pollTimer_.stop();
     updateStats();
-    auto stopped = source_->stop();
+    const auto generation = ++generation_;
+    QPointer<ScreenCaptureController> self{this};
+    source_->stopAsync([self, generation](auto result) mutable {
+        auto* context = QCoreApplication::instance();
+        if (!context) return;
+        QMetaObject::invokeMethod(
+            context,
+            [self, generation, result = std::move(result)]() mutable {
+                if (self) self->handleStopResult(generation, std::move(result));
+            },
+            Qt::QueuedConnection);
+    });
+}
+
+void ScreenCaptureController::handleStopResult(std::uint64_t generation,
+                                               core::Result<void> result) {
+    if (generation != generation_ || state_ != ScreenCaptureState::Stopping) return;
     source_.reset();
     mailbox_.reset();
-    if (!stopped.hasValue()) {
+    if (!result.hasValue()) {
         setState(ScreenCaptureState::Error);
-        setStatusMessage(fromUtf8(stopped.error().message()));
+        setStatusMessage(fromUtf8(result.error().message()));
         return;
     }
     setState(targetSnapshot_.empty() ? ScreenCaptureState::Idle : ScreenCaptureState::Ready);
@@ -242,7 +274,7 @@ void ScreenCaptureController::stopPreview() {
 }
 
 void ScreenCaptureController::pollCapture() {
-    if (!mailbox_) return;
+    if (!mailbox_ || state_ == ScreenCaptureState::Stopping) return;
     updateStats();
     auto error = mailbox_->takeError();
     if (!error) {
@@ -299,9 +331,12 @@ void ScreenCaptureController::updateStats() {
     const auto mailboxStats = mailbox_->stats();
     const auto received = static_cast<qulonglong>(sourceStats.receivedFrames);
     const auto dropped = static_cast<qulonglong>(sourceStats.droppedFrames);
+    const auto ignored = static_cast<qulonglong>(sourceStats.ignoredFrames);
+    const auto invalid = static_cast<qulonglong>(sourceStats.invalidFrames);
     const auto replaced = static_cast<qulonglong>(mailboxStats.replacedFrames);
     if (actualWidth_ == mailboxStats.lastWidth && actualHeight_ == mailboxStats.lastHeight &&
         receivedFrames_ == received && droppedFrames_ == dropped &&
+        ignoredFrames_ == ignored && invalidFrames_ == invalid &&
         replacedPreviewFrames_ == replaced && currentFps_ == sourceStats.currentFps) {
         return;
     }
@@ -309,6 +344,8 @@ void ScreenCaptureController::updateStats() {
     actualHeight_ = mailboxStats.lastHeight;
     receivedFrames_ = received;
     droppedFrames_ = dropped;
+    ignoredFrames_ = ignored;
+    invalidFrames_ = invalid;
     replacedPreviewFrames_ = replaced;
     currentFps_ = sourceStats.currentFps;
     emit statsChanged();

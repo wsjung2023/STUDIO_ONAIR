@@ -21,10 +21,9 @@ public:
 
 class UnsupportedScreenCaptureSourceFactory final : public IScreenCaptureSourceFactory {
 public:
-    [[nodiscard]] creator::core::Result<std::unique_ptr<ICaptureSource>> create(
+    [[nodiscard]] creator::core::Result<std::unique_ptr<IScreenCaptureSource>> create(
         const creator::domain::CaptureTargetId& targetId,
         std::shared_ptr<IVideoFrameSink> sink) override;
 };
 
 }  // namespace creator::capture
-

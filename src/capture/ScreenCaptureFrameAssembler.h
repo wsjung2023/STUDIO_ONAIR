@@ -5,6 +5,7 @@
 #include "media/MediaTypes.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -18,6 +19,11 @@ struct NativeScreenFrame final {
     NativeTimestamp timestamp;
     std::uint32_t width{0};
     std::uint32_t height{0};
+    creator::media::PixelRect visibleRect{};
+    std::uint32_t contentWidth{0};
+    std::uint32_t contentHeight{0};
+    double contentScale{1.0};
+    double pointPixelScale{1.0};
     creator::media::PixelFormat pixelFormat{creator::media::PixelFormat::Unknown};
     std::shared_ptr<void> platformHandle;
 };
@@ -27,14 +33,19 @@ struct NativeScreenFrame final {
 /// complete is an adapter error and must not be silently presented.
 class ScreenCaptureFrameAssembler final {
 public:
+    using ProjectAnchorProvider =
+        std::function<creator::core::TimestampNs()>;
+
+    ScreenCaptureFrameAssembler();
     explicit ScreenCaptureFrameAssembler(creator::core::TimestampNs projectAnchor) noexcept;
+    explicit ScreenCaptureFrameAssembler(ProjectAnchorProvider anchorProvider);
 
     [[nodiscard]] creator::core::Result<std::optional<creator::media::VideoFrame>> assemble(
         NativeScreenFrame frame);
 
 private:
-    CaptureTimestampMapper timestampMapper_;
+    ProjectAnchorProvider anchorProvider_;
+    std::optional<CaptureTimestampMapper> timestampMapper_;
 };
 
 }  // namespace creator::capture
-

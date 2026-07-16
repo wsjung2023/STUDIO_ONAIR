@@ -7,6 +7,7 @@ cs_add_qtfree_library(cs_capture
         IScreenCaptureDiscovery.h
         IScreenCapturePermission.h
         IScreenCaptureSourceFactory.h
+        IScreenCaptureSource.h
         IVideoFrameSink.h
         LatestVideoFrameMailbox.h
         LatestVideoFrameMailbox.cpp
@@ -16,6 +17,8 @@ cs_add_qtfree_library(cs_capture
         ScreenCaptureTypes.cpp
         ScreenCaptureFrameAssembler.h
         ScreenCaptureFrameAssembler.cpp
+        ScreenCaptureStopCoordinator.h
+        ScreenCaptureStopCoordinator.cpp
         UnsupportedScreenCaptureBackend.h
         UnsupportedScreenCaptureBackend.cpp
     DEPENDS

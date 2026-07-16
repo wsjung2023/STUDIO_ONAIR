@@ -48,6 +48,28 @@ TEST(ScreenCaptureFrameAssemblerTest, IgnoresIncompleteFrameWithoutAnchoringTime
     EXPECT_EQ(firstComplete.value()->timestamp.time_since_epoch().count(), 5'000);
 }
 
+TEST(ScreenCaptureFrameAssemblerTest, SamplesProjectClockAtFirstValidCompleteFrame) {
+    int anchorCalls = 0;
+    ScreenCaptureFrameAssembler assembler{[&anchorCalls] {
+        ++anchorCalls;
+        return TimestampNs{ProjectClock::duration{42'000}};
+    }};
+    auto idle = completeFrame(100);
+    idle.status = NativeScreenFrameStatus::Idle;
+
+    ASSERT_TRUE(assembler.assemble(std::move(idle)).hasValue());
+    EXPECT_EQ(anchorCalls, 0);
+
+    const auto first = assembler.assemble(completeFrame(500));
+
+    ASSERT_TRUE(first.hasValue());
+    ASSERT_TRUE(first.value().has_value());
+    EXPECT_EQ(anchorCalls, 1);
+    EXPECT_EQ(first.value()->timestamp.time_since_epoch().count(), 42'000);
+    ASSERT_TRUE(assembler.assemble(completeFrame(501)).hasValue());
+    EXPECT_EQ(anchorCalls, 1);
+}
+
 TEST(ScreenCaptureFrameAssemblerTest, BuildsNeutralFrameAndRetainsNativeHandle) {
     ScreenCaptureFrameAssembler assembler{TimestampNs{ProjectClock::duration{0}}};
     auto nativeHandle = handle();
@@ -64,6 +86,38 @@ TEST(ScreenCaptureFrameAssemblerTest, BuildsNeutralFrameAndRetainsNativeHandle) 
     EXPECT_EQ(result.value()->height, 1440u);
     EXPECT_EQ(result.value()->pixelFormat, PixelFormat::Bgra8);
     EXPECT_EQ(result.value()->platformHandle, nativeHandle);
+}
+
+TEST(ScreenCaptureFrameAssemblerTest, PreservesVisibleContentGeometry) {
+    ScreenCaptureFrameAssembler assembler{TimestampNs{ProjectClock::duration{0}}};
+    auto native = completeFrame(0);
+    native.visibleRect = {.x = 120, .y = 80, .width = 1600, .height = 900};
+    native.contentWidth = 2560;
+    native.contentHeight = 1440;
+    native.contentScale = 0.625;
+    native.pointPixelScale = 2.0;
+
+    const auto result = assembler.assemble(std::move(native));
+
+    ASSERT_TRUE(result.hasValue());
+    ASSERT_TRUE(result.value().has_value());
+    EXPECT_EQ(result.value()->visibleRect,
+              (creator::media::PixelRect{120, 80, 1600, 900}));
+    EXPECT_EQ(result.value()->contentWidth, 2560u);
+    EXPECT_EQ(result.value()->contentHeight, 1440u);
+    EXPECT_DOUBLE_EQ(result.value()->contentScale, 0.625);
+    EXPECT_DOUBLE_EQ(result.value()->pointPixelScale, 2.0);
+}
+
+TEST(ScreenCaptureFrameAssemblerTest, RejectsVisibleRectOutsideSurface) {
+    ScreenCaptureFrameAssembler assembler{TimestampNs{ProjectClock::duration{0}}};
+    auto native = completeFrame(0);
+    native.visibleRect = {.x = 1800, .y = 0, .width = 200, .height = 1080};
+
+    const auto result = assembler.assemble(std::move(native));
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
 }
 
 TEST(ScreenCaptureFrameAssemblerTest, RejectsMalformedCompleteFrame) {
@@ -93,4 +147,3 @@ TEST(ScreenCaptureFrameAssemblerTest, RejectsBackwardCompleteTimestamp) {
 }
 
 }  // namespace
-

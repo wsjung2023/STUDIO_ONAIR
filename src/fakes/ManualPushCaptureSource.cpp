@@ -41,6 +41,10 @@ Result<void> ManualPushCaptureSource::stop() {
     return core::ok();
 }
 
+void ManualPushCaptureSource::stopAsync(StopCompletion completion) {
+    completion(stop());
+}
+
 capture::CaptureStats ManualPushCaptureSource::stats() const noexcept { return stats_; }
 
 Result<void> ManualPushCaptureSource::pushFrame(media::VideoFrame frame) {

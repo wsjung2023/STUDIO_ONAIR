@@ -1,6 +1,6 @@
 #pragma once
 
-#include "capture/ICaptureSource.h"
+#include "capture/IScreenCaptureSource.h"
 #include "capture/IScreenCaptureDiscovery.h"
 #include "capture/IScreenCapturePermission.h"
 #include "capture/IScreenCaptureSourceFactory.h"
@@ -40,6 +40,7 @@ class ScreenCaptureController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy NOTIFY captureStateChanged)
     Q_PROPERTY(bool previewing READ previewing NOTIFY captureStateChanged)
+    Q_PROPERTY(bool canStopPreview READ canStopPreview NOTIFY captureStateChanged)
     Q_PROPERTY(bool permissionRequired READ permissionRequired NOTIFY captureStateChanged)
     Q_PROPERTY(QVariantList targets READ targets NOTIFY targetsChanged)
     Q_PROPERTY(QString selectedTargetId READ selectedTargetId NOTIFY selectedTargetChanged)
@@ -48,6 +49,8 @@ class ScreenCaptureController final : public QObject {
     Q_PROPERTY(quint32 actualHeight READ actualHeight NOTIFY statsChanged)
     Q_PROPERTY(qulonglong receivedFrames READ receivedFrames NOTIFY statsChanged)
     Q_PROPERTY(qulonglong droppedFrames READ droppedFrames NOTIFY statsChanged)
+    Q_PROPERTY(qulonglong ignoredFrames READ ignoredFrames NOTIFY statsChanged)
+    Q_PROPERTY(qulonglong invalidFrames READ invalidFrames NOTIFY statsChanged)
     Q_PROPERTY(qulonglong replacedPreviewFrames READ replacedPreviewFrames NOTIFY statsChanged)
     Q_PROPERTY(double currentFps READ currentFps NOTIFY statsChanged)
 
@@ -64,6 +67,10 @@ public:
     [[nodiscard]] bool previewing() const noexcept {
         return state_ == ScreenCaptureState::Previewing;
     }
+    [[nodiscard]] bool canStopPreview() const noexcept {
+        return state_ == ScreenCaptureState::Starting ||
+               state_ == ScreenCaptureState::Previewing;
+    }
     [[nodiscard]] bool permissionRequired() const noexcept {
         return state_ == ScreenCaptureState::PermissionRequired;
     }
@@ -74,6 +81,8 @@ public:
     [[nodiscard]] quint32 actualHeight() const noexcept { return actualHeight_; }
     [[nodiscard]] qulonglong receivedFrames() const noexcept { return receivedFrames_; }
     [[nodiscard]] qulonglong droppedFrames() const noexcept { return droppedFrames_; }
+    [[nodiscard]] qulonglong ignoredFrames() const noexcept { return ignoredFrames_; }
+    [[nodiscard]] qulonglong invalidFrames() const noexcept { return invalidFrames_; }
     [[nodiscard]] qulonglong replacedPreviewFrames() const noexcept {
         return replacedPreviewFrames_;
     }
@@ -109,6 +118,8 @@ private:
     void handleDiscoveryResult(
         std::uint64_t generation,
         creator::core::Result<std::vector<creator::capture::ScreenCaptureTarget>> result);
+    void handleStopResult(std::uint64_t generation,
+                          creator::core::Result<void> result);
     void setState(ScreenCaptureState state);
     void setStatusMessage(QString message);
     void rebuildTargetModel();
@@ -119,7 +130,7 @@ private:
     std::unique_ptr<creator::capture::IScreenCapturePermission> permission_;
     std::unique_ptr<creator::capture::IScreenCaptureDiscovery> discovery_;
     std::unique_ptr<creator::capture::IScreenCaptureSourceFactory> sourceFactory_;
-    std::unique_ptr<creator::capture::ICaptureSource> source_;
+    std::unique_ptr<creator::capture::IScreenCaptureSource> source_;
     std::shared_ptr<creator::capture::LatestVideoFrameMailbox> mailbox_;
     std::vector<creator::capture::ScreenCaptureTarget> targetSnapshot_;
     QVariantList targetModel_;
@@ -132,9 +143,10 @@ private:
     quint32 actualHeight_{0};
     qulonglong receivedFrames_{0};
     qulonglong droppedFrames_{0};
+    qulonglong ignoredFrames_{0};
+    qulonglong invalidFrames_{0};
     qulonglong replacedPreviewFrames_{0};
     double currentFps_{0.0};
 };
 
 }  // namespace creator::app
-

@@ -18,8 +18,13 @@ void LatestVideoFrameMailbox::onVideoFrame(media::VideoFrame frame) noexcept {
         return;
     }
     ++stats_.publishedFrames;
-    stats_.lastWidth = frame.width;
-    stats_.lastHeight = frame.height;
+    stats_.lastWidth = frame.contentWidth != 0
+                           ? frame.contentWidth
+                           : (frame.visibleRect.width != 0 ? frame.visibleRect.width : frame.width);
+    stats_.lastHeight = frame.contentHeight != 0
+                            ? frame.contentHeight
+                            : (frame.visibleRect.height != 0 ? frame.visibleRect.height
+                                                             : frame.height);
     if (pendingFrame_) {
         ++stats_.replacedFrames;
     }

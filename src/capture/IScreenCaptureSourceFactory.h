@@ -1,6 +1,6 @@
 #pragma once
 
-#include "capture/ICaptureSource.h"
+#include "capture/IScreenCaptureSource.h"
 #include "capture/IVideoFrameSink.h"
 #include "core/Result.h"
 #include "domain/Identifiers.h"
@@ -20,7 +20,7 @@ public:
     IScreenCaptureSourceFactory(IScreenCaptureSourceFactory&&) = delete;
     IScreenCaptureSourceFactory& operator=(IScreenCaptureSourceFactory&&) = delete;
 
-    [[nodiscard]] virtual creator::core::Result<std::unique_ptr<ICaptureSource>> create(
+    [[nodiscard]] virtual creator::core::Result<std::unique_ptr<IScreenCaptureSource>> create(
         const creator::domain::CaptureTargetId& targetId,
         std::shared_ptr<IVideoFrameSink> sink) = 0;
 
@@ -29,4 +29,3 @@ protected:
 };
 
 }  // namespace creator::capture
-

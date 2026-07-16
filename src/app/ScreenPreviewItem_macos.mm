@@ -31,7 +31,11 @@ public:
             return false;
         }
         if (frame.width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
-            frame.height > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+            frame.height > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+            frame.contentWidth >
+                static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+            frame.contentHeight >
+                static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
             return false;
         }
 
@@ -66,6 +70,7 @@ public:
         if (wrapper == nullptr) return false;
 
         clearTexture();
+        previewGeometry_ = previewFrameGeometry(frame);
         retainedFrame_ = std::move(frame);
         metalTexture_ = imported;
         wrapper_ = wrapper;
@@ -76,10 +81,11 @@ public:
     }
 
     [[nodiscard]] QSize frameSize() const noexcept {
-        return retainedFrame_
-                   ? QSize{static_cast<int>(retainedFrame_->width),
-                           static_cast<int>(retainedFrame_->height)}
-                   : QSize{};
+        return previewGeometry_.contentSize;
+    }
+
+    [[nodiscard]] QRectF frameSourceRect() const noexcept {
+        return previewGeometry_.sourceRect;
     }
 
 private:
@@ -89,9 +95,11 @@ private:
         wrapper_ = nullptr;
         metalTexture_ = nil;
         retainedFrame_.reset();
+        previewGeometry_ = {};
     }
 
     std::optional<media::VideoFrame> retainedFrame_;
+    PreviewFrameGeometry previewGeometry_;
     id<MTLTexture> __strong metalTexture_{nil};
     QSGTexture* wrapper_{nullptr};
 };
@@ -125,6 +133,7 @@ QSGNode* ScreenPreviewItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeDat
 
     if (!node->frameSize().isEmpty()) {
         node->setRect(aspectFitRect(node->frameSize(), boundingRect()));
+        node->setSourceRect(node->frameSourceRect());
         node->setTextureCoordinatesTransform(QSGSimpleTextureNode::NoTransform);
     } else {
         postRenderState(false, tr("Waiting for the first ScreenCaptureKit frame"));

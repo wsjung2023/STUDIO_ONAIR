@@ -26,10 +26,9 @@ void UnsupportedScreenCaptureDiscovery::enumerate(Completion completion) {
     completion(unavailable());
 }
 
-core::Result<std::unique_ptr<ICaptureSource>> UnsupportedScreenCaptureSourceFactory::create(
+core::Result<std::unique_ptr<IScreenCaptureSource>> UnsupportedScreenCaptureSourceFactory::create(
     const domain::CaptureTargetId&, std::shared_ptr<IVideoFrameSink>) {
     return unavailable();
 }
 
 }  // namespace creator::capture
-

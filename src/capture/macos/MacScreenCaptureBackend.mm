@@ -2,6 +2,7 @@
 
 #include "capture/NumericCaptureTargetId.h"
 #include "capture/ScreenCaptureFrameAssembler.h"
+#include "capture/ScreenCaptureStopCoordinator.h"
 #include "core/AppError.h"
 #include "core/Timebase.h"
 
@@ -75,6 +76,109 @@ std::uint32_t dimension(CGFloat value) {
     return static_cast<std::uint32_t>(std::ceil(value));
 }
 
+CGFloat pointPixelScaleForWindow(CGRect windowFrame, NSArray<SCDisplay*>* displays) {
+    CGFloat bestScale = 1.0;
+    CGFloat bestIntersectionArea = 0.0;
+    for (SCDisplay* display in displays) {
+        const CGRect displayBounds = CGDisplayBounds(display.displayID);
+        if (displayBounds.size.width <= 0.0) continue;
+        const CGRect intersection = CGRectIntersection(windowFrame, displayBounds);
+        const CGFloat area = CGRectIsNull(intersection)
+                                 ? 0.0
+                                 : intersection.size.width * intersection.size.height;
+        if (area <= bestIntersectionArea) continue;
+        const CGFloat scale = static_cast<CGFloat>(CGDisplayPixelsWide(display.displayID)) /
+                              displayBounds.size.width;
+        if (!std::isfinite(scale) || scale <= 0.0) continue;
+        bestScale = scale;
+        bestIntersectionArea = area;
+    }
+    return bestScale;
+}
+
+std::optional<NativeScreenFrame> completeFrameFrom(
+    NSDictionary* metadata, CVPixelBufferRef pixelBuffer, CMTime presentationTime) {
+    const auto nativeWidth = CVPixelBufferGetWidth(pixelBuffer);
+    const auto nativeHeight = CVPixelBufferGetHeight(pixelBuffer);
+    if (nativeWidth == 0 || nativeHeight == 0 ||
+        nativeWidth > std::numeric_limits<std::uint32_t>::max() ||
+        nativeHeight > std::numeric_limits<std::uint32_t>::max()) {
+        return std::nullopt;
+    }
+
+    id contentRectValue = metadata[SCStreamFrameInfoContentRect];
+    NSNumber* contentScaleValue = metadata[SCStreamFrameInfoContentScale];
+    NSNumber* pointPixelScaleValue = metadata[SCStreamFrameInfoScaleFactor];
+    CGRect contentRect = CGRectZero;
+    if (![contentRectValue isKindOfClass:[NSDictionary class]] ||
+        !CGRectMakeWithDictionaryRepresentation(
+            (__bridge CFDictionaryRef)contentRectValue, &contentRect) ||
+        contentScaleValue == nil || pointPixelScaleValue == nil) {
+        return std::nullopt;
+    }
+
+    const double contentScale = contentScaleValue.doubleValue;
+    const double pointPixelScale = pointPixelScaleValue.doubleValue;
+    if (!std::isfinite(contentRect.origin.x) ||
+        !std::isfinite(contentRect.origin.y) ||
+        !std::isfinite(contentRect.size.width) ||
+        !std::isfinite(contentRect.size.height) || contentRect.size.width <= 0.0 ||
+        contentRect.size.height <= 0.0 || !std::isfinite(contentScale) ||
+        contentScale <= 0.0 || !std::isfinite(pointPixelScale) ||
+        pointPixelScale <= 0.0) {
+        return std::nullopt;
+    }
+
+    const double left = std::clamp(
+        std::floor(contentRect.origin.x * pointPixelScale), 0.0,
+                                   static_cast<double>(nativeWidth));
+    const double top = std::clamp(
+        std::floor(contentRect.origin.y * pointPixelScale), 0.0,
+                                  static_cast<double>(nativeHeight));
+    const double right = std::clamp(
+        std::ceil(CGRectGetMaxX(contentRect) * pointPixelScale), left,
+                                    static_cast<double>(nativeWidth));
+    const double bottom = std::clamp(
+        std::ceil(CGRectGetMaxY(contentRect) * pointPixelScale), top,
+                                     static_cast<double>(nativeHeight));
+    const auto visibleWidth = dimension(right - left);
+    const auto visibleHeight = dimension(bottom - top);
+    const auto contentWidth = dimension((right - left) / contentScale);
+    const auto contentHeight = dimension((bottom - top) / contentScale);
+    if (visibleWidth == 0 || visibleHeight == 0 || contentWidth == 0 ||
+        contentHeight == 0) {
+        return std::nullopt;
+    }
+
+    const auto nativeFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
+    const auto pixelFormat = nativeFormat == kCVPixelFormatType_32BGRA
+                                 ? media::PixelFormat::Bgra8
+                                 : media::PixelFormat::Unknown;
+    CVPixelBufferRetain(pixelBuffer);
+    std::shared_ptr<void> retainedBuffer{
+        pixelBuffer,
+        [](void* buffer) { CVPixelBufferRelease(static_cast<CVPixelBufferRef>(buffer)); }};
+    return NativeScreenFrame{
+        .status = NativeScreenFrameStatus::Complete,
+        .timestamp = NativeTimestamp{.value = presentationTime.value,
+                                     .timescale = presentationTime.timescale},
+        .width = static_cast<std::uint32_t>(nativeWidth),
+        .height = static_cast<std::uint32_t>(nativeHeight),
+        .visibleRect = media::PixelRect{
+            .x = static_cast<std::uint32_t>(left),
+            .y = static_cast<std::uint32_t>(top),
+            .width = visibleWidth,
+            .height = visibleHeight,
+        },
+        .contentWidth = contentWidth,
+        .contentHeight = contentHeight,
+        .contentScale = contentScale,
+        .pointPixelScale = pointPixelScale,
+        .pixelFormat = pixelFormat,
+        .platformHandle = std::move(retainedBuffer),
+    };
+}
+
 NativeScreenFrameStatus frameStatus(SCFrameStatus status) {
     switch (status) {
         case SCFrameStatusComplete:  return NativeScreenFrameStatus::Complete;
@@ -90,7 +194,7 @@ NativeScreenFrameStatus frameStatus(SCFrameStatus status) {
 class MacStreamState final {
 public:
     explicit MacStreamState(std::shared_ptr<IVideoFrameSink> sink)
-        : sink_(std::move(sink)), assembler_(core::ProjectClock::now()) {}
+        : sink_(std::move(sink)) {}
 
     void notifyStarted() noexcept {
         std::scoped_lock lock{mutex_};
@@ -105,14 +209,14 @@ public:
         try {
             auto assembled = assembler_.assemble(std::move(frame));
             if (!assembled.hasValue()) {
-                ++stats_.droppedFrames;
+                ++stats_.invalidFrames;
                 accepting_ = false;
                 sink_->onCaptureError(assembled.error());
                 sink_.reset();
                 return;
             }
             if (!assembled.value()) {
-                ++stats_.droppedFrames;
+                ++stats_.ignoredFrames;
                 return;
             }
 
@@ -130,7 +234,7 @@ public:
             }
             sink_->onVideoFrame(std::move(videoFrame));
         } catch (...) {
-            ++stats_.droppedFrames;
+            ++stats_.invalidFrames;
             accepting_ = false;
             sink_->onCaptureError(core::AppError{
                 core::ErrorCode::Unknown, "ScreenCaptureKit frame processing failed"});
@@ -139,6 +243,11 @@ public:
     }
 
     void dropMalformedFrame() noexcept {
+        std::scoped_lock lock{mutex_};
+        if (accepting_) ++stats_.invalidFrames;
+    }
+
+    void reportDroppedFrame() noexcept {
         std::scoped_lock lock{mutex_};
         if (accepting_) ++stats_.droppedFrames;
     }
@@ -181,8 +290,16 @@ void releaseStreamContext(void* context) noexcept {
 
 void receiveFrame(void* context, CMSampleBufferRef sampleBuffer) {
     auto state = *static_cast<RetainedStreamState*>(context);
-    if (sampleBuffer == nullptr || !CMSampleBufferIsValid(sampleBuffer) ||
-        !CMSampleBufferDataIsReady(sampleBuffer)) {
+    if (sampleBuffer == nullptr || !CMSampleBufferIsValid(sampleBuffer)) {
+        state->dropMalformedFrame();
+        return;
+    }
+    if (CMGetAttachment(sampleBuffer, kCMSampleBufferAttachmentKey_DroppedFrameReason,
+                        nullptr) != nullptr) {
+        state->reportDroppedFrame();
+        return;
+    }
+    if (!CMSampleBufferDataIsReady(sampleBuffer)) {
         state->dropMalformedFrame();
         return;
     }
@@ -215,32 +332,12 @@ void receiveFrame(void* context, CMSampleBufferRef sampleBuffer) {
         return;
     }
 
-    const auto nativeWidth = CVPixelBufferGetWidth(pixelBuffer);
-    const auto nativeHeight = CVPixelBufferGetHeight(pixelBuffer);
-    if (nativeWidth == 0 || nativeHeight == 0 ||
-        nativeWidth > std::numeric_limits<std::uint32_t>::max() ||
-        nativeHeight > std::numeric_limits<std::uint32_t>::max()) {
+    auto frame = completeFrameFrom(metadata, pixelBuffer, presentationTime);
+    if (!frame) {
         state->dropMalformedFrame();
         return;
     }
-
-    const auto nativeFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
-    const auto pixelFormat = nativeFormat == kCVPixelFormatType_32BGRA
-                                 ? media::PixelFormat::Bgra8
-                                 : media::PixelFormat::Unknown;
-    CVPixelBufferRetain(pixelBuffer);
-    std::shared_ptr<void> retainedBuffer{
-        pixelBuffer,
-        [](void* buffer) { CVPixelBufferRelease(static_cast<CVPixelBufferRef>(buffer)); }};
-    state->deliver(NativeScreenFrame{
-        .status = NativeScreenFrameStatus::Complete,
-        .timestamp = NativeTimestamp{.value = presentationTime.value,
-                                     .timescale = presentationTime.timescale},
-        .width = static_cast<std::uint32_t>(nativeWidth),
-        .height = static_cast<std::uint32_t>(nativeHeight),
-        .pixelFormat = pixelFormat,
-        .platformHandle = std::move(retainedBuffer),
-    });
+    state->deliver(std::move(*frame));
 }
 
 void receiveError(void* context, NSError* error) {
@@ -296,8 +393,10 @@ public:
               auto id = makeNumericCaptureTargetId(ScreenCaptureTargetKind::Display,
                                                    display.displayID);
               if (!id.hasValue()) continue;
-              const auto width = dimension(static_cast<CGFloat>(display.width));
-              const auto height = dimension(static_cast<CGFloat>(display.height));
+              const auto width = dimension(
+                  static_cast<CGFloat>(CGDisplayPixelsWide(display.displayID)));
+              const auto height = dimension(
+                  static_cast<CGFloat>(CGDisplayPixelsHigh(display.displayID)));
               if (width == 0 || height == 0) continue;
               const std::string name =
                   "Display " + std::to_string(static_cast<std::uint64_t>(display.displayID));
@@ -320,8 +419,10 @@ public:
               auto id = makeNumericCaptureTargetId(ScreenCaptureTargetKind::Window,
                                                    window.windowID);
               if (!id.hasValue()) continue;
-              const auto width = dimension(window.frame.size.width);
-              const auto height = dimension(window.frame.size.height);
+              const CGFloat pointPixelScale =
+                  pointPixelScaleForWindow(window.frame, content.displays);
+              const auto width = dimension(window.frame.size.width * pointPixelScale);
+              const auto height = dimension(window.frame.size.height * pointPixelScale);
               if (width == 0 || height == 0) continue;
 
               std::string title = toUtf8(window.title);
@@ -355,13 +456,17 @@ private:
     CSMacCaptureTargetRegistry* __strong registry_;
 };
 
-class MacScreenCaptureSource final : public ICaptureSource {
+class MacScreenCaptureSource final : public IScreenCaptureSource {
 public:
     MacScreenCaptureSource(domain::SourceId id, std::string displayName,
-                           SCContentFilter* filter, std::shared_ptr<IVideoFrameSink> sink)
+                           SCContentFilter* filter, std::uint32_t maxPixelWidth,
+                           std::uint32_t maxPixelHeight,
+                           std::shared_ptr<IVideoFrameSink> sink)
         : id_(std::move(id)),
           displayName_(std::move(displayName)),
           filter_(filter),
+          maxPixelWidth_(maxPixelWidth),
+          maxPixelHeight_(maxPixelHeight),
           sink_(std::move(sink)) {}
 
     ~MacScreenCaptureSource() override { static_cast<void>(stop()); }
@@ -370,7 +475,7 @@ public:
     [[nodiscard]] std::string displayName() const override { return displayName_; }
 
     core::Result<void> start(const CaptureConfig& config) override {
-        if (started_) {
+        if (started_ || stopCoordinator_) {
             return core::AppError{core::ErrorCode::InvalidState,
                                   "ScreenCaptureKit source is already started"};
         }
@@ -381,18 +486,21 @@ public:
         if (config.targetWidth == 0 || config.targetHeight == 0 ||
             config.frameRateNumerator == 0 || config.frameRateDenominator == 0 ||
             config.frameRateNumerator >
-                static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) ||
-            config.targetWidth >
-                static_cast<std::uint32_t>(std::numeric_limits<NSInteger>::max()) ||
-            config.targetHeight >
-                static_cast<std::uint32_t>(std::numeric_limits<NSInteger>::max())) {
+                static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())) {
             return core::AppError{core::ErrorCode::InvalidArgument,
                                   "ScreenCaptureKit capture configuration is invalid"};
         }
 
+        if (maxPixelWidth_ == 0 || maxPixelHeight_ == 0) {
+            return core::AppError{core::ErrorCode::InvalidArgument,
+                                  "ScreenCaptureKit target has invalid pixel bounds"};
+        }
+        const auto outputWidth = std::min(config.targetWidth, maxPixelWidth_);
+        const auto outputHeight = std::min(config.targetHeight, maxPixelHeight_);
+
         SCStreamConfiguration* configuration = [SCStreamConfiguration new];
-        configuration.width = static_cast<NSInteger>(config.targetWidth);
-        configuration.height = static_cast<NSInteger>(config.targetHeight);
+        configuration.width = outputWidth;
+        configuration.height = outputHeight;
         configuration.minimumFrameInterval =
             CMTimeMake(config.frameRateDenominator,
                        static_cast<std::int32_t>(config.frameRateNumerator));
@@ -446,24 +554,20 @@ public:
     }
 
     core::Result<void> stop() override {
-        if (!started_) return core::ok();
-        started_ = false;
-        state_->stopAccepting();
-        lastStats_ = state_->stats();
-
-        NSError* outputError = nil;
-        const BOOL removed = [stream_ removeStreamOutput:bridge_
-                                                  type:SCStreamOutputTypeScreen
-                                                 error:&outputError];
-        [stream_ stopCaptureWithCompletionHandler:nil];
-        state_.reset();
-        stream_ = nil;
-        bridge_ = nil;
-        outputQueue_ = nil;
-        if (!removed) {
-            return nativeFailure("Removing ScreenCaptureKit video output", outputError);
-        }
+        beginStop({});
         return core::ok();
+    }
+
+    void stopAsync(StopCompletion completion) override {
+        if (!started_ && !stopCoordinator_) {
+            if (completion) completion(core::ok());
+            return;
+        }
+        if (stopCoordinator_) {
+            stopCoordinator_->add(std::move(completion));
+            return;
+        }
+        beginStop(std::move(completion));
     }
 
     [[nodiscard]] CaptureStats stats() const noexcept override {
@@ -471,11 +575,59 @@ public:
     }
 
 private:
+    void beginStop(StopCompletion completion) {
+        if (stopCoordinator_) {
+            if (completion) stopCoordinator_->add(std::move(completion));
+            return;
+        }
+        if (!started_) {
+            if (completion) completion(core::ok());
+            return;
+        }
+
+        started_ = false;
+        state_->stopAccepting();
+        lastStats_ = state_->stats();
+        stopCoordinator_ = std::make_shared<ScreenCaptureStopCoordinator>();
+        if (completion) stopCoordinator_->add(std::move(completion));
+
+        SCStream* retainedStream = stream_;
+        CSMacStreamBridge* retainedBridge = bridge_;
+        dispatch_queue_t retainedQueue = outputQueue_;
+        auto retainedState = state_;
+        auto retainedStop = stopCoordinator_;
+        state_.reset();
+        stream_ = nil;
+        bridge_ = nil;
+        outputQueue_ = nil;
+
+        [retainedStream stopCaptureWithCompletionHandler:^(NSError* stopError) {
+          static_cast<void>(retainedQueue);
+          retainedState->stopAccepting();
+          NSError* outputError = nil;
+          const BOOL removed = [retainedStream removeStreamOutput:retainedBridge
+                                                              type:SCStreamOutputTypeScreen
+                                                             error:&outputError];
+          if (stopError != nil) {
+              retainedStop->finish(nativeFailure("Stopping ScreenCaptureKit stream",
+                                                  stopError));
+          } else if (!removed) {
+              retainedStop->finish(nativeFailure(
+                  "Removing ScreenCaptureKit video output", outputError));
+          } else {
+              retainedStop->finish(core::ok());
+          }
+        }];
+    }
+
     domain::SourceId id_;
     std::string displayName_;
     SCContentFilter* __strong filter_;
+    std::uint32_t maxPixelWidth_{0};
+    std::uint32_t maxPixelHeight_{0};
     std::shared_ptr<IVideoFrameSink> sink_;
     std::shared_ptr<MacStreamState> state_;
+    std::shared_ptr<ScreenCaptureStopCoordinator> stopCoordinator_;
     SCStream* __strong stream_{nil};
     CSMacStreamBridge* __strong bridge_{nil};
     dispatch_queue_t __strong outputQueue_{nil};
@@ -488,7 +640,7 @@ public:
     explicit MacScreenCaptureSourceFactory(CSMacCaptureTargetRegistry* registry)
         : registry_(registry) {}
 
-    core::Result<std::unique_ptr<ICaptureSource>> create(
+    core::Result<std::unique_ptr<IScreenCaptureSource>> create(
         const domain::CaptureTargetId& targetId,
         std::shared_ptr<IVideoFrameSink> sink) override {
         NSString* key = [NSString stringWithUTF8String:targetId.value().c_str()];
@@ -500,10 +652,12 @@ public:
         SCDisplay* display = nil;
         SCWindow* window = nil;
         NSArray<SCWindow*>* ownWindows = nil;
+        NSArray<SCDisplay*>* displays = nil;
         @synchronized(registry_) {
             display = registry_.displays[key];
             window = registry_.windows[key];
             ownWindows = registry_.ownWindows;
+            displays = registry_.displays.allValues;
         }
         if (display == nil && window == nil) {
             return core::AppError{core::ErrorCode::NotFound,
@@ -517,10 +671,26 @@ public:
                                            excludingWindows:excludedWindows]
                                       : [[SCContentFilter alloc]
                                             initWithDesktopIndependentWindow:window];
+        const CGFloat windowScale = window != nil
+                                        ? pointPixelScaleForWindow(window.frame, displays)
+                                        : 1.0;
+        const auto maxPixelWidth = display != nil
+                                       ? dimension(static_cast<CGFloat>(
+                                             CGDisplayPixelsWide(display.displayID)))
+                                       : dimension(window.frame.size.width * windowScale);
+        const auto maxPixelHeight = display != nil
+                                        ? dimension(static_cast<CGFloat>(
+                                              CGDisplayPixelsHigh(display.displayID)))
+                                        : dimension(window.frame.size.height * windowScale);
+        if (maxPixelWidth == 0 || maxPixelHeight == 0) {
+            return core::AppError{core::ErrorCode::InvalidArgument,
+                                  "selected capture target has invalid pixel bounds"};
+        }
         auto sourceId = domain::SourceId::create("screen-preview:" + targetId.value());
         if (!sourceId.hasValue()) return sourceId.error();
-        return std::unique_ptr<ICaptureSource>{std::make_unique<MacScreenCaptureSource>(
-            std::move(sourceId).value(), targetId.value(), filter, std::move(sink))};
+        return std::unique_ptr<IScreenCaptureSource>{std::make_unique<MacScreenCaptureSource>(
+            std::move(sourceId).value(), targetId.value(), filter, maxPixelWidth,
+            maxPixelHeight, std::move(sink))};
     }
 
 private:

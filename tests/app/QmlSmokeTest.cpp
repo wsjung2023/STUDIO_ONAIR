@@ -79,6 +79,7 @@ class FakeScreenCaptureController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy CONSTANT)
     Q_PROPERTY(bool previewing READ previewing CONSTANT)
+    Q_PROPERTY(bool canStopPreview READ canStopPreview CONSTANT)
     Q_PROPERTY(bool permissionRequired READ permissionRequired CONSTANT)
     Q_PROPERTY(QVariantList targets READ targets CONSTANT)
     Q_PROPERTY(QString selectedTargetId READ selectedTargetId CONSTANT)
@@ -87,6 +88,8 @@ class FakeScreenCaptureController final : public QObject {
     Q_PROPERTY(quint32 actualHeight READ actualHeight CONSTANT)
     Q_PROPERTY(qulonglong receivedFrames READ receivedFrames CONSTANT)
     Q_PROPERTY(qulonglong droppedFrames READ droppedFrames CONSTANT)
+    Q_PROPERTY(qulonglong ignoredFrames READ ignoredFrames CONSTANT)
+    Q_PROPERTY(qulonglong invalidFrames READ invalidFrames CONSTANT)
     Q_PROPERTY(qulonglong replacedPreviewFrames READ replacedPreviewFrames CONSTANT)
     Q_PROPERTY(double currentFps READ currentFps CONSTANT)
 
@@ -94,6 +97,7 @@ public:
     using QObject::QObject;
     [[nodiscard]] bool busy() const noexcept { return false; }
     [[nodiscard]] bool previewing() const noexcept { return false; }
+    [[nodiscard]] bool canStopPreview() const noexcept { return false; }
     [[nodiscard]] bool permissionRequired() const noexcept { return false; }
     [[nodiscard]] QVariantList targets() const {
         return {QVariantMap{{QStringLiteral("id"), QStringLiteral("display:1")},
@@ -111,6 +115,8 @@ public:
     [[nodiscard]] quint32 actualHeight() const noexcept { return 1080; }
     [[nodiscard]] qulonglong receivedFrames() const noexcept { return 60; }
     [[nodiscard]] qulonglong droppedFrames() const noexcept { return 1; }
+    [[nodiscard]] qulonglong ignoredFrames() const noexcept { return 2; }
+    [[nodiscard]] qulonglong invalidFrames() const noexcept { return 3; }
     [[nodiscard]] qulonglong replacedPreviewFrames() const noexcept { return 2; }
     [[nodiscard]] double currentFps() const noexcept { return 59.94; }
 
