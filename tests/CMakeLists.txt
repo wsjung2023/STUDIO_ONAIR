@@ -114,6 +114,7 @@ gtest_discover_tests(cs_tests)
 # Qt on the include path.
 add_executable(cs_app_tests
     app/EditorModelsTest.cpp
+    app/EditorControllerTest.cpp
     app/StudioControllerTest.cpp
     app/LiveRecordingControllerTest.cpp
     app/ProjectControllerTest.cpp

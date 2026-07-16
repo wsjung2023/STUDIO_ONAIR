@@ -40,6 +40,10 @@ add_library(cs_app STATIC
     MediaBinModel.cpp
     TimelineTrackModel.h
     TimelineTrackModel.cpp
+    EditorEngineWorker.h
+    EditorEngineWorker.cpp
+    EditorController.h
+    EditorController.cpp
 )
 
 if(CS_ENABLE_FFMPEG)
@@ -78,6 +82,7 @@ target_link_libraries(cs_app
         cs_capture
         cs_recorder
         cs_domain
+        cs_edit_engine
     PRIVATE
         cs_project_store
 )
