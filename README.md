@@ -30,13 +30,17 @@
 
 ## 현재 코드 골격
 
-R0-01이 완료되어 다음이 동작합니다.
+R0-01이 완료되어, 애플리케이션(`creator_studio.exe`)을 실행하면 다음이 동작합니다.
 
 - Home / Studio / Editor 세 화면 전환
 - Studio에서 test pattern 표시, Record/Stop으로 fake 녹화 세션 시작·종료
 - Stop 시 세그먼트 개수와 duration 표시
-- 프로젝트 manifest 생성·읽기 (`manifest.json`)
-- 단위 테스트와 CI 워크플로
+
+다음은 라이브러리 코드와 단위 테스트로는 존재하지만, **애플리케이션은 아직 호출하지 않는** 기능입니다. `creator_studio.exe`를 실행해 보아도 아래 동작은 눈에 보이지 않습니다.
+
+- 프로젝트 manifest 생성·읽기 (`manifest.json`, `cs_project_store`/`JsonProjectStore`) — 라이브러리 자체는 동작하고 테스트도 통과하지만, `src/app`, `src/main.cpp`, QML 어디에서도 호출하지 않습니다. R0-02에서 StudioController와 연결할 예정입니다.
+
+단위 테스트는 통과하고 있고 (`ctest`로 실행), CI 워크플로(`.github/workflows/ci.yml`)도 작성되어 있습니다. 다만 이 CI는 **아직 한 번도 실행된 적이 없습니다** — push할 원격 저장소가 없었고, macOS 잡은 특히 검증된 적이 없습니다. `ci.yml` 자체에도 "이 파일을 draft로 취급하라"는 주석이 있습니다.
 
 아직 실제 화면 캡처·녹화·편집은 구현하지 않았습니다. 다음 대상은 `IMPLEMENTATION_ROADMAP.md`의 R0-02 프로젝트 패키지입니다.
 
