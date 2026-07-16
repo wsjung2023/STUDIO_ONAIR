@@ -15,6 +15,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace creator::app::test {
 
@@ -54,6 +55,11 @@ public:
     }
 
     [[nodiscard]] Qt::HANDLE lastThreadId() const noexcept { return lastThreadId_.load(); }
+
+    void failNextMarkSegmentReady(core::AppError error) {
+        std::scoped_lock lock{mutex_};
+        markSegmentReadyError_ = std::move(error);
+    }
 
     core::Result<project_store::OpenProjectResult> create(
         const std::filesystem::path& path, const std::string& name) override {
@@ -97,6 +103,12 @@ public:
                                         const domain::SessionId&,
                                         const domain::SegmentInfo&) override {
         observeAndMaybeHold();
+        std::scoped_lock lock{mutex_};
+        if (markSegmentReadyError_) {
+            auto error = std::move(*markSegmentReadyError_);
+            markSegmentReadyError_.reset();
+            return error;
+        }
         return core::ok();
     }
     core::Result<void> markSegmentFailed(const std::filesystem::path&,
@@ -158,6 +170,7 @@ private:
     mutable std::mutex mutex_;
     std::atomic<Qt::HANDLE> lastThreadId_{nullptr};
     std::optional<project_store::OpenProjectResult> openResult_;
+    std::optional<core::AppError> markSegmentReadyError_;
     std::shared_ptr<std::promise<void>> release_;
     std::shared_future<void> held_;
     std::shared_ptr<std::promise<void>> enteredSignal_;

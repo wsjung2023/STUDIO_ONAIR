@@ -6,6 +6,8 @@
 # Q_OBJECT works without extra wiring.
 add_library(cs_app STATIC
     IRecordingPersistence.h
+    ProjectSegmentLifecycleSink.h
+    ProjectSegmentLifecycleSink.cpp
     StudioController.h
     StudioController.cpp
     ScreenCaptureController.h
