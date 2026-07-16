@@ -1,4 +1,5 @@
 #include "app/ScreenPreviewItem.h"
+#include "app/EditorPreviewItem.h"
 #include "app/MediaBinModel.h"
 #include "app/TimelineTrackModel.h"
 
@@ -10,6 +11,7 @@
 #include "domain/TimelineTypes.h"
 
 #include <QGuiApplication>
+#include <QImage>
 #include <QCoreApplication>
 #include <QQmlComponent>
 #include <QQmlContext>
@@ -270,6 +272,8 @@ class FakeEditorController final : public QObject {
     Q_PROPERTY(qlonglong playheadNs READ playheadNs CONSTANT)
     Q_PROPERTY(qlonglong timelineRevision READ timelineRevision CONSTANT)
     Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
+    Q_PROPERTY(QImage previewImage READ previewImage CONSTANT)
+    Q_PROPERTY(bool hasPreviewFrame READ hasPreviewFrame CONSTANT)
 
 public:
     explicit FakeEditorController(QObject* parent = nullptr) : QObject(parent) {
@@ -324,6 +328,12 @@ public:
     [[nodiscard]] QString statusMessage() const {
         return QStringLiteral("Preview engine unavailable");
     }
+    [[nodiscard]] QImage previewImage() const {
+        QImage image{2, 1, QImage::Format_ARGB32};
+        image.fill(QColor(30, 60, 90));
+        return image;
+    }
+    [[nodiscard]] bool hasPreviewFrame() const noexcept { return true; }
     Q_INVOKABLE void play() {}
     Q_INVOKABLE void pause() {}
     Q_INVOKABLE void seek(qlonglong) {}
@@ -405,6 +415,8 @@ TEST(QmlSmokeTest, EditorPageRendersTypedModelsAndPreviewState) {
     auto* track = findVisualItem(rootItem, QStringLiteral("timelineTrack-v1"));
     auto* clip = findVisualItem(rootItem, QStringLiteral("timelineClip-clip-1"));
     auto* preview = object->findChild<QObject*>(QStringLiteral("editorPreviewState"));
+    auto* previewSurface =
+        object->findChild<QObject*>(QStringLiteral("editorPreviewSurface"));
     auto* status = object->findChild<QObject*>(QStringLiteral("editorStatus"));
     ASSERT_NE(mediaList, nullptr);
     ASSERT_EQ(mediaList->property("count").toInt(), 1);
@@ -413,6 +425,7 @@ TEST(QmlSmokeTest, EditorPageRendersTypedModelsAndPreviewState) {
     ASSERT_NE(track, nullptr);
     ASSERT_NE(clip, nullptr);
     ASSERT_NE(preview, nullptr);
+    ASSERT_NE(previewSurface, nullptr);
     ASSERT_NE(status, nullptr);
     EXPECT_TRUE(media->property("text").toString().contains(
         QString::fromUtf8("화면 녹화.mp4")));
@@ -421,6 +434,8 @@ TEST(QmlSmokeTest, EditorPageRendersTypedModelsAndPreviewState) {
     EXPECT_GT(clip->property("width").toDouble(), 0.0);
     EXPECT_TRUE(preview->property("text").toString().contains(
         QStringLiteral("stale"), Qt::CaseInsensitive));
+    EXPECT_TRUE(previewSurface->property("hasFrame").toBool());
+    EXPECT_TRUE(previewSurface->property("stale").toBool());
     EXPECT_EQ(status->property("text").toString(),
               QStringLiteral("Preview engine unavailable"));
 }
@@ -482,6 +497,8 @@ int main(int argc, char** argv) {
     QGuiApplication app{argc, argv};
     qmlRegisterType<creator::app::ScreenPreviewItem>("CreatorStudio.Native", 1, 0,
                                                       "ScreenPreviewItem");
+    qmlRegisterType<creator::app::EditorPreviewItem>("CreatorStudio.Native", 1, 0,
+                                                      "EditorPreviewItem");
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

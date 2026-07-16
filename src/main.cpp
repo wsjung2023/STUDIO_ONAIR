@@ -1,5 +1,6 @@
 #include "app/ProjectController.h"
 #include "app/EditorController.h"
+#include "app/EditorPreviewItem.h"
 #include "app/DeviceCaptureController.h"
 #include "app/LiveRecordingController.h"
 #include "app/LiveRecordingEngineFactory.h"
@@ -13,6 +14,9 @@
 #endif
 #include "project_store/ProjectPackageStore.h"
 #include "edit_engine/UnavailableEditEngine.h"
+#if defined(CS_APP_ENABLE_MLT)
+#include "mlt_adapter/MltEditEngine.h"
+#endif
 
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
@@ -25,6 +29,8 @@ int main(int argc, char* argv[]) {
     QGuiApplication::setApplicationName(QStringLiteral("Creator Studio"));
     qmlRegisterType<creator::app::ScreenPreviewItem>("CreatorStudio.Native", 1, 0,
                                                       "ScreenPreviewItem");
+    qmlRegisterType<creator::app::EditorPreviewItem>("CreatorStudio.Native", 1, 0,
+                                                      "EditorPreviewItem");
 
     auto packageStore = std::make_unique<creator::project_store::ProjectPackageStore>();
     creator::app::ProjectController projectController{std::move(packageStore), &app};
@@ -51,8 +57,16 @@ int main(int argc, char* argv[]) {
         std::move(recordingEngine), &projectController,
         [&projectController] { return projectController.recordingPackagePath(); },
         [] { return creator::core::ProjectClock::now(); }, &app};
-    creator::app::EditorController editorController{
-        std::make_unique<creator::edit_engine::UnavailableEditEngine>(), &app};
+#if defined(CS_APP_ENABLE_MLT)
+    std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
+        std::make_unique<creator::mlt_adapter::MltEditEngine>(
+            creator::mlt_adapter::MltEditEngineConfig{
+                .runtimeRoot = std::filesystem::path{CS_APP_MLT_ROOT}});
+#else
+    std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
+        std::make_unique<creator::edit_engine::UnavailableEditEngine>();
+#endif
+    creator::app::EditorController editorController{std::move(editEngine), &app};
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),

@@ -9,6 +9,8 @@ cs_add_qtfree_library(cs_mlt_graph_plan
 if(CS_ENABLE_MLT)
     cs_add_qtfree_library(cs_mlt_adapter
         SOURCES
+            MltRuntimeManifest.h
+            MltRuntimeManifest.cpp
             MltEditEngine.h
             MltEditEngine.cpp
         DEPENDS

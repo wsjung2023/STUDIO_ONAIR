@@ -44,6 +44,8 @@ add_library(cs_app STATIC
     EditorEngineWorker.cpp
     EditorController.h
     EditorController.cpp
+    EditorPreviewItem.h
+    EditorPreviewItem.cpp
 )
 
 if(CS_ENABLE_FFMPEG)

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import CreatorStudio.Native 1.0
 
 Item {
     id: root
@@ -125,9 +126,24 @@ Item {
                 Layout.fillHeight: true
                 color: "#171a1f"
 
+                EditorPreviewItem {
+                    id: previewSurface
+                    objectName: "editorPreviewSurface"
+                    anchors.fill: parent
+                    frame: root.controller.previewImage
+                    stale: root.controller.previewStale
+                    statusText: root.controller.timelineRevision < 0
+                                ? qsTr("Open a project timeline to begin editing")
+                                : root.controller.previewStale
+                                ? qsTr("Preview stale — rebuilding engine graph")
+                                : qsTr("Preview unavailable")
+                }
+
                 Label {
                     objectName: "editorPreviewState"
                     anchors.centerIn: parent
+                    visible: root.controller.previewStale
+                             || !root.controller.hasPreviewFrame
                     text: root.controller.timelineRevision < 0
                           ? qsTr("Open a project timeline to begin editing")
                           : root.controller.previewStale

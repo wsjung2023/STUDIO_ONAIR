@@ -185,6 +185,11 @@ if(CS_ENABLE_FFMPEG)
 endif()
 
 if(CS_ENABLE_MLT)
+    target_link_libraries(creator_studio PRIVATE cs_mlt_adapter)
+    target_compile_definitions(creator_studio PRIVATE
+        CS_APP_ENABLE_MLT=1
+        CS_APP_MLT_ROOT="${CS_MLT_ROOT}"
+    )
     file(GLOB CS_APP_MLT_RUNTIME_DLLS CONFIGURE_DEPENDS
         "${CS_MLT_ROOT}/bin/*.dll")
     add_custom_command(TARGET creator_studio POST_BUILD

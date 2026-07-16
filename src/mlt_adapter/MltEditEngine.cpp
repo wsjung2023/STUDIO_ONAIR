@@ -2,6 +2,7 @@
 
 #include "core/AppError.h"
 #include "mlt_adapter/MltGraphPlan.h"
+#include "mlt_adapter/MltRuntimeManifest.h"
 
 #include <mlt++/MltFactory.h>
 #include <mlt++/MltFrame.h>
@@ -13,10 +14,8 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <fstream>
 #include <limits>
 #include <mutex>
-#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 
@@ -30,39 +29,6 @@ namespace {
 
 core::AppError stateError(std::string message) {
     return core::AppError{core::ErrorCode::InvalidState, std::move(message)};
-}
-
-core::Result<void> verifyRuntimeIdentity(const std::filesystem::path& root) {
-    const auto manifestPath = root / "mlt-runtime-manifest.json";
-    std::ifstream input(manifestPath, std::ios::binary);
-    if (!input) {
-        return core::AppError{core::ErrorCode::NotFound,
-                              "MLT runtime manifest is missing"};
-    }
-    try {
-        const auto manifest = nlohmann::json::parse(input);
-        if (manifest.at("abi") != 1 ||
-            manifest.at("version") != CS_MLT_EXPECTED_VERSION ||
-            manifest.at("source_commit") != CS_MLT_EXPECTED_COMMIT ||
-            manifest.at("allowed_modules") !=
-                nlohmann::json::array({"core", "avformat"})) {
-            return core::AppError{core::ErrorCode::UnsupportedVersion,
-                                  "MLT runtime identity is not approved"};
-        }
-    } catch (const nlohmann::json::exception&) {
-        return core::AppError{core::ErrorCode::ParseFailure,
-                              "MLT runtime manifest is invalid"};
-    }
-    for (const auto& path : {root / "bin/mlt-7.dll",
-                             root / "bin/mlt++-7.dll",
-                             root / "lib/mlt-7/mltcore.dll",
-                             root / "lib/mlt-7/mltavformat.dll"}) {
-        if (!std::filesystem::is_regular_file(path)) {
-            return core::AppError{core::ErrorCode::NotFound,
-                                  "MLT runtime is incomplete"};
-        }
-    }
-    return core::ok();
 }
 
 std::string utf8Path(const std::filesystem::path& path) {
@@ -113,7 +79,7 @@ public:
     explicit Impl(MltEditEngineConfig config) : config_(std::move(config)) {}
 
     core::Result<void> initialize() {
-        auto verified = verifyRuntimeIdentity(config_.runtimeRoot);
+        auto verified = verifyMltRuntimeManifest(config_.runtimeRoot);
         if (!verified.hasValue()) return verified;
         setMltEnvironment(config_.runtimeRoot);
         static std::mutex factoryMutex;

@@ -4,6 +4,7 @@
 
 #include <QMetaObject>
 
+#include <algorithm>
 #include <utility>
 
 namespace creator::app {
@@ -15,10 +16,16 @@ EditorController::EditorController(
     connect(&workerThread_, &QThread::finished, worker_, &QObject::deleteLater);
     connect(worker_, &EditorEngineWorker::completed, this,
             &EditorController::handleCompleted);
+    connect(worker_, &EditorEngineWorker::frameCompleted, this,
+            &EditorController::handleFrameCompleted);
+    playbackTimer_.setTimerType(Qt::PreciseTimer);
+    connect(&playbackTimer_, &QTimer::timeout, this,
+            &EditorController::requestPlaybackFrame);
     workerThread_.start();
 }
 
 EditorController::~EditorController() {
+    playbackTimer_.stop();
     while (!queuedCommands_.empty()) {
         auto command = std::move(queuedCommands_.front());
         queuedCommands_.pop_front();
@@ -38,6 +45,7 @@ void EditorController::openSession(
     std::vector<domain::MediaAsset> assets,
     edit_engine::TimelineSnapshot snapshot) {
     ++generation_;
+    snapshot.assets = assets;
     mediaBinModel_.setAssets(std::move(assets));
     timelineTrackModel_.setTimeline(snapshot.timeline);
     snapshot_ = snapshot;
@@ -47,6 +55,10 @@ void EditorController::openSession(
         emit playheadChanged();
     }
     setStatus({});
+    if (!previewImage_.isNull()) {
+        previewImage_ = {};
+        emit previewImageChanged();
+    }
     setPreviewStale(true);
     emit timelineChanged();
     queueLoad(std::move(snapshot));
@@ -64,6 +76,7 @@ void EditorController::commitTimeline(edit_engine::TimelineChangeSet change) {
     }
     timelineTrackModel_.setTimeline(change.target().timeline);
     snapshot_ = change.target();
+    setPreviewStale(true);
     emit timelineChanged();
     queueUpdate(std::move(change));
 }
@@ -81,6 +94,7 @@ void EditorController::pause() {
         setStatus(QStringLiteral("No editor session is open"));
         return;
     }
+    playbackTimer_.stop();
     queueSimple(EditorEngineOperation::Pause);
 }
 
@@ -129,6 +143,18 @@ void EditorController::queueSimple(
     dispatchNext();
 }
 
+void EditorController::queueFrame(core::TimestampNs position) {
+    if (!snapshot_.has_value() || previewStale_ || frameRequestInFlight_) return;
+    const quint64 commandId =
+        beginCommand(EditorEngineOperation::Frame, position, false,
+                     snapshot_->revision.value());
+    frameRequestInFlight_ = true;
+    queuedCommands_.push_back(QueuedCommand{
+        generation_, commandId, EditorEngineOperation::Frame, position,
+        std::nullopt, std::nullopt});
+    dispatchNext();
+}
+
 void EditorController::dispatchNext() {
     if (workerCommandActive_ || queuedCommands_.empty()) return;
     workerCommandActive_ = true;
@@ -167,6 +193,16 @@ void EditorController::postToWorker(QueuedCommand command) {
                 Qt::QueuedConnection);
             break;
         }
+        case EditorEngineOperation::Frame: {
+            const core::TimestampNs position = *command.position;
+            QMetaObject::invokeMethod(
+                worker_,
+                [worker = worker_, generation, commandId, position] {
+                    worker->requestFrame(generation, commandId, position);
+                },
+                Qt::QueuedConnection);
+            break;
+        }
         case EditorEngineOperation::Load: {
             auto snapshot = std::move(*command.snapshot);
             QMetaObject::invokeMethod(
@@ -194,13 +230,17 @@ void EditorController::postToWorker(QueuedCommand command) {
 
 quint64 EditorController::beginCommand(
     EditorEngineOperation operation,
-    std::optional<core::TimestampNs> position) {
+    std::optional<core::TimestampNs> position, bool countsAsBusy,
+    std::optional<std::int64_t> expectedRevision) {
     const bool wasBusy = busy();
     const quint64 commandId = nextCommandId_++;
     commands_.emplace(commandId,
-                      PendingCommand{generation_, operation, position});
-    ++pendingCommands_;
-    if (!wasBusy) emit busyChanged();
+                      PendingCommand{generation_, operation, position,
+                                     countsAsBusy, expectedRevision});
+    if (countsAsBusy) {
+        ++pendingCommands_;
+        if (!wasBusy) emit busyChanged();
+    }
     return commandId;
 }
 
@@ -215,7 +255,7 @@ void EditorController::handleCompleted(quint64 generation, quint64 commandId,
                          command.generation == generation_ &&
                          command.operation == operation;
     commands_.erase(found);
-    --pendingCommands_;
+    if (command.countsAsBusy) --pendingCommands_;
     workerCommandActive_ = false;
 
     if (current) {
@@ -233,6 +273,7 @@ void EditorController::handleCompleted(quint64 generation, quint64 commandId,
             switch (operation) {
                 case EditorEngineOperation::Load:
                     setPreviewStale(false);
+                    queueFrame(playhead_);
                     break;
                 case EditorEngineOperation::Play:
                     setPlaying(true);
@@ -243,14 +284,76 @@ void EditorController::handleCompleted(quint64 generation, quint64 commandId,
                 case EditorEngineOperation::Seek:
                     playhead_ = *command.position;
                     emit playheadChanged();
+                    if (playing_) {
+                        playbackStart_ = playhead_;
+                        playbackClock_.restart();
+                    }
+                    queueFrame(playhead_);
                     break;
                 case EditorEngineOperation::Update:
+                    setPreviewStale(false);
+                    queueFrame(playhead_);
+                    break;
+                case EditorEngineOperation::Frame:
                     break;
             }
         }
     }
     if (!busy()) emit busyChanged();
     dispatchNext();
+}
+
+void EditorController::handleFrameCompleted(
+    quint64 generation, quint64 commandId, bool success,
+    const QString& errorMessage, qlonglong revision, qlonglong positionNs,
+    QImage image) {
+    const auto found = commands_.find(commandId);
+    if (found == commands_.end()) return;
+    const PendingCommand command = found->second;
+    const bool current = generation == generation_ &&
+                         command.generation == generation_ &&
+                         command.operation == EditorEngineOperation::Frame;
+    commands_.erase(found);
+    frameRequestInFlight_ = false;
+    workerCommandActive_ = false;
+
+    if (current) {
+        const bool commandBecameStale =
+            !snapshot_.has_value() || !command.expectedRevision.has_value() ||
+            *command.expectedRevision != snapshot_->revision.value();
+        const bool returnedExpectedRevision = command.expectedRevision.has_value() &&
+                                              revision == *command.expectedRevision;
+        if (commandBecameStale) {
+            // The durable timeline changed while the worker decoded this frame.
+            // The queued update/load will request a frame for the new revision.
+        } else if (!success || !returnedExpectedRevision || image.isNull()) {
+            setStatus(success && !returnedExpectedRevision
+                          ? QStringLiteral("Edit engine returned the wrong preview revision")
+                          : errorMessage);
+            setPreviewStale(true);
+            setPlaying(false);
+        } else {
+            previewImage_ = std::move(image);
+            playhead_ = core::TimestampNs{core::DurationNs{positionNs}};
+            emit previewImageChanged();
+            emit playheadChanged();
+        }
+    }
+    dispatchNext();
+}
+
+void EditorController::requestPlaybackFrame() {
+    if (!playing_ || !snapshot_.has_value() || previewStale_ ||
+        frameRequestInFlight_) {
+        return;
+    }
+    const auto elapsed = core::DurationNs{playbackClock_.nsecsElapsed()};
+    const auto unquantized = playbackStart_ + elapsed;
+    const auto rate = snapshot_->timeline.frameRate();
+    const auto frameIndex = core::timestampToFrame(unquantized, rate);
+    const auto position = core::frameToTimestamp(frameIndex, rate);
+    if (position <= playhead_) return;
+    queueFrame(position);
 }
 
 void EditorController::setPreviewStale(bool value) {
@@ -262,6 +365,16 @@ void EditorController::setPreviewStale(bool value) {
 void EditorController::setPlaying(bool value) {
     if (playing_ == value) return;
     playing_ = value;
+    if (playing_) {
+        playbackStart_ = playhead_;
+        playbackClock_.restart();
+        const auto rate = snapshot_->timeline.frameRate();
+        const auto interval = std::max<std::int64_t>(
+            1, (1000 * rate.denominator()) / rate.numerator());
+        playbackTimer_.start(static_cast<int>(interval));
+    } else {
+        playbackTimer_.stop();
+    }
     emit playingChanged();
 }
 
