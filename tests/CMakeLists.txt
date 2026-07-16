@@ -38,6 +38,7 @@ add_executable(cs_tests
     domain/TimelineTypesTest.cpp
     domain/MediaAssetTest.cpp
     domain/TimelineTest.cpp
+    domain/EditCommandTest.cpp
     domain/ProjectManifestTest.cpp
     domain/RecordingSessionTest.cpp
     media/MediaTypesTest.cpp

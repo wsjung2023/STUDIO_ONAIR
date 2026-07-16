@@ -36,11 +36,14 @@ public:
     [[nodiscard]] const std::optional<AudioEnvelope>& audioEnvelope() const noexcept {
         return audioEnvelope_;
     }
+    [[nodiscard]] core::Result<Clip> withIdentityAndRanges(
+        ClipId id, TimeRange sourceRange, TimeRange timelineRange) const;
 
     friend bool operator==(const Clip&, const Clip&) = default;
 
 private:
-    Clip(ClipId id, AssetId assetId, MediaKind mediaKind, TimeRange sourceRange,
+    Clip(ClipId id, AssetId assetId, MediaKind mediaKind,
+         core::DurationNs assetDuration, TimeRange sourceRange,
          TimeRange timelineRange, bool enabled,
          std::optional<VisualTransform> visualTransform,
          std::optional<AudioEnvelope> audioEnvelope)
@@ -48,6 +51,7 @@ private:
           kind_(ClipKind::Asset),
           assetId_(std::move(assetId)),
           mediaKind_(mediaKind),
+          assetDuration_(assetDuration),
           sourceRange_(sourceRange),
           timelineRange_(timelineRange),
           enabled_(enabled),
@@ -58,6 +62,7 @@ private:
     ClipKind kind_;
     std::optional<AssetId> assetId_;
     MediaKind mediaKind_;
+    core::DurationNs assetDuration_;
     TimeRange sourceRange_;
     TimeRange timelineRange_;
     bool enabled_;
@@ -107,6 +112,8 @@ public:
     [[nodiscard]] core::FrameRate frameRate() const noexcept { return frameRate_; }
     [[nodiscard]] const std::vector<Track>& tracks() const noexcept { return tracks_; }
     [[nodiscard]] const Track* track(const TrackId& id) const noexcept;
+    [[nodiscard]] const Clip* clip(
+        const TrackId& trackId, const ClipId& clipId) const noexcept;
 
     [[nodiscard]] core::Result<void> addTrack(Track track);
     [[nodiscard]] core::Result<void> insertClip(const TrackId& trackId, Clip clip);

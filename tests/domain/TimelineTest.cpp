@@ -74,16 +74,18 @@ MediaAsset audioAsset() {
 
 Clip videoClip(std::string id, std::int64_t sourceStart,
                std::int64_t timelineStart, std::int64_t duration) {
-    return Clip::createAsset(
-               makeClipId(std::move(id)), videoAsset(),
-               TimeRange::create(at(sourceStart), DurationNs{duration}).value(),
-               TimeRange::create(at(timelineStart), DurationNs{duration}).value(),
-               true,
-               VisualTransform::create(0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0,
-                                       0.0, 0.0, 0.0, 0.0, 1.0, 0)
-                   .value(),
-               std::nullopt)
-        .value();
+    auto created = Clip::createAsset(
+        makeClipId(std::move(id)), videoAsset(),
+        TimeRange::create(at(sourceStart), DurationNs{duration}).value(),
+        TimeRange::create(at(timelineStart), DurationNs{duration}).value(),
+        true,
+        VisualTransform::create(0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0,
+                                0.0, 0.0, 0.0, 0.0, 1.0, 0)
+            .value(),
+        std::nullopt);
+    EXPECT_TRUE(created.hasValue())
+        << (created.hasValue() ? std::string{} : created.error().message());
+    return std::move(created).value();
 }
 
 Timeline timeline() {

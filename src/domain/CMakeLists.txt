@@ -1,6 +1,9 @@
 cs_add_qtfree_library(cs_domain
     SOURCES
         Identifiers.h
+        EditCommand.h
+        EditHistory.h
+        EditHistory.cpp
         MediaAsset.h
         MediaAsset.cpp
         ProjectManifest.h
@@ -12,6 +15,10 @@ cs_add_qtfree_library(cs_domain
         TimelineTypes.cpp
         Timeline.h
         Timeline.cpp
+        SplitClipCommand.h
+        SplitClipCommand.cpp
+        TrimClipCommand.h
+        TrimClipCommand.cpp
     DEPENDS
         cs_core
 )

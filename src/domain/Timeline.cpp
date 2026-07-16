@@ -41,8 +41,26 @@ core::Result<Clip> Clip::createAsset(
         return AppError{ErrorCode::InvalidArgument,
                         "clip has an audio envelope without an audio stream"};
     }
-    return Clip{std::move(id), asset.id(), asset.kind(), sourceRange, timelineRange,
-                enabled, std::move(visualTransform), std::move(audioEnvelope)};
+    return Clip{std::move(id), asset.id(), asset.kind(), asset.duration(), sourceRange,
+                timelineRange, enabled, std::move(visualTransform),
+                std::move(audioEnvelope)};
+}
+
+core::Result<Clip> Clip::withIdentityAndRanges(
+    ClipId id, TimeRange sourceRange, TimeRange timelineRange) const {
+    if (sourceRange.end().time_since_epoch() > assetDuration_ ||
+        sourceRange.duration() != timelineRange.duration()) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "resegmented clip exceeds its asset or changes speed"};
+    }
+    if (audioEnvelope_.has_value()) {
+        auto validated = AudioEnvelope::create(
+            audioEnvelope_->gainDb(), audioEnvelope_->fadeIn(),
+            audioEnvelope_->fadeOut(), timelineRange.duration());
+        if (!validated.hasValue()) return validated.error();
+    }
+    return Clip{std::move(id), *assetId_, mediaKind_, assetDuration_, sourceRange,
+                timelineRange, enabled_, visualTransform_, audioEnvelope_};
 }
 
 core::Result<Track> Track::create(
@@ -67,6 +85,17 @@ const Track* Timeline::track(const TrackId& id) const noexcept {
                                         return candidate.id() == id;
                                     });
     return found == tracks_.end() ? nullptr : &*found;
+}
+
+const Clip* Timeline::clip(
+    const TrackId& trackId, const ClipId& clipId) const noexcept {
+    const auto* target = track(trackId);
+    if (target == nullptr) return nullptr;
+    const auto found = std::find_if(target->clips().begin(), target->clips().end(),
+                                    [&clipId](const Clip& candidate) {
+                                        return candidate.id() == clipId;
+                                    });
+    return found == target->clips().end() ? nullptr : &*found;
 }
 
 Track* Timeline::mutableTrack(const TrackId& id) noexcept {
