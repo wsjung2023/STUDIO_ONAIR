@@ -348,12 +348,36 @@ Result<void> SqliteTimelineStore::putAsset(const MediaAsset& mediaAsset) {
     }
     if (connection_.changes() == 0) {
         auto existing = asset(mediaAsset.id());
-        if (!existing.hasValue()) return existing.error();
-        if (existing.value() != mediaAsset) {
+        if (existing.hasValue()) {
+            if (existing.value() == mediaAsset) return transaction.commit();
             return AppError{
                 ErrorCode::AlreadyExists,
                 "media asset identity already has different metadata"};
         }
+        if (existing.error().code() != ErrorCode::NotFound) {
+            return existing.error();
+        }
+        auto selectedPath = connection_.prepare(
+            "SELECT asset_id FROM media_assets "
+            "WHERE project_id=?1 AND relative_path=?2");
+        if (!selectedPath.hasValue()) return selectedPath.error();
+        auto pathStatement = std::move(selectedPath).value();
+        if (auto r = pathStatement.bindText(1, projectId_.value());
+            !r.hasValue()) {
+            return r.error();
+        }
+        if (auto r = pathStatement.bindText(2, mediaAsset.relativePath());
+            !r.hasValue()) {
+            return r.error();
+        }
+        auto pathRow = pathStatement.step();
+        if (!pathRow.hasValue()) return pathRow.error();
+        if (pathRow.value() == SqliteStep::Row) {
+            return AppError{
+                ErrorCode::AlreadyExists,
+                "media asset package path already belongs to another identity"};
+        }
+        return corrupt("media asset insert was ignored without an identity owner");
     }
     return transaction.commit();
 }
@@ -658,31 +682,42 @@ Result<PersistedTimeline> SqliteTimelineStore::loadPrimaryTimeline() {
 
     std::vector<EditEventRecord> events;
     auto selectedEvents = connection_.prepare(
-        "SELECT event_id,event_kind,command_id,command_type,payload_json,"
+        "SELECT sequence,event_id,event_kind,command_id,command_type,payload_json,"
         "undo_payload_json,created_at_utc FROM edit_commands "
         "WHERE timeline_id=?1 ORDER BY sequence");
     if (!selectedEvents.hasValue()) return selectedEvents.error();
     auto eventStatement = std::move(selectedEvents).value();
     if (auto r = eventStatement.bindText(1, timeline.id().value()); !r.hasValue()) return r.error();
+    std::int64_t expectedSequence = 0;
     while (true) {
         auto eventRow = eventStatement.step();
         if (!eventRow.hasValue()) return eventRow.error();
         if (eventRow.value() == SqliteStep::Done) break;
-        auto kind = parseEventKind(eventStatement.columnText(1));
+        if (eventStatement.columnInt64(0) != expectedSequence) {
+            return corrupt("edit event sequence is not contiguous");
+        }
+        if (expectedSequence == std::numeric_limits<std::int64_t>::max()) {
+            return corrupt("edit event sequence exceeds int64");
+        }
+        ++expectedSequence;
+        auto kind = parseEventKind(eventStatement.columnText(2));
         if (!kind.hasValue()) return kind.error();
-        auto commandId = CommandId::create(eventStatement.columnText(2));
+        auto commandId = CommandId::create(eventStatement.columnText(3));
         if (!commandId.hasValue()) return corrupt("event command id is empty");
-        auto createdAt = core::Utc::parseRfc3339(eventStatement.columnText(6));
+        auto createdAt = core::Utc::parseRfc3339(eventStatement.columnText(7));
         if (!createdAt.hasValue()) return corrupt("event UTC timestamp is invalid");
         events.push_back(EditEventRecord{
-            .eventId = eventStatement.columnText(0),
+            .eventId = eventStatement.columnText(1),
             .kind = kind.value(),
             .command = domain::EditCommandRecord{
                 .commandId = std::move(commandId).value(),
-                .type = eventStatement.columnText(3),
-                .payload = eventStatement.columnText(4),
-                .undoPayload = eventStatement.columnText(5)},
+                .type = eventStatement.columnText(4),
+                .payload = eventStatement.columnText(5),
+                .undoPayload = eventStatement.columnText(6)},
             .createdAt = createdAt.value()});
+    }
+    if (expectedSequence != revision) {
+        return corrupt("edit event count differs from timeline revision");
     }
     return PersistedTimeline{.timeline = std::move(timeline),
                              .revision = revision,
@@ -778,6 +813,33 @@ Result<domain::EditHistory> SqliteTimelineStore::decodeHistory(
         auto decoded = codec.decode(records[index], index < cursor);
         if (!decoded.hasValue()) return decoded.error();
         commands.push_back(std::move(decoded).value());
+    }
+    Timeline replay = persisted.timeline;
+    std::vector<std::unique_ptr<domain::IEditCommand>> verification;
+    verification.reserve(commands.size());
+    for (const auto& command : commands) {
+        verification.push_back(command->clone());
+    }
+    for (std::size_t index = cursor; index > 0; --index) {
+        auto undone = verification[index - 1]->undo(replay);
+        if (!undone.hasValue()) {
+            return corrupt("applied edit cannot undo during recovery verification");
+        }
+    }
+    Timeline reconstructedAtCursor = replay;
+    for (std::size_t index = 0; index < verification.size(); ++index) {
+        const auto expectedRecord = verification[index]->record();
+        auto executed = verification[index]->execute(replay);
+        if (!executed.hasValue()) {
+            return corrupt("edit cannot execute during recovery verification");
+        }
+        if (verification[index]->record() != expectedRecord) {
+            return corrupt("edit undo state contradicts recovered command sequence");
+        }
+        if (index + 1 == cursor) reconstructedAtCursor = replay;
+    }
+    if (reconstructedAtCursor != persisted.timeline) {
+        return corrupt("edit history does not reconstruct the persisted timeline");
     }
     return domain::EditHistory::restore(
         limit, std::move(commands), cursor, persisted.cleanCursor);

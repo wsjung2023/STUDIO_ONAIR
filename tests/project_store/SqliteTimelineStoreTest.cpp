@@ -209,6 +209,25 @@ TEST_F(SqliteTimelineStoreTest, StoresAssetsIdempotentlyAndRejectsIdentityConfli
     EXPECT_EQ(conflict.error().code(), ErrorCode::AlreadyExists);
 }
 
+TEST_F(SqliteTimelineStoreTest, ReportsPackagePathCollisionAsIdentityConflict) {
+    auto timelineStore = store();
+    ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+    auto colliding = MediaAsset::create(
+        AssetId::create("other-video-asset").value(), MediaKind::Video,
+        "media/video.mkv", DurationNs{1000},
+        VideoAssetMetadata{.width = 3840,
+                           .height = 2160,
+                           .frameRate = FrameRate::create(60000, 1001).value()},
+        std::nullopt, 10'000, "other-video-hash",
+        AssetAvailability::Available);
+    ASSERT_TRUE(colliding.hasValue());
+
+    const auto result = timelineStore.putAsset(colliding.value());
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::AlreadyExists);
+}
+
 TEST_F(SqliteTimelineStoreTest, ConcurrentIdenticalAssetInsertionsAreIdempotent) {
     auto firstResult = SqliteTimelineStore::open(databasePath(), projectId());
     auto secondResult = SqliteTimelineStore::open(databasePath(), projectId());
@@ -440,6 +459,69 @@ TEST_F(SqliteTimelineStoreTest, RejectsUnsignedOverflowInPersistedCommandJson) {
     const auto history = timelineStore.loadEditHistory(100);
     ASSERT_FALSE(history.hasValue());
     EXPECT_EQ(history.error().code(), ErrorCode::ParseFailure);
+}
+
+TEST_F(SqliteTimelineStoreTest, RejectsValidButInconsistentCommandUndoState) {
+    auto timelineStore = store();
+    ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+    auto snapshot = populatedTimeline();
+    ASSERT_TRUE(timelineStore.createTimeline(snapshot).hasValue());
+    SplitClipCommand command{
+        CommandId::create("tampered-undo-command").value(),
+        TrackId::create("v1").value(), ClipId::create("video-clip").value(),
+        ClipId::create("video-right").value(), at(200)};
+    ASSERT_TRUE(command.execute(snapshot).hasValue());
+    auto record = command.record();
+    const auto sourceStart = record.undoPayload.find("\"sourceStartNs\":100");
+    ASSERT_NE(sourceStart, std::string::npos);
+    record.undoPayload.replace(sourceStart, std::string{"\"sourceStartNs\":100"}.size(),
+                               "\"sourceStartNs\":101");
+    ASSERT_TRUE(timelineStore.commitEdit(
+                                 TimelineCommit{
+                                     .snapshot = snapshot,
+                                     .expectedRevision = 0,
+                                     .event = EditEventRecord{
+                                         .eventId = "tampered-undo-event",
+                                         .kind = EditEventKind::Apply,
+                                         .command = std::move(record),
+                                         .createdAt = utc("2026-07-17T00:00:01Z")},
+                                     .historyCount = 1,
+                                     .historyCursor = 1,
+                                     .cleanCursor = std::size_t{0}})
+                    .hasValue());
+
+    const auto history = timelineStore.loadEditHistory(100);
+
+    ASSERT_FALSE(history.hasValue());
+    EXPECT_EQ(history.error().code(), ErrorCode::IoFailure);
+}
+
+TEST_F(SqliteTimelineStoreTest, RejectsEventSequenceGapAgainstRevision) {
+    auto timelineStore = store();
+    ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+    const auto snapshot = populatedTimeline();
+    ASSERT_TRUE(timelineStore.createTimeline(snapshot).hasValue());
+    ASSERT_TRUE(timelineStore.commitEdit(
+                                 TimelineCommit{.snapshot = snapshot,
+                                                .expectedRevision = 0,
+                                                .event = event("sequence-event"),
+                                                .historyCount = 1,
+                                                .historyCursor = 1,
+                                                .cleanCursor = std::size_t{0}})
+                    .hasValue());
+    auto rawResult = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(rawResult.hasValue());
+    auto raw = std::move(rawResult).value();
+    ASSERT_TRUE(raw.execute(
+        "UPDATE edit_commands SET sequence=2 WHERE event_id='sequence-event';")
+                    .hasValue());
+
+    const auto loaded = timelineStore.loadPrimaryTimeline();
+
+    ASSERT_FALSE(loaded.hasValue());
+    EXPECT_EQ(loaded.error().code(), ErrorCode::IoFailure);
 }
 
 TEST_F(SqliteTimelineStoreTest, RejectsDuplicateGeneratedIdsInDeleteCommandJson) {
