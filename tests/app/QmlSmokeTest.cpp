@@ -72,6 +72,53 @@ public:
     Q_INVOKABLE void stopRecording() {}
 };
 
+class FakeScreenCaptureController final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(bool busy READ busy CONSTANT)
+    Q_PROPERTY(bool previewing READ previewing CONSTANT)
+    Q_PROPERTY(bool permissionRequired READ permissionRequired CONSTANT)
+    Q_PROPERTY(QVariantList targets READ targets CONSTANT)
+    Q_PROPERTY(QString selectedTargetId READ selectedTargetId CONSTANT)
+    Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
+    Q_PROPERTY(quint32 actualWidth READ actualWidth CONSTANT)
+    Q_PROPERTY(quint32 actualHeight READ actualHeight CONSTANT)
+    Q_PROPERTY(qulonglong receivedFrames READ receivedFrames CONSTANT)
+    Q_PROPERTY(qulonglong droppedFrames READ droppedFrames CONSTANT)
+    Q_PROPERTY(qulonglong replacedPreviewFrames READ replacedPreviewFrames CONSTANT)
+    Q_PROPERTY(double currentFps READ currentFps CONSTANT)
+
+public:
+    using QObject::QObject;
+    [[nodiscard]] bool busy() const noexcept { return false; }
+    [[nodiscard]] bool previewing() const noexcept { return false; }
+    [[nodiscard]] bool permissionRequired() const noexcept { return false; }
+    [[nodiscard]] QVariantList targets() const {
+        return {QVariantMap{{QStringLiteral("id"), QStringLiteral("display:1")},
+                            {QStringLiteral("kind"), QStringLiteral("display")},
+                            {QStringLiteral("name"), QStringLiteral("Built-in Display")},
+                            {QStringLiteral("application"), QString{}},
+                            {QStringLiteral("width"), 1920},
+                            {QStringLiteral("height"), 1080}}};
+    }
+    [[nodiscard]] QString selectedTargetId() const { return QStringLiteral("display:1"); }
+    [[nodiscard]] QString statusMessage() const {
+        return QStringLiteral("captured window closed");
+    }
+    [[nodiscard]] quint32 actualWidth() const noexcept { return 1920; }
+    [[nodiscard]] quint32 actualHeight() const noexcept { return 1080; }
+    [[nodiscard]] qulonglong receivedFrames() const noexcept { return 60; }
+    [[nodiscard]] qulonglong droppedFrames() const noexcept { return 1; }
+    [[nodiscard]] qulonglong replacedPreviewFrames() const noexcept { return 2; }
+    [[nodiscard]] double currentFps() const noexcept { return 59.94; }
+
+    Q_INVOKABLE void initialize() {}
+    Q_INVOKABLE void requestPermission() {}
+    Q_INVOKABLE void refreshTargets() {}
+    Q_INVOKABLE void selectTarget(const QString&) {}
+    Q_INVOKABLE void startPreview() {}
+    Q_INVOKABLE void stopPreview() {}
+};
+
 TEST(QmlSmokeTest, RecoveryPageLoadsWithProjectControllerContract) {
     QQmlEngine engine;
     FakeProjectController controller;
@@ -89,10 +136,13 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
     QQmlEngine engine;
     FakeProjectController projectController;
     FakeStudioController studioController;
+    FakeScreenCaptureController screenCaptureController;
     engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
                                              &projectController);
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
                                              &studioController);
+    engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),
+                                             &screenCaptureController);
     QQmlComponent component{
         &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/Main.qml"))};
 
@@ -100,6 +150,29 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
 
     ASSERT_NE(object, nullptr) << component.errorString().toStdString();
     EXPECT_EQ(object->property("currentPage").toString(), QStringLiteral("Recovery"));
+}
+
+TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
+    QQmlEngine engine;
+    FakeStudioController studioController;
+    FakeScreenCaptureController screenCaptureController;
+    engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
+                                             &studioController);
+    engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),
+                                             &screenCaptureController);
+    QQmlComponent component{
+        &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/StudioPage.qml"))};
+
+    std::unique_ptr<QObject> object{component.create()};
+
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    auto* selector = object->findChild<QObject*>(QStringLiteral("captureTargetSelector"));
+    auto* status = object->findChild<QObject*>(QStringLiteral("captureStatusLabel"));
+    ASSERT_NE(selector, nullptr);
+    ASSERT_NE(status, nullptr);
+    EXPECT_EQ(selector->property("count").toInt(), 1);
+    EXPECT_EQ(status->property("text").toString(),
+              QStringLiteral("captured window closed"));
 }
 
 }  // namespace

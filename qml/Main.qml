@@ -17,6 +17,7 @@ ApplicationWindow {
     property string currentPage: "Home"
 
     Component.onCompleted: {
+        screenCaptureController.initialize()
         if (projectController.recoveries.length > 0)
             window.currentPage = "Recovery"
     }

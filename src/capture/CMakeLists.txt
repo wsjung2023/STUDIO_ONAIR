@@ -12,6 +12,8 @@ cs_add_qtfree_library(cs_capture
         LatestVideoFrameMailbox.cpp
         ScreenCaptureTypes.h
         ScreenCaptureTypes.cpp
+        UnsupportedScreenCaptureBackend.h
+        UnsupportedScreenCaptureBackend.cpp
     DEPENDS
         cs_domain
         cs_media

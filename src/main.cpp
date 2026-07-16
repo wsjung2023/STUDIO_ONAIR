@@ -1,5 +1,7 @@
 #include "app/ProjectController.h"
+#include "app/ScreenCaptureController.h"
 #include "app/StudioController.h"
+#include "capture/UnsupportedScreenCaptureBackend.h"
 #include "domain/Identifiers.h"
 #include "fakes/FakeCaptureSource.h"
 #include "fakes/FakeRecorder.h"
@@ -16,6 +18,10 @@ int main(int argc, char* argv[]) {
 
     auto packageStore = std::make_unique<creator::project_store::ProjectPackageStore>();
     creator::app::ProjectController projectController{std::move(packageStore), &app};
+    creator::app::ScreenCaptureController screenCaptureController{
+        std::make_unique<creator::capture::UnsupportedScreenCapturePermission>(),
+        std::make_unique<creator::capture::UnsupportedScreenCaptureDiscovery>(),
+        std::make_unique<creator::capture::UnsupportedScreenCaptureSourceFactory>(), &app};
     creator::app::StudioController studioController{
         std::make_unique<creator::fakes::FakeCaptureSource>(
             creator::domain::SourceId::create("screen-1").value(), "Test Pattern"),
@@ -26,6 +32,8 @@ int main(int argc, char* argv[]) {
                                              &studioController);
     engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
                                              &projectController);
+    engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),
+                                             &screenCaptureController);
 
     QObject::connect(
         &engine,

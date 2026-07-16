@@ -55,17 +55,121 @@ Item {
                 }
             }
 
-            Rectangle {
+            ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                color: "#1f2228"
-                border.color: studioController.recording ? "#ff6b6b" : "#3a3f49"
-                border.width: studioController.recording ? 2 : 1
+                spacing: 6
 
-                TestPattern {
-                    anchors.fill: parent
-                    anchors.margins: 2
-                    active: studioController.recording
+                RowLayout {
+                    Layout.fillWidth: true
+
+                    ComboBox {
+                        id: captureTargetSelector
+                        objectName: "captureTargetSelector"
+                        Layout.fillWidth: true
+                        model: screenCaptureController.targets
+                        textRole: "name"
+                        enabled: !screenCaptureController.busy
+                                 && !screenCaptureController.previewing
+                        currentIndex: {
+                            for (let i = 0; i < screenCaptureController.targets.length; ++i) {
+                                if (screenCaptureController.targets[i].id
+                                        === screenCaptureController.selectedTargetId)
+                                    return i
+                            }
+                            return -1
+                        }
+                        onActivated: function(index) {
+                            if (index >= 0)
+                                screenCaptureController.selectTarget(
+                                    screenCaptureController.targets[index].id)
+                        }
+                    }
+
+                    Button {
+                        text: qsTr("Grant Permission")
+                        visible: screenCaptureController.permissionRequired
+                        enabled: !screenCaptureController.busy
+                        onClicked: screenCaptureController.requestPermission()
+                    }
+
+                    Button {
+                        text: qsTr("Refresh")
+                        enabled: !screenCaptureController.busy
+                                 && !screenCaptureController.previewing
+                        onClicked: screenCaptureController.refreshTargets()
+                    }
+
+                    Button {
+                        text: screenCaptureController.previewing
+                              ? qsTr("Stop Preview") : qsTr("Start Preview")
+                        enabled: !screenCaptureController.busy
+                                 && (screenCaptureController.previewing
+                                     || screenCaptureController.selectedTargetId.length > 0)
+                        onClicked: screenCaptureController.previewing
+                                   ? screenCaptureController.stopPreview()
+                                   : screenCaptureController.startPreview()
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    color: "#1f2228"
+                    border.color: studioController.recording ? "#ff6b6b" : "#3a3f49"
+                    border.width: studioController.recording ? 2 : 1
+
+                    // R0-03 targets ScreenCaptureKit first. Windows keeps this
+                    // visibly labelled synthetic surface; it is never presented
+                    // as captured desktop content.
+                    TestPattern {
+                        anchors.fill: parent
+                        anchors.margins: 2
+                        active: studioController.recording
+                        visible: Qt.platform.os !== "osx"
+                                 || !screenCaptureController.previewing
+                    }
+
+                    Label {
+                        anchors.centerIn: parent
+                        visible: Qt.platform.os === "osx"
+                                 && screenCaptureController.previewing
+                        text: qsTr("Native preview surface is starting")
+                        color: "white"
+                        font.pixelSize: 20
+                    }
+
+                    Label {
+                        anchors.left: parent.left
+                        anchors.bottom: parent.bottom
+                        anchors.margins: 12
+                        visible: Qt.platform.os !== "osx"
+                        text: qsTr("Development test pattern — R0-03 native capture targets macOS")
+                        color: "#dddddd"
+                        font.pixelSize: 12
+                    }
+                }
+
+                Label {
+                    id: captureStatusLabel
+                    objectName: "captureStatusLabel"
+                    Layout.fillWidth: true
+                    text: screenCaptureController.statusMessage
+                    color: screenCaptureController.permissionRequired ? "#ffcc66" : palette.text
+                    elide: Text.ElideRight
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("%1×%2  %3 fps  received %4  capture drops %5  preview replacements %6")
+                          .arg(screenCaptureController.actualWidth)
+                          .arg(screenCaptureController.actualHeight)
+                          .arg(screenCaptureController.currentFps.toFixed(1))
+                          .arg(screenCaptureController.receivedFrames)
+                          .arg(screenCaptureController.droppedFrames)
+                          .arg(screenCaptureController.replacedPreviewFrames)
+                    font.family: "monospace"
+                    font.pixelSize: 12
                 }
             }
 
@@ -102,7 +206,10 @@ Item {
                 spacing: 24
 
                 Label { text: qsTr("Audio Mixer: —") }
-                Label { text: qsTr("Dropped Frames: —") }
+                Label {
+                    text: qsTr("Capture Drops: %1").arg(
+                              screenCaptureController.droppedFrames)
+                }
                 Label { text: qsTr("Disk: —") }
                 Label { text: qsTr("Encoder: —") }
 

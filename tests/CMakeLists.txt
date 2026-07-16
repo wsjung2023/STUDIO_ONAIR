@@ -42,6 +42,7 @@ add_executable(cs_tests
     capture/CaptureTimestampMapperTest.cpp
     capture/ScreenCapturePortsTest.cpp
     capture/LatestVideoFrameMailboxTest.cpp
+    capture/UnsupportedScreenCaptureBackendTest.cpp
     project_store/ManifestSchemaValidatorTest.cpp
     project_store/JsonProjectStoreTest.cpp
     project_store/SqliteConnectionTest.cpp
