@@ -5,6 +5,9 @@ cs_add_qtfree_library(cs_project_store
         JsonProjectStore.cpp
         ManifestSchemaValidator.h
         ManifestSchemaValidator.cpp
+        MigrationRunner.h
+        MigrationRunner.cpp
+        migrations/001_initial.sql
         internal/SqliteConnection.h
         internal/SqliteConnection.cpp
     DEPENDS

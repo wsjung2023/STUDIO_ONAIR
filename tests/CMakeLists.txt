@@ -31,6 +31,7 @@ add_executable(cs_tests
     project_store/ManifestSchemaValidatorTest.cpp
     project_store/JsonProjectStoreTest.cpp
     project_store/SqliteConnectionTest.cpp
+    project_store/MigrationRunnerTest.cpp
     fakes/FakeCaptureSourceTest.cpp
     fakes/FakeRecorderTest.cpp
 )
