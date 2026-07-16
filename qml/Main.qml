@@ -51,6 +51,7 @@ ApplicationWindow {
                     enabled: !studioController.recording
                              && !studioController.busy
                              && (modelData !== "Studio" || projectController.hasOpenProject)
+                             && (modelData !== "Editor" || projectController.hasOpenProject)
                     onClicked: window.currentPage = modelData
                 }
             }
@@ -92,7 +93,7 @@ ApplicationWindow {
 
         HomePage {}
         StudioPage {}
-        EditorPage {}
+        EditorPage { controller: editorController }
         RecoveryPage {}
     }
 }

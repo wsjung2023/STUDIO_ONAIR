@@ -1,4 +1,5 @@
 #include "edit_engine/EditEngineTypes.h"
+#include "edit_engine/UnavailableEditEngine.h"
 
 #include "core/Timebase.h"
 #include "domain/Identifiers.h"
@@ -29,6 +30,7 @@ using creator::edit_engine::RenderProgress;
 using creator::edit_engine::RenderRequest;
 using creator::edit_engine::TimelineChangeSet;
 using creator::edit_engine::TimelineSnapshot;
+using creator::edit_engine::UnavailableEditEngine;
 using creator::media::PixelFormat;
 using creator::media::VideoFrame;
 
@@ -54,6 +56,26 @@ VideoFrame frameAt(std::int64_t nanoseconds) {
         .pointPixelScale = 1.0,
         .pixelFormat = PixelFormat::Bgra8,
     };
+}
+
+TEST(UnavailableEditEngineTest, RejectsEveryPlaybackCommandExplicitly) {
+    UnavailableEditEngine engine;
+    const auto position = TimestampNs{DurationNs{100}};
+
+    const auto load = engine.load(snapshot());
+    const auto play = engine.play();
+    const auto pause = engine.pause();
+    const auto seek = engine.seek(position);
+    const auto frame = engine.requestFrame(position);
+
+    ASSERT_FALSE(load.hasValue());
+    EXPECT_EQ(load.error().code(), ErrorCode::InvalidState);
+    EXPECT_EQ(load.error().message(),
+              "Editor playback engine is unavailable in this build");
+    EXPECT_FALSE(play.hasValue());
+    EXPECT_FALSE(pause.hasValue());
+    EXPECT_FALSE(seek.hasValue());
+    EXPECT_FALSE(frame.hasValue());
 }
 
 TEST(EditEngineTypesTest, CreatesSequentialUniqueTimelineChangeSet) {

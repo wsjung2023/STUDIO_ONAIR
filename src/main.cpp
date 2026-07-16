@@ -1,4 +1,5 @@
 #include "app/ProjectController.h"
+#include "app/EditorController.h"
 #include "app/DeviceCaptureController.h"
 #include "app/LiveRecordingController.h"
 #include "app/LiveRecordingEngineFactory.h"
@@ -11,6 +12,7 @@
 #include "capture/macos/MacDeviceCaptureBackend.h"
 #endif
 #include "project_store/ProjectPackageStore.h"
+#include "edit_engine/UnavailableEditEngine.h"
 
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
@@ -49,6 +51,8 @@ int main(int argc, char* argv[]) {
         std::move(recordingEngine), &projectController,
         [&projectController] { return projectController.recordingPackagePath(); },
         [] { return creator::core::ProjectClock::now(); }, &app};
+    creator::app::EditorController editorController{
+        std::make_unique<creator::edit_engine::UnavailableEditEngine>(), &app};
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
@@ -59,6 +63,8 @@ int main(int argc, char* argv[]) {
                                              &screenCaptureController);
     engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
                                              &deviceCaptureController);
+    engine.rootContext()->setContextProperty(QStringLiteral("editorController"),
+                                             &editorController);
 
     QObject::connect(
         &engine,

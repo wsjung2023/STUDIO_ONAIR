@@ -1,9 +1,22 @@
 #include "app/ScreenPreviewItem.h"
+#include "app/MediaBinModel.h"
+#include "app/TimelineTrackModel.h"
+
+#include "core/Timebase.h"
+#include "domain/Identifiers.h"
+#include "domain/MediaAsset.h"
+#include "domain/Timeline.h"
+#include "domain/TimelineRevision.h"
+#include "domain/TimelineTypes.h"
 
 #include <QGuiApplication>
+#include <QCoreApplication>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQuickItem>
+#include <QQuickWindow>
+#include <QThread>
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
@@ -14,6 +27,16 @@
 #include <memory>
 
 namespace {
+
+QQuickItem* findVisualItem(QQuickItem* root, const QString& objectName) {
+    if (root->objectName() == objectName) return root;
+    for (QQuickItem* child : root->childItems()) {
+        if (auto* found = findVisualItem(child, objectName); found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
+}
 
 class FakeProjectController final : public QObject {
     Q_OBJECT
@@ -237,6 +260,79 @@ public:
     Q_INVOKABLE void setSystemAudioEnabled(bool) {}
 };
 
+class FakeEditorController final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(QAbstractItemModel* mediaBinModel READ mediaBinModel CONSTANT)
+    Q_PROPERTY(QAbstractItemModel* timelineTrackModel READ timelineTrackModel CONSTANT)
+    Q_PROPERTY(bool busy READ busy CONSTANT)
+    Q_PROPERTY(bool previewStale READ previewStale CONSTANT)
+    Q_PROPERTY(bool playing READ playing CONSTANT)
+    Q_PROPERTY(qlonglong playheadNs READ playheadNs CONSTANT)
+    Q_PROPERTY(qlonglong timelineRevision READ timelineRevision CONSTANT)
+    Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
+
+public:
+    explicit FakeEditorController(QObject* parent = nullptr) : QObject(parent) {
+        using namespace creator;
+        const auto media = domain::MediaAsset::create(
+                               domain::AssetId::create("screen").value(),
+                               domain::MediaKind::Video,
+                               "media/화면 녹화.mp4", core::DurationNs{5'000'000'000},
+                               domain::VideoAssetMetadata{
+                                   1920, 1080, core::FrameRate::create(60, 1).value()},
+                               std::nullopt, 42'000, "fingerprint",
+                               domain::AssetAvailability::Offline)
+                               .value();
+        mediaBin_.setAssets({media});
+        auto timeline =
+            domain::Timeline::create(domain::TimelineId::create("main").value(),
+                                     "강의 편집",
+                                     core::FrameRate::create(60, 1).value())
+                .value();
+        static_cast<void>(timeline.addTrack(
+            domain::Track::create(domain::TrackId::create("v1").value(),
+                                  domain::TrackKind::Video, "화면", true, false)
+                .value()));
+        const auto source = domain::TimeRange::create(
+                                core::TimestampNs{core::DurationNs::zero()},
+                                core::DurationNs{2'000'000'000})
+                                .value();
+        const auto placed = domain::TimeRange::create(
+                                core::TimestampNs{core::DurationNs{1'000'000'000}},
+                                core::DurationNs{2'000'000'000})
+                                .value();
+        static_cast<void>(timeline.insertClip(
+            domain::TrackId::create("v1").value(),
+            domain::Clip::createAsset(domain::ClipId::create("clip-1").value(),
+                                      media, source, placed, true, std::nullopt,
+                                      std::nullopt)
+                .value()));
+        tracks_.setTimeline(std::move(timeline));
+    }
+
+    [[nodiscard]] QAbstractItemModel* mediaBinModel() noexcept {
+        return &mediaBin_;
+    }
+    [[nodiscard]] QAbstractItemModel* timelineTrackModel() noexcept {
+        return &tracks_;
+    }
+    [[nodiscard]] bool busy() const noexcept { return false; }
+    [[nodiscard]] bool previewStale() const noexcept { return true; }
+    [[nodiscard]] bool playing() const noexcept { return false; }
+    [[nodiscard]] qlonglong playheadNs() const noexcept { return 1'000'000'000; }
+    [[nodiscard]] qlonglong timelineRevision() const noexcept { return 4; }
+    [[nodiscard]] QString statusMessage() const {
+        return QStringLiteral("Preview engine unavailable");
+    }
+    Q_INVOKABLE void play() {}
+    Q_INVOKABLE void pause() {}
+    Q_INVOKABLE void seek(qlonglong) {}
+
+private:
+    creator::app::MediaBinModel mediaBin_;
+    creator::app::TimelineTrackModel tracks_;
+};
+
 TEST(QmlSmokeTest, RecoveryPageLoadsWithProjectControllerContract) {
     QQmlEngine engine;
     FakeProjectController controller;
@@ -256,6 +352,7 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
     FakeStudioController studioController;
     FakeScreenCaptureController screenCaptureController;
     FakeDeviceCaptureController deviceCaptureController;
+    FakeEditorController editorController;
     engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
                                              &projectController);
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
@@ -264,6 +361,8 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
                                              &screenCaptureController);
     engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
                                              &deviceCaptureController);
+    engine.rootContext()->setContextProperty(QStringLiteral("editorController"),
+                                             &editorController);
     QQmlComponent component{
         &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/Main.qml"))};
 
@@ -271,6 +370,59 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
 
     ASSERT_NE(object, nullptr) << component.errorString().toStdString();
     EXPECT_EQ(object->property("currentPage").toString(), QStringLiteral("Recovery"));
+}
+
+TEST(QmlSmokeTest, EditorPageRendersTypedModelsAndPreviewState) {
+    QQmlEngine engine;
+    FakeEditorController controller;
+    QQmlComponent component{
+        &engine,
+        QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/EditorPage.qml"))};
+    QVariantMap initialProperties{
+        {QStringLiteral("controller"),
+         QVariant::fromValue(static_cast<QObject*>(&controller))},
+        {QStringLiteral("width"), 1200},
+        {QStringLiteral("height"), 720}};
+
+    QQuickWindow window;
+    window.setGeometry(0, 0, 1200, 720);
+    std::unique_ptr<QObject> object{
+        component.createWithInitialProperties(initialProperties)};
+
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    auto* rootItem = qobject_cast<QQuickItem*>(object.get());
+    ASSERT_NE(rootItem, nullptr);
+    rootItem->setParentItem(window.contentItem());
+    window.show();
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(2);
+    }
+    auto* media = findVisualItem(rootItem, QStringLiteral("mediaAsset-screen"));
+    auto* mediaList =
+        object->findChild<QObject*>(QStringLiteral("editorMediaList"));
+    auto* offline = findVisualItem(rootItem, QStringLiteral("mediaOffline-screen"));
+    auto* track = findVisualItem(rootItem, QStringLiteral("timelineTrack-v1"));
+    auto* clip = findVisualItem(rootItem, QStringLiteral("timelineClip-clip-1"));
+    auto* preview = object->findChild<QObject*>(QStringLiteral("editorPreviewState"));
+    auto* status = object->findChild<QObject*>(QStringLiteral("editorStatus"));
+    ASSERT_NE(mediaList, nullptr);
+    ASSERT_EQ(mediaList->property("count").toInt(), 1);
+    ASSERT_NE(media, nullptr);
+    ASSERT_NE(offline, nullptr);
+    ASSERT_NE(track, nullptr);
+    ASSERT_NE(clip, nullptr);
+    ASSERT_NE(preview, nullptr);
+    ASSERT_NE(status, nullptr);
+    EXPECT_TRUE(media->property("text").toString().contains(
+        QString::fromUtf8("화면 녹화.mp4")));
+    EXPECT_TRUE(offline->property("visible").toBool());
+    EXPECT_EQ(track->property("text").toString(), QString::fromUtf8("화면"));
+    EXPECT_GT(clip->property("width").toDouble(), 0.0);
+    EXPECT_TRUE(preview->property("text").toString().contains(
+        QStringLiteral("stale"), Qt::CaseInsensitive));
+    EXPECT_EQ(status->property("text").toString(),
+              QStringLiteral("Preview engine unavailable"));
 }
 
 TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {

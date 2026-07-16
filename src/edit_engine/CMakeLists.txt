@@ -3,6 +3,8 @@ cs_add_qtfree_library(cs_edit_engine
         EditEngineTypes.h
         EditEngineTypes.cpp
         IEditEngine.h
+        UnavailableEditEngine.h
+        UnavailableEditEngine.cpp
     DEPENDS
         cs_core
         cs_domain
