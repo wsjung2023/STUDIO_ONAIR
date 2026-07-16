@@ -93,6 +93,7 @@ add_executable(cs_app_tests
     app/ProjectControllerTest.cpp
     app/ScreenCaptureControllerTest.cpp
     app/PreviewGeometryTest.cpp
+    app/DeviceCaptureControllerTest.cpp
 )
 
 target_link_libraries(cs_app_tests

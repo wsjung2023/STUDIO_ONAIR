@@ -64,9 +64,10 @@ public:
 
     /// Must be safe to call on a source that was never started and immediately
     /// bar further frame callbacks. Purely synchronous sources release all
-    /// handles before return. Native screen sources additionally expose
-    /// IScreenCaptureSource::stopAsync so their OS completion and error remain
-    /// observable without blocking the UI thread.
+    /// handles before return. Native screen/device sources additionally expose
+    /// asynchronous stop ports so OS completion and error remain observable
+    /// without blocking the UI thread; their synchronous barrier must keep any
+    /// still-running native teardown state alive independently of this object.
     [[nodiscard]] virtual creator::core::Result<void> stop() = 0;
 
     [[nodiscard]] virtual CaptureStats stats() const noexcept = 0;

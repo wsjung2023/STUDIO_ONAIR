@@ -12,6 +12,8 @@ add_library(cs_app STATIC
     ScreenCaptureController.cpp
     PreviewGeometry.h
     PreviewGeometry.cpp
+    DeviceCaptureController.h
+    DeviceCaptureController.cpp
     ScreenPreviewItem.h
     ScreenPreviewItem.cpp
     RecentProjectRegistry.h
