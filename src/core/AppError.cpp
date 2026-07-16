@@ -12,6 +12,7 @@ std::string_view toString(ErrorCode code) noexcept {
         case ErrorCode::IoFailure:          return "IoFailure";
         case ErrorCode::ParseFailure:       return "ParseFailure";
         case ErrorCode::UnsupportedVersion: return "UnsupportedVersion";
+        case ErrorCode::InsufficientStorage: return "InsufficientStorage";
     }
     return "Unknown";
 }

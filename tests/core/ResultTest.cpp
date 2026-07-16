@@ -91,6 +91,7 @@ TEST(AppErrorTest, StringifiesEveryCode) {
     EXPECT_EQ(creator::core::toString(ErrorCode::IoFailure), "IoFailure");
     EXPECT_EQ(creator::core::toString(ErrorCode::ParseFailure), "ParseFailure");
     EXPECT_EQ(creator::core::toString(ErrorCode::UnsupportedVersion), "UnsupportedVersion");
+    EXPECT_EQ(creator::core::toString(ErrorCode::InsufficientStorage), "InsufficientStorage");
 }
 
 }  // namespace

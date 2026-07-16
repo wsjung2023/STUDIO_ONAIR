@@ -52,6 +52,7 @@ add_executable(cs_tests
     capture/DeviceCaptureAssemblerTest.cpp
     capture/DeviceCaptureStopCoordinatorTest.cpp
     recorder/RecordingTrackTest.cpp
+    recorder/DiskSpaceMonitorTest.cpp
     project_store/ManifestSchemaValidatorTest.cpp
     project_store/JsonProjectStoreTest.cpp
     project_store/SqliteConnectionTest.cpp

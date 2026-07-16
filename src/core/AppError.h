@@ -18,6 +18,7 @@ enum class ErrorCode {
     IoFailure,
     ParseFailure,
     UnsupportedVersion,
+    InsufficientStorage,
 };
 
 [[nodiscard]] std::string_view toString(ErrorCode code) noexcept;
