@@ -3,6 +3,7 @@
 #include "domain/Identifiers.h"
 #include "domain/RecordingSession.h"
 #include "fakes/FakeCaptureSource.h"
+#include "media/MediaTypes.h"
 #include "recorder/IRecorder.h"
 
 #include <gtest/gtest.h>
@@ -21,10 +22,19 @@ using creator::domain::SessionState;
 using creator::domain::SourceId;
 using creator::fakes::FakeCaptureSource;
 using creator::fakes::FakeRecorder;
+using creator::media::AudioBlock;
 using creator::recorder::RecorderConfig;
 
 TimestampNs at(std::int64_t seconds) {
     return TimestampNs{std::chrono::duration_cast<DurationNs>(std::chrono::seconds{seconds})};
+}
+
+/// An audio block carrying no samples, timestamped `seconds` in - accept()
+/// only reads the timestamp, so the fake never needs real sample data.
+AudioBlock audioAt(std::int64_t seconds) {
+    AudioBlock block;
+    block.timestamp = at(seconds);
+    return block;
 }
 
 RecorderConfig makeConfig() {
@@ -224,6 +234,65 @@ TEST(FakeRecorderTest, CanRecordASecondTake) {
     // Counters are per-take, not cumulative. This is only a real check because
     // the first take pushed framesAccepted to 30 above.
     EXPECT_EQ(recorder.stats().framesAccepted, 0u);
+}
+
+TEST(FakeRecorderTest, CountsAudioBlocksAccepted) {
+    FakeRecorder recorder;
+    ASSERT_TRUE(recorder.start(makeConfig(), at(0)).hasValue());
+
+    ASSERT_TRUE(recorder.accept(audioAt(0)).hasValue());
+    ASSERT_TRUE(recorder.accept(audioAt(1)).hasValue());
+    ASSERT_TRUE(recorder.accept(audioAt(2)).hasValue());
+
+    EXPECT_EQ(recorder.stats().blocksAccepted, 3u);
+}
+
+TEST(FakeRecorderTest, RejectsAudioBlockBeforeStart) {
+    FakeRecorder recorder;
+
+    const auto result = recorder.accept(audioAt(0));
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidState);
+}
+
+TEST(FakeRecorderTest, AudioDoesNotAffectSegmentCountOrTrailingDuration) {
+    // Audio and video are independent streams, so an audio block can
+    // legitimately arrive timestamped earlier than the most recent video
+    // frame. Segments here are video-only (FakeRecorder::accept(AudioBlock)'s
+    // own comment), so that must not perturb them at all - previously, audio
+    // wrote the same "last frame time" field video did, so an
+    // earlier-timestamped audio block arriving after video had already
+    // crossed a segment boundary could make the trailing segment's
+    // (endTime - segmentStart_) go negative.
+    FakeRecorder recorder;
+    FakeCaptureSource source{SourceId::create("screen-1").value(), "Fake Screen"};
+    ASSERT_TRUE(recorder.start(makeConfig(), at(0)).hasValue());
+    ASSERT_TRUE(source.start(CaptureConfig{}).hasValue());
+
+    // 130 frames at 60fps crosses the 2s boundary (frame 120) and keeps
+    // going to 2.15s, closing segment 0 = [0, 2s) and leaving segment 1
+    // started at 2s with its last video frame at 2.15s.
+    for (int frame = 0; frame < 130; ++frame) {
+        const auto produced = source.tick();
+        ASSERT_TRUE(produced.hasValue());
+        ASSERT_TRUE(recorder.accept(produced.value()).hasValue());
+    }
+    // An audio block timestamped at 1s - a full second before segment 1 even
+    // started - arrives after all the video above. Under the bug, this would
+    // become the trailing segment's end time, giving a duration of
+    // 1s - 2s = -1s.
+    ASSERT_TRUE(recorder.accept(audioAt(1)).hasValue());
+
+    const auto session = recorder.stop(at(3));
+
+    ASSERT_TRUE(session.hasValue());
+    ASSERT_EQ(session.value().segmentCount(), 2u);
+    const auto& trailing = session.value().segments().at(1);
+    EXPECT_EQ(trailing.startTime, at(2));
+    // 2.15s - 2s = 0.15s: positive, and driven only by the video frames.
+    EXPECT_EQ(trailing.duration, DurationNs{std::chrono::milliseconds{150}});
+    EXPECT_EQ(recorder.stats().blocksAccepted, 1u);
 }
 
 }  // namespace

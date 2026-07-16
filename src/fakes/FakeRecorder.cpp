@@ -45,7 +45,7 @@ Result<void> FakeRecorder::start(const recorder::RecorderConfig& config, Timesta
     segments_.clear();
     stats_ = recorder::RecorderStats{};
     segmentStart_ = at;
-    lastFrameTime_ = at;
+    lastVideoTime_ = at;
     sawFrameInSegment_ = false;
     return core::ok();
 }
@@ -56,7 +56,7 @@ Result<void> FakeRecorder::accept(const media::VideoFrame& frame) {
     }
 
     ++stats_.framesAccepted;
-    lastFrameTime_ = frame.timestamp;
+    lastVideoTime_ = frame.timestamp;
 
     // Segment boundaries follow frame timestamps, never wall time.
     while (frame.timestamp - segmentStart_ >= config_->segmentDuration) {
@@ -73,7 +73,7 @@ Result<void> FakeRecorder::accept(const media::VideoFrame& frame) {
     return core::ok();
 }
 
-Result<void> FakeRecorder::accept(const media::AudioBlock& block) {
+Result<void> FakeRecorder::accept(const media::AudioBlock& /*block*/) {
     if (!session_.has_value() || session_->state() != domain::SessionState::Recording) {
         return AppError{ErrorCode::InvalidState, "recorder is not recording"};
     }
@@ -83,9 +83,16 @@ Result<void> FakeRecorder::accept(const media::AudioBlock& block) {
     // own files (README package layout: audio/microphone/segment_000001.mka).
     // Driving segment boundaries off audio here would make the fake's segment
     // count depend on which stream arrived first, and the tests assert exact
-    // counts.
+    // counts. The block itself carries nothing else this fake needs - it
+    // exists to be counted, not inspected.
+    //
+    // Must NOT touch lastVideoTime_: audio and video are independent streams,
+    // so an audio block can legitimately be timestamped earlier than the most
+    // recent video frame. Letting it move the "last frame" time used to close
+    // the trailing segment on stop() would make that segment's end wander off
+    // the video timeline it is supposed to describe - including landing
+    // before segmentStart_, which produces a negative-duration segment.
     ++stats_.blocksAccepted;
-    lastFrameTime_ = block.timestamp;
     return core::ok();
 }
 
@@ -96,7 +103,7 @@ Result<RecordingSession> FakeRecorder::stop(TimestampNs at) {
 
     // Flush whatever is still open, or the tail of every take disappears.
     if (sawFrameInSegment_) {
-        closeSegment(lastFrameTime_);
+        closeSegment(lastVideoTime_);
     }
 
     if (auto stopped = session_->stop(at); !stopped.hasValue()) {
