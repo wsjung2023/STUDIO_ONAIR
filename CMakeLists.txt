@@ -43,6 +43,24 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(nlohmann_json_schema_validator)
 
+FetchContent_Declare(
+    sqlite_amalgamation
+    URL      https://sqlite.org/2026/sqlite-amalgamation-3530300.zip
+    URL_HASH SHA3_256=d45c688a8cb23f68611a894a756a12d7eb6ab6e9e2468ca70adbeab3808b5ab9
+)
+FetchContent_MakeAvailable(sqlite_amalgamation)
+
+add_library(cs_sqlite3 STATIC "${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c")
+target_include_directories(cs_sqlite3 PUBLIC "${sqlite_amalgamation_SOURCE_DIR}")
+target_compile_definitions(cs_sqlite3 PRIVATE
+    SQLITE_DQS=0
+    SQLITE_DEFAULT_FOREIGN_KEYS=1
+    SQLITE_ENABLE_API_ARMOR=1
+    SQLITE_OMIT_LOAD_EXTENSION=1
+    SQLITE_THREADSAFE=1
+)
+set_target_properties(cs_sqlite3 PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/schemas/project.schema.json"
 )
