@@ -16,6 +16,11 @@ ApplicationWindow {
     readonly property var stackPages: ["Home", "Studio", "Editor", "Recovery"]
     property string currentPage: "Home"
 
+    Component.onCompleted: {
+        if (projectController.recoveries.length > 0)
+            window.currentPage = "Recovery"
+    }
+
     Connections {
         target: projectController
         function onProjectOpened() { window.currentPage = "Studio" }
