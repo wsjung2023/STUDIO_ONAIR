@@ -150,8 +150,15 @@ if(CS_ENABLE_FFMPEG)
         ffmpeg_adapter/FfmpegVideoSegmentEncoderTest.cpp
         ffmpeg_adapter/FfmpegAudioSegmentEncoderTest.cpp
         ffmpeg_adapter/BgraFrameMappersTest.cpp
+        ffmpeg_adapter/RecordingPipelineIntegrationTest.cpp
+        ffmpeg_adapter/LongTimelineRecordingTest.cpp
     )
-    target_link_libraries(cs_ffmpeg_tests PRIVATE cs_ffmpeg_adapter GTest::gtest_main)
+    target_link_libraries(cs_ffmpeg_tests PRIVATE
+        cs_ffmpeg_adapter
+        cs_app
+        cs_project_store
+        GTest::gtest_main
+    )
     target_include_directories(cs_ffmpeg_tests SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
     target_link_libraries(cs_ffmpeg_tests PRIVATE ${FFMPEG_LIBRARIES})
     cs_apply_warnings(cs_ffmpeg_tests)
