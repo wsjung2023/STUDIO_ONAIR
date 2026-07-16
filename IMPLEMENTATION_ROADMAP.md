@@ -91,6 +91,17 @@
 
 목적: 실제 튜토리얼 한 편을 촬영하고 편집해 출력할 수 있다.
 
+현재 전달 상태:
+
+- [x] R1-01 타임라인 도메인, migration 002, split/trim/ripple 명령,
+  durable Undo/Redo·autosave 기반
+- [ ] 편집 엔진 adapter와 Editor view model
+- [ ] Studio 장면/source 편집과 녹화 결과의 타임라인 연결
+- [ ] 텍스트·기본 자막, preview, export와 R1 물리 검증
+
+위 체크는 R1을 축소한 것이 아니다. R1 완료 기준은 아래 Studio, Editor,
+Export 항목과 30분 실제 촬영·편집·출력 검증을 모두 만족할 때까지 유지한다.
+
 ### Studio
 
 - scene/source 패널

@@ -1,11 +1,29 @@
 cs_add_qtfree_library(cs_domain
     SOURCES
         Identifiers.h
+        EditCommand.h
+        EditCommandJson.h
+        EditCommandJson.cpp
+        DeleteRangeCommand.h
+        DeleteRangeCommand.cpp
+        EditHistory.h
+        EditHistory.cpp
+        MediaAsset.h
+        MediaAsset.cpp
         ProjectManifest.h
         ProjectManifest.cpp
         RecordingSession.h
         RecordingSession.cpp
         Segment.h
+        TimelineTypes.h
+        TimelineTypes.cpp
+        Timeline.h
+        Timeline.cpp
+        TimelineRevision.h
+        SplitClipCommand.h
+        SplitClipCommand.cpp
+        TrimClipCommand.h
+        TrimClipCommand.cpp
     DEPENDS
         cs_core
 )

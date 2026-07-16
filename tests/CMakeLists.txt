@@ -30,11 +30,17 @@ set_target_properties(cs_crash_recovery_fixture PROPERTIES
 cs_apply_warnings(cs_crash_recovery_fixture)
 
 add_executable(cs_tests
+    ${PROJECT_SOURCE_DIR}/src/app/TimelineEditService.cpp
     core/ResultTest.cpp
     core/TimebaseTest.cpp
     core/UuidTest.cpp
     core/UtcTest.cpp
     domain/IdentifiersTest.cpp
+    domain/TimelineTypesTest.cpp
+    domain/MediaAssetTest.cpp
+    domain/TimelineTest.cpp
+    domain/EditCommandTest.cpp
+    domain/DeleteRangeCommandTest.cpp
     domain/ProjectManifestTest.cpp
     domain/RecordingSessionTest.cpp
     media/MediaTypesTest.cpp
@@ -65,10 +71,12 @@ add_executable(cs_tests
     project_store/SqliteConnectionTest.cpp
     project_store/MigrationRunnerTest.cpp
     project_store/SqliteProjectDatabaseTest.cpp
+    project_store/SqliteTimelineStoreTest.cpp
     project_store/SegmentPersistenceTest.cpp
     project_store/RecoveryTest.cpp
     project_store/ProjectPackageStoreTest.cpp
     project_store/CrashRecoveryIntegrationTest.cpp
+    app/TimelineEditServiceTest.cpp
     fakes/FakeCaptureSourceTest.cpp
     fakes/ManualPushCaptureSourceTest.cpp
     fakes/FakeRecorderTest.cpp
@@ -127,7 +135,9 @@ target_include_directories(cs_app_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 
 cs_apply_warnings(cs_app_tests)
 
-gtest_discover_tests(cs_app_tests)
+gtest_discover_tests(cs_app_tests
+    DISCOVERY_MODE PRE_TEST
+)
 
 add_executable(cs_qml_tests
     app/QmlSmokeTest.cpp

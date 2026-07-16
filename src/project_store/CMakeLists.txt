@@ -1,6 +1,7 @@
 cs_add_qtfree_library(cs_project_store
     SOURCES
         IProjectStore.h
+        ITimelineStore.h
         IProjectPackageStore.h
         JsonProjectStore.h
         JsonProjectStore.cpp
@@ -13,9 +14,14 @@ cs_add_qtfree_library(cs_project_store
         ProjectPackageStore.cpp
         SqliteProjectDatabase.h
         SqliteProjectDatabase.cpp
+        SqliteTimelineStore.h
+        SqliteTimelineStore.cpp
         migrations/001_initial.sql
+        migrations/002_timeline_editing.sql
         internal/SqliteConnection.h
         internal/SqliteConnection.cpp
+        internal/EditCommandCodec.h
+        internal/EditCommandCodec.cpp
         internal/DurableFile.h
         internal/DurableFile.cpp
     DEPENDS

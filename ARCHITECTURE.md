@@ -352,6 +352,27 @@ Timeline
  └─ CaptionTrack
 ```
 
+#### 9.1.1 R1-01 구현 상태
+
+R1-01에서 제품 기준 모델의 첫 구현을 완료했다. `domain`은 Qt, SQLite,
+FFmpeg, MLT 타입을 포함하지 않으며 다음을 소유한다.
+
+- 안정적인 asset/timeline/track/clip/command 식별자와 검증된 시간 범위
+- 화면·카메라 transform, 오디오 gain/fade를 포함한 멀티트랙 타임라인
+- split, trim, range delete/ripple 명령과 제한된 Undo/Redo 이력
+
+`project_store`의 migration 002는 미디어 자산, 타임라인 스냅샷, 트랙,
+클립, transform, audio envelope, edit event, checkpoint를 정규화해 저장한다.
+편집 한 번은 materialized snapshot, audit event, revision, history cursor를
+하나의 `BEGIN IMMEDIATE` 트랜잭션으로 기록한다. 다시 열 때는 deferred read
+transaction 하나에서 snapshot과 history를 함께 읽어 서로 다른 revision이
+섞이지 않게 한다.
+
+`TimelineEditService`는 명령을 메모리 복사본에 먼저 적용한 뒤 durable commit이
+성공한 경우에만 현재 상태를 교체한다. 따라서 저장 실패는 UI가 보게 되는
+타임라인을 부분 변경하지 않는다. 이 서비스는 Qt-free이므로 이후
+`EditorController`가 worker 경계에서 호출한다.
+
 ### 9.2 MLT Adapter
 
 - Domain Timeline을 MLT producer/playlist/tractor/filter로 변환
