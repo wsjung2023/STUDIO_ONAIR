@@ -139,6 +139,9 @@ class FakeDeviceCaptureController final : public QObject {
     Q_PROPERTY(bool cameraCapturing READ cameraCapturing CONSTANT)
     Q_PROPERTY(bool microphoneCapturing READ microphoneCapturing CONSTANT)
     Q_PROPERTY(bool systemAudioCapturing READ systemAudioCapturing CONSTANT)
+    Q_PROPERTY(bool cameraCanStop READ cameraCanStop CONSTANT)
+    Q_PROPERTY(bool microphoneCanStop READ microphoneCanStop CONSTANT)
+    Q_PROPERTY(bool systemAudioCanStop READ systemAudioCanStop CONSTANT)
     Q_PROPERTY(bool cameraBusy READ cameraBusy CONSTANT)
     Q_PROPERTY(bool microphoneBusy READ microphoneBusy CONSTANT)
     Q_PROPERTY(bool systemAudioBusy READ systemAudioBusy CONSTANT)
@@ -176,6 +179,9 @@ public:
     [[nodiscard]] bool cameraCapturing() const noexcept { return true; }
     [[nodiscard]] bool microphoneCapturing() const noexcept { return true; }
     [[nodiscard]] bool systemAudioCapturing() const noexcept { return true; }
+    [[nodiscard]] bool cameraCanStop() const noexcept { return true; }
+    [[nodiscard]] bool microphoneCanStop() const noexcept { return true; }
+    [[nodiscard]] bool systemAudioCanStop() const noexcept { return true; }
     [[nodiscard]] bool cameraBusy() const noexcept { return false; }
     [[nodiscard]] bool microphoneBusy() const noexcept { return false; }
     [[nodiscard]] bool systemAudioBusy() const noexcept { return false; }

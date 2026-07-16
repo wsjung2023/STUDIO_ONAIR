@@ -85,6 +85,18 @@ bool DeviceCaptureController::systemAudioCapturing() const noexcept {
     return systemAudioState_ == DeviceCaptureState::Capturing;
 }
 
+bool DeviceCaptureController::cameraCanStop() const noexcept {
+    return canStop(cameraState_);
+}
+
+bool DeviceCaptureController::microphoneCanStop() const noexcept {
+    return canStop(microphoneState_);
+}
+
+bool DeviceCaptureController::systemAudioCanStop() const noexcept {
+    return canStop(systemAudioState_);
+}
+
 bool DeviceCaptureController::cameraBusy() const noexcept { return busy(cameraState_); }
 bool DeviceCaptureController::microphoneBusy() const noexcept {
     return busy(microphoneState_);
@@ -95,6 +107,10 @@ bool DeviceCaptureController::systemAudioBusy() const noexcept {
 
 bool DeviceCaptureController::busy(DeviceCaptureState state) noexcept {
     return state == DeviceCaptureState::Starting || state == DeviceCaptureState::Stopping;
+}
+
+bool DeviceCaptureController::canStop(DeviceCaptureState state) noexcept {
+    return state == DeviceCaptureState::Starting || state == DeviceCaptureState::Capturing;
 }
 
 void DeviceCaptureController::initialize() {

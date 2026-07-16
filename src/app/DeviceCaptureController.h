@@ -41,6 +41,9 @@ class DeviceCaptureController final : public QObject {
     Q_PROPERTY(bool cameraCapturing READ cameraCapturing NOTIFY stateChanged)
     Q_PROPERTY(bool microphoneCapturing READ microphoneCapturing NOTIFY stateChanged)
     Q_PROPERTY(bool systemAudioCapturing READ systemAudioCapturing NOTIFY stateChanged)
+    Q_PROPERTY(bool cameraCanStop READ cameraCanStop NOTIFY stateChanged)
+    Q_PROPERTY(bool microphoneCanStop READ microphoneCanStop NOTIFY stateChanged)
+    Q_PROPERTY(bool systemAudioCanStop READ systemAudioCanStop NOTIFY stateChanged)
     Q_PROPERTY(bool cameraBusy READ cameraBusy NOTIFY stateChanged)
     Q_PROPERTY(bool microphoneBusy READ microphoneBusy NOTIFY stateChanged)
     Q_PROPERTY(bool systemAudioBusy READ systemAudioBusy NOTIFY stateChanged)
@@ -74,6 +77,9 @@ public:
     [[nodiscard]] bool cameraCapturing() const noexcept;
     [[nodiscard]] bool microphoneCapturing() const noexcept;
     [[nodiscard]] bool systemAudioCapturing() const noexcept;
+    [[nodiscard]] bool cameraCanStop() const noexcept;
+    [[nodiscard]] bool microphoneCanStop() const noexcept;
+    [[nodiscard]] bool systemAudioCanStop() const noexcept;
     [[nodiscard]] bool cameraBusy() const noexcept;
     [[nodiscard]] bool microphoneBusy() const noexcept;
     [[nodiscard]] bool systemAudioBusy() const noexcept;
@@ -156,6 +162,7 @@ private:
     [[nodiscard]] const creator::capture::CaptureDeviceInfo* selectedCamera() const;
     [[nodiscard]] const creator::capture::CaptureDeviceInfo* selectedMicrophone() const;
     [[nodiscard]] static bool busy(DeviceCaptureState state) noexcept;
+    [[nodiscard]] static bool canStop(DeviceCaptureState state) noexcept;
 
     std::unique_ptr<creator::capture::IDeviceCaptureBackend> backend_;
     std::vector<creator::capture::CaptureDeviceInfo> cameraSnapshot_;

@@ -326,6 +326,27 @@ TEST(DeviceCaptureControllerTest, RemainsStoppingUntilNativeCompletion) {
     EXPECT_FALSE(fixture.controller->cameraCapturing());
 }
 
+TEST(DeviceCaptureControllerTest, CanStopEverySourceWhileNativeStartIsPending) {
+    Fixture fixture;
+    fixture.backendRaw->deferStops = true;
+    fixture.controller->initialize();
+    fixture.controller->setCameraEnabled(true);
+    fixture.controller->setMicrophoneEnabled(true);
+    fixture.controller->setSystemAudioEnabled(true);
+
+    EXPECT_TRUE(fixture.controller->cameraCanStop());
+    EXPECT_TRUE(fixture.controller->microphoneCanStop());
+    EXPECT_TRUE(fixture.controller->systemAudioCanStop());
+
+    fixture.controller->setCameraEnabled(false);
+    fixture.controller->setMicrophoneEnabled(false);
+    fixture.controller->setSystemAudioEnabled(false);
+
+    EXPECT_EQ(fixture.controller->cameraState(), DeviceCaptureState::Stopping);
+    EXPECT_EQ(fixture.controller->microphoneState(), DeviceCaptureState::Stopping);
+    EXPECT_EQ(fixture.controller->systemAudioState(), DeviceCaptureState::Stopping);
+}
+
 TEST(DeviceCaptureControllerTest, CameraHotUnplugDoesNotStopOtherSourcesOrApp) {
     Fixture fixture;
     fixture.controller->initialize();

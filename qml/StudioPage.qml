@@ -78,14 +78,14 @@ Item {
                         }
                         Button {
                             Layout.fillWidth: true
-                            text: deviceCaptureController.cameraCapturing
+                            text: deviceCaptureController.cameraCanStop
                                   ? qsTr("Stop Camera") : qsTr("Start Camera")
-                            enabled: deviceCaptureController.cameraCapturing
+                            enabled: deviceCaptureController.cameraCanStop
                                      || (!deviceCaptureController.cameraBusy
                                          && !deviceCaptureController.cameraPermissionRequired
                                          && deviceCaptureController.selectedCameraId.length > 0)
                             onClicked: deviceCaptureController.setCameraEnabled(
-                                           !deviceCaptureController.cameraCapturing)
+                                           !deviceCaptureController.cameraCanStop)
                         }
                     }
                     Label {
@@ -130,14 +130,14 @@ Item {
                         }
                         Button {
                             Layout.fillWidth: true
-                            text: deviceCaptureController.microphoneCapturing
+                            text: deviceCaptureController.microphoneCanStop
                                   ? qsTr("Stop Mic") : qsTr("Start Mic")
-                            enabled: deviceCaptureController.microphoneCapturing
+                            enabled: deviceCaptureController.microphoneCanStop
                                      || (!deviceCaptureController.microphoneBusy
                                          && !deviceCaptureController.microphonePermissionRequired
                                          && deviceCaptureController.selectedMicrophoneId.length > 0)
                             onClicked: deviceCaptureController.setMicrophoneEnabled(
-                                           !deviceCaptureController.microphoneCapturing)
+                                           !deviceCaptureController.microphoneCanStop)
                         }
                     }
                     Label {
@@ -149,12 +149,12 @@ Item {
 
                     Button {
                         Layout.fillWidth: true
-                        text: deviceCaptureController.systemAudioCapturing
+                        text: deviceCaptureController.systemAudioCanStop
                               ? qsTr("Stop System Audio") : qsTr("Start System Audio")
-                        enabled: deviceCaptureController.systemAudioCapturing
+                        enabled: deviceCaptureController.systemAudioCanStop
                                  || !deviceCaptureController.systemAudioBusy
                         onClicked: deviceCaptureController.setSystemAudioEnabled(
-                                       !deviceCaptureController.systemAudioCapturing)
+                                       !deviceCaptureController.systemAudioCanStop)
                     }
                     Label {
                         Layout.fillWidth: true
