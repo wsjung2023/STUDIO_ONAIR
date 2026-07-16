@@ -14,6 +14,7 @@ cs_add_qtfree_library(cs_project_store
         SqliteProjectDatabase.h
         SqliteProjectDatabase.cpp
         migrations/001_initial.sql
+        migrations/002_timeline_editing.sql
         internal/SqliteConnection.h
         internal/SqliteConnection.cpp
         internal/DurableFile.h

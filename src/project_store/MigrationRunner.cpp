@@ -3,6 +3,7 @@
 #include "core/AppError.h"
 #include "core/Utc.h"
 #include "project_store/Migration001.h"
+#include "project_store/Migration002.h"
 #include "project_store/internal/SqliteConnection.h"
 
 #include <array>
@@ -107,6 +108,20 @@ Result<void> validateDescriptors(std::span<const MigrationDescriptor> migrations
 
 namespace internal {
 
+std::span<const MigrationDescriptor> defaultMigrations() noexcept {
+    static constexpr std::array migrations{
+        MigrationDescriptor{.version = embedded::kMigration001Version,
+                            .name = embedded::kMigration001Name,
+                            .checksum = embedded::kMigration001Sha256,
+                            .sql = embedded::kMigration001Sql},
+        MigrationDescriptor{.version = embedded::kMigration002Version,
+                            .name = embedded::kMigration002Name,
+                            .checksum = embedded::kMigration002Sha256,
+                            .sql = embedded::kMigration002Sql}};
+    static_assert(migrations.back().version == MigrationRunner::kLatestVersion);
+    return migrations;
+}
+
 Result<void> applyMigrations(SqliteConnection& connection,
                              std::span<const MigrationDescriptor> migrations) {
     if (auto valid = validateDescriptors(migrations); !valid.hasValue()) {
@@ -178,13 +193,7 @@ Result<void> applyMigrations(SqliteConnection& connection,
 }  // namespace internal
 
 Result<void> MigrationRunner::apply(internal::SqliteConnection& connection) {
-    constexpr std::array migrations{
-        MigrationDescriptor{.version = embedded::kMigration001Version,
-                            .name = embedded::kMigration001Name,
-                            .checksum = embedded::kMigration001Sha256,
-                            .sql = embedded::kMigration001Sql}};
-    static_assert(migrations.back().version == kLatestVersion);
-    return internal::applyMigrations(connection, migrations);
+    return internal::applyMigrations(connection, internal::defaultMigrations());
 }
 
 }  // namespace creator::project_store

@@ -19,6 +19,7 @@ struct MigrationDescriptor final {
 
 [[nodiscard]] core::Result<void> applyMigrations(
     SqliteConnection& connection, std::span<const MigrationDescriptor> migrations);
+[[nodiscard]] std::span<const MigrationDescriptor> defaultMigrations() noexcept;
 
 }  // namespace creator::project_store::internal
 
@@ -26,7 +27,7 @@ namespace creator::project_store {
 
 class MigrationRunner final {
 public:
-    static constexpr std::int32_t kLatestVersion = 1;
+    static constexpr std::int32_t kLatestVersion = 2;
 
     [[nodiscard]] static core::Result<void> apply(internal::SqliteConnection& connection);
 };
