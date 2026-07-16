@@ -1,5 +1,7 @@
 cs_add_qtfree_library(cs_capture
     SOURCES
+        CaptureTimestampMapper.h
+        CaptureTimestampMapper.cpp
         ICaptureSource.h
         IPullCaptureSource.h
     DEPENDS

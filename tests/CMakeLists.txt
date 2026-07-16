@@ -39,6 +39,7 @@ add_executable(cs_tests
     domain/RecordingSessionTest.cpp
     media/MediaTypesTest.cpp
     capture/PortContractTest.cpp
+    capture/CaptureTimestampMapperTest.cpp
     project_store/ManifestSchemaValidatorTest.cpp
     project_store/JsonProjectStoreTest.cpp
     project_store/SqliteConnectionTest.cpp
