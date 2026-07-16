@@ -57,12 +57,19 @@ Result<void> FakeRecorder::accept(const media::VideoFrame& frame) {
 
     ++stats_.framesAccepted;
     lastFrameTime_ = frame.timestamp;
-    sawFrameInSegment_ = true;
 
     // Segment boundaries follow frame timestamps, never wall time.
     while (frame.timestamp - segmentStart_ >= config_->segmentDuration) {
         closeSegment(segmentStart_ + config_->segmentDuration);
     }
+
+    // Must be set AFTER the loop, not before: a frame landing exactly on a
+    // boundary runs closeSegment() above, which resets this to false for the
+    // segment that frame now belongs to. Setting it first would let
+    // closeSegment() immediately erase the very flag that says this frame
+    // was seen, so stop()'s tail flush (see below) would silently skip a
+    // segment that legitimately contains one frame.
+    sawFrameInSegment_ = true;
     return core::ok();
 }
 

@@ -171,6 +171,32 @@ TEST(FakeRecorderTest, RejectsInvalidSegmentDuration) {
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
 }
 
+TEST(FakeRecorderTest, ClosesSegmentForFrameLandingExactlyOnBoundary) {
+    FakeRecorder recorder;
+    FakeCaptureSource source{SourceId::create("screen-1").value(), "Fake Screen"};
+    ASSERT_TRUE(recorder.start(makeConfig(), at(0)).hasValue());
+    ASSERT_TRUE(source.start(CaptureConfig{}).hasValue());
+
+    // 121 frames at 60fps = indices 0..120. Frame 120's timestamp is exactly
+    // 2s - the start of the second segment, not the end of the first
+    // (frameToTimestamp(120, 60/1) == 2'000'000'000ns exactly, no rounding).
+    // That frame must count as "seen" in the new segment, or stop()'s tail
+    // flush finds nothing to close and the take silently loses it.
+    for (int frame = 0; frame < 121; ++frame) {
+        const auto produced = source.tick();
+        ASSERT_TRUE(produced.hasValue());
+        ASSERT_TRUE(recorder.accept(produced.value()).hasValue());
+    }
+    const auto session = recorder.stop(at(2));
+
+    ASSERT_TRUE(session.hasValue());
+    // Bug: this reads 1 - the boundary frame closes segment 0 but then
+    // forgets it ever arrived, so the trailing (zero-length) segment 1 that
+    // frame 120 belongs to never gets flushed.
+    EXPECT_EQ(session.value().segmentCount(), 2u);
+    EXPECT_EQ(recorder.stats().segmentsWritten, 2u);
+}
+
 TEST(FakeRecorderTest, CanRecordASecondTake) {
     FakeRecorder recorder;
     FakeCaptureSource source{SourceId::create("screen-1").value(), "Fake Screen"};
