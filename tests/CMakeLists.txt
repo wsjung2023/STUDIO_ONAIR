@@ -18,6 +18,17 @@ FetchContent_MakeAvailable(googletest)
 
 include(GoogleTest)
 
+add_executable(cs_crash_recovery_fixture
+    helpers/CrashRecoveryFixture.cpp
+)
+target_link_libraries(cs_crash_recovery_fixture PRIVATE cs_project_store)
+set_target_properties(cs_crash_recovery_fixture PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+cs_apply_warnings(cs_crash_recovery_fixture)
+
 add_executable(cs_tests
     core/ResultTest.cpp
     core/TimebaseTest.cpp
@@ -36,6 +47,7 @@ add_executable(cs_tests
     project_store/SegmentPersistenceTest.cpp
     project_store/RecoveryTest.cpp
     project_store/ProjectPackageStoreTest.cpp
+    project_store/CrashRecoveryIntegrationTest.cpp
     fakes/FakeCaptureSourceTest.cpp
     fakes/FakeRecorderTest.cpp
 )
@@ -51,6 +63,10 @@ target_link_libraries(cs_tests
         cs_fakes
         nlohmann_json::nlohmann_json
         GTest::gtest_main
+)
+
+target_compile_definitions(cs_tests PRIVATE
+    CS_CRASH_FIXTURE_PATH="$<TARGET_FILE:cs_crash_recovery_fixture>"
 )
 
 cs_apply_warnings(cs_tests)
