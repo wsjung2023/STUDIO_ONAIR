@@ -1,6 +1,7 @@
 #include "app/StudioController.h"
 
 #include "core/Timebase.h"
+#include "core/Uuid.h"
 #include "domain/Identifiers.h"
 #include "fakes/FakeCaptureSource.h"
 #include "fakes/FakeRecorder.h"
@@ -90,8 +91,7 @@ void StudioController::startRecording() {
         return;
     }
 
-    ++takeCounter_;
-    auto sessionId = domain::SessionId::create("session-" + std::to_string(takeCounter_));
+    auto sessionId = domain::SessionId::create(core::generateUuidV4());
     if (!sessionId.hasValue()) {
         setStatusMessage(QString::fromStdString(sessionId.error().message()));
         return;

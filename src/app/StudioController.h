@@ -99,7 +99,6 @@ private:
     int segmentCount_{0};
     QString takeDuration_{QStringLiteral("00:00:00")};
     QString statusMessage_;
-    std::uint64_t takeCounter_{0};
 };
 
 }  // namespace creator::app

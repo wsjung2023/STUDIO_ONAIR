@@ -9,6 +9,7 @@
 #include <QThread>
 
 #include <atomic>
+#include <chrono>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -28,7 +29,19 @@ public:
         std::scoped_lock lock{mutex_};
         release_ = std::make_shared<std::promise<void>>();
         held_ = release_->get_future().share();
+        enteredSignal_ = std::make_shared<std::promise<void>>();
+        entered_ = enteredSignal_->get_future().share();
         holdNext_ = true;
+    }
+
+    [[nodiscard]] bool waitUntilHeldCallEntered() const {
+        std::shared_future<void> entered;
+        {
+            std::scoped_lock lock{mutex_};
+            entered = entered_;
+        }
+        return entered.valid() && entered.wait_for(std::chrono::seconds{3}) ==
+                                      std::future_status::ready;
     }
 
     void releaseHeldCall() {
@@ -129,13 +142,16 @@ private:
     void observeAndMaybeHold() {
         lastThreadId_.store(QThread::currentThreadId());
         std::shared_future<void> held;
+        std::shared_ptr<std::promise<void>> enteredSignal;
         {
             std::scoped_lock lock{mutex_};
             if (holdNext_) {
                 holdNext_ = false;
                 held = held_;
+                enteredSignal = enteredSignal_;
             }
         }
+        if (enteredSignal) enteredSignal->set_value();
         if (held.valid()) held.wait();
     }
 
@@ -144,6 +160,8 @@ private:
     std::optional<project_store::OpenProjectResult> openResult_;
     std::shared_ptr<std::promise<void>> release_;
     std::shared_future<void> held_;
+    std::shared_ptr<std::promise<void>> enteredSignal_;
+    std::shared_future<void> entered_;
     bool holdNext_{false};
 };
 

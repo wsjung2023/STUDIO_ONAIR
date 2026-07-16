@@ -69,15 +69,13 @@ ProjectController::ProjectController(
     connect(worker_, &ProjectWorker::recordingCommandFinished, this,
             [this](quint64 commandId, bool success, int errorCode,
                    const QString& error) {
-                auto found = recordingCompletions_.find(commandId);
-                if (found == recordingCompletions_.end()) return;
-                auto completion = std::move(found->second);
-                recordingCompletions_.erase(found);
                 if (success) {
-                    completion(core::ok());
+                    finishRecordingCommand(commandId, core::ok());
                 } else {
-                    completion(core::AppError{static_cast<core::ErrorCode>(errorCode),
-                                              error.toStdString()});
+                    finishRecordingCommand(
+                        commandId,
+                        core::AppError{static_cast<core::ErrorCode>(errorCode),
+                                       error.toStdString()});
                 }
             });
     workerThread_.start();
@@ -88,6 +86,15 @@ ProjectController::~ProjectController() {
     disconnect(worker_, nullptr, this, nullptr);
     workerThread_.quit();
     workerThread_.wait();
+    auto pending = std::move(recordingCompletions_);
+    for (auto& [commandId, completion] : pending) {
+        static_cast<void>(commandId);
+        if (completion) {
+            completion(core::AppError{
+                core::ErrorCode::InvalidState,
+                "project controller stopped before recording persistence completed"});
+        }
+    }
 }
 
 QString ProjectController::projectName() const {
@@ -226,9 +233,12 @@ std::optional<std::filesystem::path> ProjectController::recordingPath() const {
 }
 
 void ProjectController::failRecordingCommandAsync(Completion completion) {
-    QTimer::singleShot(0, this, [completion = std::move(completion)]() mutable {
-        completion(core::AppError{core::ErrorCode::InvalidState,
-                                  "no project is open for recording"});
+    const quint64 commandId = retainRecordingCompletion(std::move(completion));
+    QTimer::singleShot(0, this, [this, commandId] {
+        finishRecordingCommand(
+            commandId,
+            core::AppError{core::ErrorCode::InvalidState,
+                           "no project is open for recording"});
     });
 }
 
@@ -236,6 +246,15 @@ quint64 ProjectController::retainRecordingCompletion(Completion completion) {
     const quint64 commandId = nextRecordingCommandId_++;
     recordingCompletions_.emplace(commandId, std::move(completion));
     return commandId;
+}
+
+void ProjectController::finishRecordingCommand(quint64 commandId,
+                                               core::Result<void> result) {
+    auto found = recordingCompletions_.find(commandId);
+    if (found == recordingCompletions_.end()) return;
+    auto completion = std::move(found->second);
+    recordingCompletions_.erase(found);
+    if (completion) completion(std::move(result));
 }
 
 void ProjectController::begin(const domain::SessionId& sessionId,

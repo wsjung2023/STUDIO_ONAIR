@@ -1,8 +1,12 @@
 #include "app/ProjectController.h"
+#include "app/StudioController.h"
 
 #include "app/FakeProjectPackageStore.h"
 #include "app/RecentProjectRegistry.h"
 #include "core/Utc.h"
+#include "fakes/FakeCaptureSource.h"
+#include "fakes/FakeRecorder.h"
+#include "project_store/ProjectPackageStore.h"
 
 #include <QSignalSpy>
 #include <QThread>
@@ -211,6 +215,76 @@ TEST_F(ProjectControllerTest, RecordingPersistenceLeavesAndReturnsToUiThread) {
     EXPECT_EQ(completionCount, 1);
     EXPECT_NE(fake_->lastThreadId(), QThread::currentThreadId());
     EXPECT_EQ(completionThread, QThread::currentThreadId());
+}
+
+TEST_F(ProjectControllerTest, DestructionCompletesPendingPersistenceExactlyOnce) {
+    QSignalSpy opened{controller_.get(), &ProjectController::projectOpened};
+    controller_->createProject(
+        QUrl::fromLocalFile(QString::fromStdWString(packagePath_.wstring())),
+        QStringLiteral("Recording"));
+    ASSERT_TRUE(opened.wait(3000));
+    fake_->holdNextCall();
+    int completionCount = 0;
+    creator::core::ErrorCode errorCode = creator::core::ErrorCode::Unknown;
+    Qt::HANDLE completionThread = nullptr;
+    controller_->begin(SessionId::create("session-pending").value(), {},
+                       [&](creator::core::Result<void> result) {
+                           ++completionCount;
+                           completionThread = QThread::currentThreadId();
+                           if (!result.hasValue()) errorCode = result.error().code();
+                       });
+    ASSERT_TRUE(fake_->waitUntilHeldCallEntered());
+    fake_->releaseHeldCall();
+
+    controller_.reset();
+
+    EXPECT_EQ(completionCount, 1);
+    EXPECT_EQ(errorCode, creator::core::ErrorCode::InvalidState);
+    EXPECT_EQ(completionThread, QThread::currentThreadId());
+}
+
+TEST(ProjectPersistenceIntegrationTest, RecordsAgainAfterControllersAreRecreated) {
+    const fs::path root = fs::temp_directory_path() / "cs_project_restart_recording";
+    const fs::path packagePath = root / "lesson.cstudio";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root);
+
+    auto recordOneTake = [&](bool create) {
+        auto store = std::make_unique<creator::project_store::ProjectPackageStore>();
+        ProjectController project{std::move(store), root / "recent-projects.json", false};
+        QSignalSpy opened{&project, &ProjectController::projectOpened};
+        const QUrl url = QUrl::fromLocalFile(QString::fromStdWString(packagePath.wstring()));
+        if (create) {
+            project.createProject(url, QStringLiteral("Restart Recording"));
+        } else {
+            project.openProject(url);
+        }
+        ASSERT_TRUE(opened.wait(3000));
+
+        creator::app::StudioController studio{
+            std::make_unique<creator::fakes::FakeCaptureSource>(
+                creator::domain::SourceId::create("screen-1").value(), "Fake Screen"),
+            std::make_unique<creator::fakes::FakeRecorder>(),
+            static_cast<creator::app::IRecordingPersistence*>(&project)};
+        QSignalSpy recordingChanged{&studio,
+                                    &creator::app::StudioController::recordingChanged};
+        studio.startRecording();
+        ASSERT_TRUE(recordingChanged.wait(3000))
+            << "create=" << create << " status=" << studio.statusMessage().toStdString();
+        ASSERT_TRUE(studio.isRecording()) << studio.statusMessage().toStdString();
+
+        QSignalSpy operationChanged{&studio,
+                                    &creator::app::StudioController::operationStateChanged};
+        studio.stopRecording();
+        while (studio.isBusy()) ASSERT_TRUE(operationChanged.wait(3000));
+        EXPECT_EQ(studio.statusMessage(), QStringLiteral("Stopped"));
+    };
+
+    recordOneTake(true);
+    recordOneTake(false);
+
+    fs::remove_all(root, ec);
 }
 
 }  // namespace

@@ -12,6 +12,11 @@
 #include <system_error>
 #include <utility>
 
+#ifdef _WIN32
+#define NOMINMAX
+#include <Windows.h>
+#endif
+
 namespace creator::project_store {
 namespace {
 
@@ -68,13 +73,71 @@ Result<fs::path> validatedRelativeDatabasePath(std::string_view value) {
     }
 }
 
+bool isPathInside(const fs::path& parent, const fs::path& child) {
+    auto parentPart = parent.begin();
+    auto childPart = child.begin();
+    for (; parentPart != parent.end(); ++parentPart, ++childPart) {
+        if (childPart == child.end() || *parentPart != *childPart) return false;
+    }
+    return true;
+}
+
+Result<fs::path> validatedExistingDatabase(const fs::path& packagePath,
+                                           const fs::path& relativePath) {
+    const fs::path candidate = packagePath / relativePath;
+    std::error_code ec;
+    const fs::file_status status = fs::symlink_status(candidate, ec);
+    if (ec == std::errc::no_such_file_or_directory ||
+        status.type() == fs::file_type::not_found) {
+        return AppError{ErrorCode::NotFound, "project package database was not found"};
+    }
+    if (ec) return filesystemError("inspect database", ec);
+    if (fs::is_symlink(status)) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "project package database must not be a symbolic link"};
+    }
+    if (!fs::is_regular_file(status)) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "project package database must be a regular file"};
+    }
+#ifdef _WIN32
+    const DWORD attributes = GetFileAttributesW(candidate.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+        return filesystemError("inspect database attributes",
+                               std::error_code{static_cast<int>(GetLastError()),
+                                               std::system_category()});
+    }
+    if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "project package database must not be a reparse point"};
+    }
+#endif
+    const auto links = fs::hard_link_count(candidate, ec);
+    if (ec) return filesystemError("inspect database links", ec);
+    if (links != 1) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "project package database must not have hard links"};
+    }
+    const fs::path resolvedPackage = fs::canonical(packagePath, ec);
+    if (ec) return filesystemError("resolve package", ec);
+    const fs::path resolvedDatabase = fs::canonical(candidate, ec);
+    if (ec) return filesystemError("resolve database", ec);
+    if (!isPathInside(resolvedPackage, resolvedDatabase)) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "project package database resolves outside the package"};
+    }
+    return resolvedDatabase;
+}
+
 Result<ValidatedDatabase> openValidatedDatabase(const fs::path& packagePath) {
     JsonProjectStore manifests;
     auto loaded = manifests.load(packagePath);
     if (!loaded.hasValue()) return loaded.error();
     auto databasePath = validatedRelativeDatabasePath(loaded.value().database);
     if (!databasePath.hasValue()) return databasePath.error();
-    auto database = SqliteProjectDatabase::open(packagePath / databasePath.value(),
+    auto existingDatabase = validatedExistingDatabase(packagePath, databasePath.value());
+    if (!existingDatabase.hasValue()) return existingDatabase.error();
+    auto database = SqliteProjectDatabase::open(existingDatabase.value(),
                                                 loaded.value().projectId);
     if (!database.hasValue()) return database.error();
     return ValidatedDatabase{

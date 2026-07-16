@@ -116,6 +116,48 @@ TEST_F(ProjectPackageStoreTest, OpenRejectsManifestDatabaseMismatch) {
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
 }
 
+TEST_F(ProjectPackageStoreTest, OpenDoesNotCreateAMissingDatabase) {
+    ASSERT_TRUE(store_.create(packagePath_, "Missing DB").hasValue());
+    ASSERT_TRUE(fs::remove(packagePath_ / "project.db"));
+
+    const auto result = store_.open(packagePath_);
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::NotFound);
+    EXPECT_FALSE(fs::exists(packagePath_ / "project.db"));
+}
+
+TEST_F(ProjectPackageStoreTest, OpenRejectsDatabaseHardLinkedFromOutsidePackage) {
+    ASSERT_TRUE(store_.create(packagePath_, "Hard Link").hasValue());
+    const fs::path outsideDatabase = root_ / "outside.db";
+    ASSERT_TRUE(fs::copy_file(packagePath_ / "project.db", outsideDatabase));
+    ASSERT_TRUE(fs::remove(packagePath_ / "project.db"));
+    std::error_code ec;
+    fs::create_hard_link(outsideDatabase, packagePath_ / "project.db", ec);
+    ASSERT_FALSE(ec) << ec.message();
+    ASSERT_GT(fs::hard_link_count(outsideDatabase), 1u);
+
+    const auto result = store_.open(packagePath_);
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+}
+
+TEST_F(ProjectPackageStoreTest, OpenRejectsDatabaseSymlinkFromOutsidePackage) {
+    ASSERT_TRUE(store_.create(packagePath_, "Symlink").hasValue());
+    const fs::path outsideDatabase = root_ / "outside.db";
+    ASSERT_TRUE(fs::copy_file(packagePath_ / "project.db", outsideDatabase));
+    ASSERT_TRUE(fs::remove(packagePath_ / "project.db"));
+    std::error_code ec;
+    fs::create_symlink(outsideDatabase, packagePath_ / "project.db", ec);
+    if (ec) GTEST_SKIP() << "symlink creation is unavailable: " << ec.message();
+
+    const auto result = store_.open(packagePath_);
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+}
+
 TEST_F(ProjectPackageStoreTest, CreateFailureRemovesOnlyGeneratedStagingSibling) {
     const fs::path regularParent = root_ / "not-a-directory";
     std::ofstream{regularParent} << "keep";

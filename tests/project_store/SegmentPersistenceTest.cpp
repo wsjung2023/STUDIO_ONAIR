@@ -201,6 +201,25 @@ TEST_F(SegmentPersistenceTest, CompleteRecordingRollsBackAllSegmentsOnConflict) 
     EXPECT_EQ(raw.scalarInt64("SELECT count(*) FROM segments WHERE segment_index=1").value(), 0);
 }
 
+TEST_F(SegmentPersistenceTest, CompleteRecordingRejectsOmittedWritingSegment) {
+    auto database = activeDatabase();
+    const auto writing = segment(SegmentStatus::Writing);
+    ASSERT_TRUE(database.beginSegment(sessionId_, writing).hasValue());
+
+    const auto result = database.completeRecording(
+        sessionId_, TimestampNs{} + std::chrono::seconds{2}, {},
+        utc("2026-07-16T10:00:02Z"));
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidState);
+    EXPECT_EQ(database.session(sessionId_).value().state,
+              creator::project_store::PersistedSessionState::Recording);
+    auto rawResult = SqliteConnection::open(directory_ / "project.db");
+    ASSERT_TRUE(rawResult.hasValue());
+    auto raw = std::move(rawResult).value();
+    EXPECT_EQ(raw.scalarText("SELECT status FROM segments").value(), "WRITING");
+}
+
 TEST_F(SegmentPersistenceTest, RejectsInvalidSegmentStateDurationAndIndex) {
     auto database = activeDatabase();
     const auto readyWithoutWriting =

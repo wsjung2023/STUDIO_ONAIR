@@ -78,6 +78,7 @@ private:
     [[nodiscard]] std::optional<std::filesystem::path> recordingPath() const;
     void failRecordingCommandAsync(Completion completion);
     [[nodiscard]] quint64 retainRecordingCompletion(Completion completion);
+    void finishRecordingCommand(quint64 commandId, core::Result<void> result);
 
     QThread workerThread_;
     ProjectWorker* worker_{};

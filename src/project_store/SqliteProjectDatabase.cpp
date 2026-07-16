@@ -456,6 +456,24 @@ Result<void> SqliteProjectDatabase::completeRecording(
         }
     }
 
+    auto pendingPrepared = connection_.prepare(
+        "SELECT count(*) FROM segments WHERE session_id=?1 AND status='WRITING'");
+    if (!pendingPrepared.hasValue()) return pendingPrepared.error();
+    auto pending = std::move(pendingPrepared).value();
+    if (auto bound = pending.bindText(1, sessionId.value()); !bound.hasValue()) {
+        return bound.error();
+    }
+    auto pendingRow = pending.step();
+    if (!pendingRow.hasValue()) return pendingRow.error();
+    if (pendingRow.value() != SqliteStep::Row) {
+        return AppError{ErrorCode::IoFailure,
+                        "sqlite pending segment query returned no row"};
+    }
+    if (pending.columnInt64(0) != 0) {
+        return AppError{ErrorCode::InvalidState,
+                        "recording session still has writing segments"};
+    }
+
     auto prepared = connection_.prepare(
         "UPDATE recording_sessions SET state='COMPLETED', stopped_ns=?1, "
         "finished_at_utc=?2, failure_reason=NULL "
