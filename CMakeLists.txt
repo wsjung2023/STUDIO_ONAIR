@@ -228,6 +228,12 @@ install(TARGETS creator_studio
     RUNTIME DESTINATION bin
 )
 
+if(CS_ENABLE_MLT)
+    install(DIRECTORY "$<TARGET_FILE_DIR:creator_studio>/mlt-runtime/"
+        DESTINATION bin/mlt-runtime
+    )
+endif()
+
 if(CS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

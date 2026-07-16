@@ -88,7 +88,8 @@ $Main = Get-Content -LiteralPath (Join-Path $RepositoryRoot "src/main.cpp") `
 foreach ($Pattern in @(
     'stage_mlt_runtime\.ps1',
     'DELAYLOAD:mlt\+\+-7\.dll',
-    'DELAYLOAD:mlt-7\.dll'
+    'DELAYLOAD:mlt-7\.dll',
+    'DESTINATION bin/mlt-runtime'
 )) {
     if ($CMake -notmatch $Pattern) {
         throw "Shipping CMake is missing the isolated MLT runtime boundary: $Pattern"

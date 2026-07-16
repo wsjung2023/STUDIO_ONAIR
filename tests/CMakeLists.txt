@@ -13,6 +13,7 @@ FetchContent_Declare(
 # Without this, MSVC links gtest against the static CRT while our targets use
 # the dynamic CRT, and the link fails with mismatched runtime library errors.
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(googletest)
 

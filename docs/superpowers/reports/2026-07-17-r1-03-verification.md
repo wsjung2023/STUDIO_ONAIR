@@ -63,6 +63,9 @@ fix.
 - `dumpbin`: normal imports are Qt/MSVC/Windows only; MLT appears only in the
   delay-import table.
 - Link command contains product libraries and no `cs_fakes`.
+- A `cmake --install` rehearsal produced only the application `bin` tree
+  (test-framework install rules disabled) and its installed MLT runtime passed
+  the standalone verifier.
 - `creator_studio.exe` launched from the clean output with no top-level MLT
   DLLs and reported `Responding=True`.
 - `git diff --check` passed.
