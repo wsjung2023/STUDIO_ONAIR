@@ -211,7 +211,7 @@ if (Test-Path -LiteralPath $InstallRoot) {
     }
     Remove-Item -LiteralPath $ResolvedInstall -Recurse -Force
 }
-foreach ($Directory in @("bin", "lib/mlt-7", "include/mlt-7/framework", "include/mlt-7/mlt++", "share/mlt-7/core", "share/mlt-7/avformat", "share/mlt-7/profiles", "share/mlt-7/presets")) {
+foreach ($Directory in @("bin", "lib/mlt-7", "include/mlt-7/framework", "include/mlt-7/mlt++", "include/mlt-deps", "share/mlt-7/core", "share/mlt-7/avformat", "share/mlt-7/profiles", "share/mlt-7/presets")) {
     New-Item -ItemType Directory -Force -Path (Join-Path $InstallRoot $Directory) | Out-Null
 }
 
@@ -252,6 +252,9 @@ Copy-RequiredFile (Join-Path $MltOutput "lib/mlt++-7.lib") (Join-Path $InstallRo
 Copy-SelectedTree (Join-Path $SourceRoot "src/framework") (Join-Path $InstallRoot "include/mlt-7/framework") @("*.h")
 Copy-RequiredFile (Join-Path $NativeBuildRoot "src/framework/mlt_export.h") (Join-Path $InstallRoot "include/mlt-7/framework/mlt_export.h")
 Copy-SelectedTree (Join-Path $SourceRoot "src/mlt++") (Join-Path $InstallRoot "include/mlt-7/mlt++") @("*.h")
+foreach ($Header in @("pthread.h", "sched.h", "_ptw32.h")) {
+    Copy-RequiredFile (Join-Path $DependencyPrefix "include/$Header") (Join-Path $InstallRoot "include/mlt-deps/$Header")
+}
 Copy-SelectedTree (Join-Path $SourceRoot "src/modules/core") (Join-Path $InstallRoot "share/mlt-7/core") @("*.yml", "*.ini", "*.dict")
 Copy-SelectedTree (Join-Path $SourceRoot "src/modules/avformat") (Join-Path $InstallRoot "share/mlt-7/avformat") @("*.yml", "*.txt")
 Copy-SelectedTree (Join-Path $SourceRoot "profiles") (Join-Path $InstallRoot "share/mlt-7/profiles") @("*")

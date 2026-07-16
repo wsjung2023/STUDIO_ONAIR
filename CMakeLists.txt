@@ -13,7 +13,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(CS_BUILD_TESTS "Build unit tests" ON)
 option(CS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(CS_ENABLE_FFMPEG "Build the audited FFmpeg adapter" OFF)
+option(CS_ENABLE_MLT "Build the audited MLT edit-engine adapter" OFF)
 set(CS_FFMPEG_ROOT "" CACHE PATH "Audited FFmpeg dynamic-library prefix")
+set(CS_MLT_ROOT "" CACHE PATH "Audited MLT dynamic-library prefix")
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(CreatorStudioTargets)
@@ -24,6 +26,22 @@ if(CS_ENABLE_FFMPEG)
     endif()
     list(PREPEND CMAKE_MODULE_PATH "${CS_FFMPEG_ROOT}/share/ffmpeg")
     find_package(FFMPEG 8.1.2 REQUIRED)
+endif()
+
+if(CS_ENABLE_MLT)
+    if(NOT CS_MLT_ROOT)
+        message(FATAL_ERROR "CS_ENABLE_MLT requires CS_MLT_ROOT from scripts/bootstrap_mlt.ps1")
+    endif()
+    execute_process(
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_mlt_runtime.ps1"
+            -RuntimeRoot "${CS_MLT_ROOT}"
+        RESULT_VARIABLE CS_MLT_VERIFY_RESULT
+    )
+    if(NOT CS_MLT_VERIFY_RESULT EQUAL 0)
+        message(FATAL_ERROR "CS_MLT_ROOT failed the audited runtime verification")
+    endif()
+    find_package(MLT REQUIRED)
 endif()
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Test)
@@ -164,6 +182,23 @@ if(CS_ENABLE_FFMPEG)
             BUILD_RPATH "${CS_FFMPEG_ROOT}/lib"
         )
     endif()
+endif()
+
+if(CS_ENABLE_MLT)
+    file(GLOB CS_APP_MLT_RUNTIME_DLLS CONFIGURE_DEPENDS
+        "${CS_MLT_ROOT}/bin/*.dll")
+    add_custom_command(TARGET creator_studio POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CS_APP_MLT_RUNTIME_DLLS}
+            $<TARGET_FILE_DIR:creator_studio>
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CS_MLT_ROOT}/lib/mlt-7"
+            "$<TARGET_FILE_DIR:creator_studio>/lib/mlt-7"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CS_MLT_ROOT}/share/mlt-7"
+            "$<TARGET_FILE_DIR:creator_studio>/share/mlt-7"
+        COMMAND_EXPAND_LISTS
+    )
 endif()
 
 if(APPLE)

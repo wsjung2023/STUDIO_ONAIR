@@ -202,3 +202,29 @@ if(CS_ENABLE_FFMPEG)
             "PATH=path_list_prepend:${CS_FFMPEG_ROOT}/bin"
     )
 endif()
+
+if(CS_ENABLE_MLT)
+    add_executable(cs_mlt_tests
+        mlt_adapter/MltEditEngineTest.cpp
+    )
+    target_link_libraries(cs_mlt_tests PRIVATE
+        cs_mlt_adapter
+        GTest::gtest_main
+    )
+    target_compile_definitions(cs_mlt_tests PRIVATE
+        CS_TEST_MLT_ROOT="${CS_MLT_ROOT}"
+    )
+    cs_apply_warnings(cs_mlt_tests)
+    file(GLOB CS_MLT_TEST_DLLS CONFIGURE_DEPENDS "${CS_MLT_ROOT}/bin/*.dll")
+    add_custom_command(TARGET cs_mlt_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CS_MLT_TEST_DLLS}
+            $<TARGET_FILE_DIR:cs_mlt_tests>
+        COMMAND_EXPAND_LISTS
+    )
+    gtest_discover_tests(cs_mlt_tests
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:${CS_MLT_ROOT}/bin"
+    )
+endif()

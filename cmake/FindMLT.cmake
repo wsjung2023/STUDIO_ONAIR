@@ -27,7 +27,7 @@ if(MLT_FOUND AND NOT TARGET MLT::Framework)
     set_target_properties(MLT::Framework PROPERTIES
         IMPORTED_IMPLIB "${MLT_FRAMEWORK_LIBRARY}"
         IMPORTED_LOCATION "${CS_MLT_ROOT}/bin/mlt-7.dll"
-        INTERFACE_INCLUDE_DIRECTORIES "${MLT_INCLUDE_DIR}"
+        INTERFACE_INCLUDE_DIRECTORIES "${MLT_INCLUDE_DIR};${CS_MLT_ROOT}/include/mlt-deps"
     )
 
     add_library(MLT::PlusPlus SHARED IMPORTED)
