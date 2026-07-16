@@ -12,6 +12,7 @@
 #include <QThread>
 
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -76,12 +77,24 @@ private:
         std::optional<core::TimestampNs> position;
     };
 
-    void queueLoad(edit_engine::TimelineSnapshot snapshot);
+    struct QueuedCommand final {
+        quint64 generation;
+        quint64 commandId;
+        EditorEngineOperation operation;
+        std::optional<core::TimestampNs> position;
+        std::optional<edit_engine::TimelineSnapshot> snapshot;
+        std::optional<edit_engine::TimelineChangeSet> change;
+    };
+
+    void queueLoad(edit_engine::TimelineSnapshot snapshot,
+                   bool recoveryPriority = false);
     void queueUpdate(edit_engine::TimelineChangeSet change);
     void queueSimple(EditorEngineOperation operation,
                      std::optional<core::TimestampNs> position = std::nullopt);
     [[nodiscard]] quint64 beginCommand(EditorEngineOperation operation,
                                        std::optional<core::TimestampNs> position);
+    void dispatchNext();
+    void postToWorker(QueuedCommand command);
     void handleCompleted(quint64 generation, quint64 commandId, int operation,
                          bool success, const QString& errorMessage);
     void setPreviewStale(bool value);
@@ -101,6 +114,8 @@ private:
     core::TimestampNs playhead_{};
     QString statusMessage_;
     std::unordered_map<quint64, PendingCommand> commands_;
+    std::deque<QueuedCommand> queuedCommands_;
+    bool workerCommandActive_{false};
 };
 
 }  // namespace creator::app

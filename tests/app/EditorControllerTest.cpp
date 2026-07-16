@@ -228,6 +228,35 @@ TEST(EditorControllerTest, FailedUpdateKeepsDurableStateAndReloadsPreview) {
               QStringLiteral("preview graph update failed"));
 }
 
+TEST(EditorControllerTest, RecoveryReloadRunsBeforePlaybackQueuedAfterFailedUpdate) {
+    auto engine = std::make_unique<FakeEditEngine>();
+    FakeEditEngine* fake = engine.get();
+    EditorController controller{std::move(engine)};
+    controller.openSession({asset()}, snapshot(10, "Before"));
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    fake->failNext(FakeEditOperation::Update,
+                   creator::core::AppError{creator::core::ErrorCode::IoFailure,
+                                           "force ordered recovery"});
+    auto change = TimelineChangeSet::create(
+                      TimelineRevision::create(10).value(),
+                      snapshot(11, "After"),
+                      {TrackId::create("v1").value()}, false)
+                      .value();
+
+    controller.commitTimeline(change);
+    controller.play();
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.busy() && fake->calls().size() >= 4U;
+    }));
+
+    ASSERT_EQ(fake->calls().size(), 4U);
+    EXPECT_EQ(fake->calls()[0].operation, FakeEditOperation::Load);
+    EXPECT_EQ(fake->calls()[1].operation, FakeEditOperation::Update);
+    EXPECT_EQ(fake->calls()[2].operation, FakeEditOperation::Load);
+    EXPECT_EQ(fake->calls()[3].operation, FakeEditOperation::Play);
+    EXPECT_TRUE(controller.playing());
+}
+
 TEST(EditorControllerAcceptanceTest,
      OpensMultitrackTakeSeeksCommitsSplitAndRecoversPreviewGraph) {
     const MediaAsset screen = asset("screen");

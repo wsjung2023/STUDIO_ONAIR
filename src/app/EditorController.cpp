@@ -19,6 +19,11 @@ EditorController::EditorController(
 }
 
 EditorController::~EditorController() {
+    while (!queuedCommands_.empty()) {
+        auto command = std::move(queuedCommands_.front());
+        queuedCommands_.pop_front();
+        postToWorker(std::move(command));
+    }
     QMetaObject::invokeMethod(worker_, [] {}, Qt::BlockingQueuedConnection);
     disconnect(worker_, nullptr, this, nullptr);
     workerThread_.quit();
@@ -92,55 +97,99 @@ void EditorController::seek(qlonglong positionNs) {
                 core::TimestampNs{core::DurationNs{positionNs}});
 }
 
-void EditorController::queueLoad(edit_engine::TimelineSnapshot snapshot) {
+void EditorController::queueLoad(edit_engine::TimelineSnapshot snapshot,
+                                 bool recoveryPriority) {
     const quint64 commandId = beginCommand(EditorEngineOperation::Load, std::nullopt);
-    const quint64 generation = generation_;
-    QMetaObject::invokeMethod(
-        worker_,
-        [worker = worker_, generation, commandId,
-         snapshot = std::move(snapshot)]() mutable {
-            worker->load(generation, commandId, std::move(snapshot));
-        },
-        Qt::QueuedConnection);
+    QueuedCommand command{generation_, commandId, EditorEngineOperation::Load,
+                          std::nullopt, std::move(snapshot), std::nullopt};
+    if (recoveryPriority) {
+        queuedCommands_.push_front(std::move(command));
+    } else {
+        queuedCommands_.push_back(std::move(command));
+    }
+    dispatchNext();
 }
 
 void EditorController::queueUpdate(edit_engine::TimelineChangeSet change) {
     const quint64 commandId =
         beginCommand(EditorEngineOperation::Update, std::nullopt);
-    const quint64 generation = generation_;
-    QMetaObject::invokeMethod(
-        worker_,
-        [worker = worker_, generation, commandId,
-         change = std::move(change)]() mutable {
-            worker->update(generation, commandId, std::move(change));
-        },
-        Qt::QueuedConnection);
+    queuedCommands_.push_back(
+        QueuedCommand{generation_, commandId, EditorEngineOperation::Update,
+                      std::nullopt, std::nullopt, std::move(change)});
+    dispatchNext();
 }
 
 void EditorController::queueSimple(
     EditorEngineOperation operation,
     std::optional<core::TimestampNs> position) {
     const quint64 commandId = beginCommand(operation, position);
-    const quint64 generation = generation_;
-    QMetaObject::invokeMethod(
-        worker_,
-        [worker = worker_, generation, commandId, operation, position] {
-            switch (operation) {
-                case EditorEngineOperation::Play:
+    queuedCommands_.push_back(QueuedCommand{generation_, commandId, operation,
+                                             position, std::nullopt,
+                                             std::nullopt});
+    dispatchNext();
+}
+
+void EditorController::dispatchNext() {
+    if (workerCommandActive_ || queuedCommands_.empty()) return;
+    workerCommandActive_ = true;
+    auto command = std::move(queuedCommands_.front());
+    queuedCommands_.pop_front();
+    postToWorker(std::move(command));
+}
+
+void EditorController::postToWorker(QueuedCommand command) {
+    const quint64 generation = command.generation;
+    const quint64 commandId = command.commandId;
+    switch (command.operation) {
+        case EditorEngineOperation::Play:
+            QMetaObject::invokeMethod(
+                worker_,
+                [worker = worker_, generation, commandId] {
                     worker->play(generation, commandId);
-                    break;
-                case EditorEngineOperation::Pause:
+                },
+                Qt::QueuedConnection);
+            break;
+        case EditorEngineOperation::Pause:
+            QMetaObject::invokeMethod(
+                worker_,
+                [worker = worker_, generation, commandId] {
                     worker->pause(generation, commandId);
-                    break;
-                case EditorEngineOperation::Seek:
-                    worker->seek(generation, commandId, *position);
-                    break;
-                case EditorEngineOperation::Load:
-                case EditorEngineOperation::Update:
-                    break;
-            }
-        },
-        Qt::QueuedConnection);
+                },
+                Qt::QueuedConnection);
+            break;
+        case EditorEngineOperation::Seek: {
+            const core::TimestampNs position = *command.position;
+            QMetaObject::invokeMethod(
+                worker_,
+                [worker = worker_, generation, commandId, position] {
+                    worker->seek(generation, commandId, position);
+                },
+                Qt::QueuedConnection);
+            break;
+        }
+        case EditorEngineOperation::Load: {
+            auto snapshot = std::move(*command.snapshot);
+            QMetaObject::invokeMethod(
+                worker_,
+                [worker = worker_, generation, commandId,
+                 snapshot = std::move(snapshot)]() mutable {
+                    worker->load(generation, commandId, std::move(snapshot));
+                },
+                Qt::QueuedConnection);
+            break;
+        }
+        case EditorEngineOperation::Update: {
+            auto change = std::move(*command.change);
+            QMetaObject::invokeMethod(
+                worker_,
+                [worker = worker_, generation, commandId,
+                 change = std::move(change)]() mutable {
+                    worker->update(generation, commandId, std::move(change));
+                },
+                Qt::QueuedConnection);
+            break;
+        }
+    }
 }
 
 quint64 EditorController::beginCommand(
@@ -167,6 +216,7 @@ void EditorController::handleCompleted(quint64 generation, quint64 commandId,
                          command.operation == operation;
     commands_.erase(found);
     --pendingCommands_;
+    workerCommandActive_ = false;
 
     if (current) {
         if (!success) {
@@ -177,7 +227,7 @@ void EditorController::handleCompleted(quint64 generation, quint64 commandId,
             }
             if (operation == EditorEngineOperation::Update &&
                 snapshot_.has_value()) {
-                queueLoad(*snapshot_);
+                queueLoad(*snapshot_, true);
             }
         } else {
             switch (operation) {
@@ -200,6 +250,7 @@ void EditorController::handleCompleted(quint64 generation, quint64 commandId,
         }
     }
     if (!busy()) emit busyChanged();
+    dispatchNext();
 }
 
 void EditorController::setPreviewStale(bool value) {
