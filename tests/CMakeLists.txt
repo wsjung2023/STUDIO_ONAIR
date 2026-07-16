@@ -49,6 +49,7 @@ add_executable(cs_tests
     capture/DeviceCapturePortsTest.cpp
     capture/AudioCapturePrimitivesTest.cpp
     capture/DeviceCaptureAssemblerTest.cpp
+    capture/DeviceCaptureStopCoordinatorTest.cpp
     project_store/ManifestSchemaValidatorTest.cpp
     project_store/JsonProjectStoreTest.cpp
     project_store/SqliteConnectionTest.cpp

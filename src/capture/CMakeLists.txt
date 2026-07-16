@@ -14,6 +14,8 @@ cs_add_qtfree_library(cs_capture
         CameraCaptureFrameAssembler.cpp
         DeviceCaptureTypes.h
         DeviceCaptureTypes.cpp
+        DeviceCaptureStopCoordinator.h
+        DeviceCaptureStopCoordinator.cpp
         ICaptureSource.h
         IAudioBlockSink.h
         IDeviceCaptureBackend.h
