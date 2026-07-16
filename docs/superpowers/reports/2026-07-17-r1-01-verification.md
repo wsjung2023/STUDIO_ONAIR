@@ -37,7 +37,7 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 ctest --test-dir build/r1-01-debug --output-on-failure
 ```
 
-Result: **418/418 tests passed**, 0 failed, 38.37 seconds.
+Result: **421/421 tests passed**, 0 failed, 37.26 seconds.
 
 The fresh run executed the newly linked Qt application tests successfully.
 TimelineEditService tests intentionally run in `cs_tests.exe` because the
@@ -67,6 +67,9 @@ The completion review found and the branch fixed:
 - unsigned JSON overflow and inconsistent command undo payloads;
 - concurrent non-idempotent asset insertion;
 - unchecked persisted int32/checkpoint ranges;
+- edit-event sequence gaps and revision-count mismatches;
+- valid-looking undo payloads that did not reconstruct the stored snapshot;
+- package-path conflicts reported as a missing asset instead of an identity conflict;
 - duplicate JSON string escaping and schema-fragile positional inserts.
 
 ## Platform boundary and next work
