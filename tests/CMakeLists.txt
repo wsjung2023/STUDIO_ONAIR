@@ -40,6 +40,7 @@ add_executable(cs_tests
     media/MediaTypesTest.cpp
     capture/PortContractTest.cpp
     capture/CaptureTimestampMapperTest.cpp
+    capture/ScreenCapturePortsTest.cpp
     project_store/ManifestSchemaValidatorTest.cpp
     project_store/JsonProjectStoreTest.cpp
     project_store/SqliteConnectionTest.cpp

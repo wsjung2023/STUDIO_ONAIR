@@ -4,6 +4,10 @@ cs_add_qtfree_library(cs_capture
         CaptureTimestampMapper.cpp
         ICaptureSource.h
         IPullCaptureSource.h
+        IScreenCaptureDiscovery.h
+        IScreenCapturePermission.h
+        ScreenCaptureTypes.h
+        ScreenCaptureTypes.cpp
     DEPENDS
         cs_domain
         cs_media

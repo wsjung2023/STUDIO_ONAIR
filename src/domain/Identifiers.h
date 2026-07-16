@@ -48,9 +48,14 @@ private:
 struct ProjectIdTag;
 struct SourceIdTag;
 struct SessionIdTag;
+struct CaptureTargetIdTag;
 
 using ProjectId = Identifier<ProjectIdTag>;
 using SourceId = Identifier<SourceIdTag>;
 using SessionId = Identifier<SessionIdTag>;
+/// Opaque, session-scoped identity supplied by a screen-capture adapter.
+/// It is deliberately distinct from SourceId: a selected OS window may become
+/// a project source, but the two lifetimes and persistence rules are different.
+using CaptureTargetId = Identifier<CaptureTargetIdTag>;
 
 }  // namespace creator::domain
