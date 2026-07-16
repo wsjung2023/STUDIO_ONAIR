@@ -38,13 +38,22 @@ that revision 2 remains durable while a full engine load clears stale preview.
 
 ## Final clean gate
 
-- `cmake --build --preset windows-debug --clean-first`: passed; 232 build
+- `cmake --build --preset windows-debug --clean-first`: passed; 234 build
   steps, including `creator_studio.exe`, with `/WX` and zero warnings.
-- `ctest --preset windows-debug`: **446/446 passed** in 47.01 seconds.
+- `ctest --preset windows-debug`: **447/447 passed** in 37.04 seconds.
 - Domain/edit-engine include boundary scan: no Qt, MLT, FFmpeg, application,
   project-store, or fake includes crossed into the product-truth layers.
 - Shipping link graph scan: `creator_studio.exe` has no `cs_fakes` dependency.
 - `git diff --check`: passed.
 
-Independent review and integrated-branch results are appended after those gates
-run.
+## Independent review
+
+Review found one High issue: an update failure callback could reach the UI only
+after later playback had already executed on the stale worker graph, allowing a
+recovery load to stop the engine while the controller still reported playing.
+The controller now dispatches one engine command at a time and inserts recovery
+load ahead of queued playback/updates. A regression proves the exact order
+`update(fail) -> recovery load -> play`. Independent re-review confirmed the
+finding resolved.
+
+The integrated-branch result is appended after that gate runs.
