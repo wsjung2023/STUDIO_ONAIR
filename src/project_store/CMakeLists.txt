@@ -7,6 +7,9 @@ cs_add_qtfree_library(cs_project_store
         ManifestSchemaValidator.cpp
         MigrationRunner.h
         MigrationRunner.cpp
+        ProjectPackage.h
+        SqliteProjectDatabase.h
+        SqliteProjectDatabase.cpp
         migrations/001_initial.sql
         internal/SqliteConnection.h
         internal/SqliteConnection.cpp

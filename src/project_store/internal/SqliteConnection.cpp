@@ -239,6 +239,10 @@ Result<std::string> SqliteConnection::scalarText(std::string_view sql) {
     return statement.columnText(0);
 }
 
+int SqliteConnection::changes() const noexcept {
+    return sqlite3_changes(database_);
+}
+
 Result<SqliteTransaction> SqliteTransaction::beginImmediate(SqliteConnection& connection) {
     if (auto begun = connection.execute("BEGIN IMMEDIATE"); !begun.hasValue()) {
         return begun.error();

@@ -52,6 +52,7 @@ public:
     [[nodiscard]] core::Result<SqliteStatement> prepare(std::string_view sql);
     [[nodiscard]] core::Result<std::int64_t> scalarInt64(std::string_view sql);
     [[nodiscard]] core::Result<std::string> scalarText(std::string_view sql);
+    [[nodiscard]] int changes() const noexcept;
 
 private:
     explicit SqliteConnection(sqlite3* database) : database_(database) {}

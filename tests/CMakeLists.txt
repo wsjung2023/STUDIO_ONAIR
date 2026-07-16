@@ -32,6 +32,7 @@ add_executable(cs_tests
     project_store/JsonProjectStoreTest.cpp
     project_store/SqliteConnectionTest.cpp
     project_store/MigrationRunnerTest.cpp
+    project_store/SqliteProjectDatabaseTest.cpp
     fakes/FakeCaptureSourceTest.cpp
     fakes/FakeRecorderTest.cpp
 )
