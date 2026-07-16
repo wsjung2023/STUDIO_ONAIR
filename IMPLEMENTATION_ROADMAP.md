@@ -95,7 +95,9 @@
 
 - [x] R1-01 타임라인 도메인, migration 002, split/trim/ripple 명령,
   durable Undo/Redo·autosave 기반
-- [ ] 편집 엔진 adapter와 Editor view model
+- [x] R1-02 Qt-free 편집 엔진 port, 결정적 fake, 비동기 Editor controller,
+  미디어 빈·멀티트랙 view model과 model-driven QML
+- [ ] R1-03 감사된 MLT 동적 adapter와 실제 preview/playback
 - [ ] Studio 장면/source 편집과 녹화 결과의 타임라인 연결
 - [ ] 텍스트·기본 자막, preview, export와 R1 물리 검증
 

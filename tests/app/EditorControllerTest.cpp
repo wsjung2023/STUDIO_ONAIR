@@ -4,6 +4,7 @@
 #include "core/Timebase.h"
 #include "domain/Identifiers.h"
 #include "domain/MediaAsset.h"
+#include "domain/SplitClipCommand.h"
 #include "domain/Timeline.h"
 #include "domain/TimelineRevision.h"
 #include "edit_engine/EditEngineTypes.h"
@@ -15,6 +16,7 @@
 #include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QThread>
+#include <QVariantList>
 
 #include <gtest/gtest.h>
 
@@ -36,8 +38,14 @@ using creator::core::FrameRate;
 using creator::core::TimestampNs;
 using creator::domain::AssetAvailability;
 using creator::domain::AssetId;
+using creator::domain::AudioAssetMetadata;
+using creator::domain::Clip;
+using creator::domain::ClipId;
+using creator::domain::CommandId;
 using creator::domain::MediaAsset;
 using creator::domain::MediaKind;
+using creator::domain::SplitClipCommand;
+using creator::domain::TimeRange;
 using creator::domain::Timeline;
 using creator::domain::TimelineId;
 using creator::domain::TimelineRevision;
@@ -66,11 +74,22 @@ bool waitUntil(const std::function<bool()>& predicate, int timeoutMs = 3000) {
 }
 
 MediaAsset asset(std::string id = "screen") {
+    const std::string path = "media/" + id + ".mp4";
     return MediaAsset::create(
                AssetId::create(std::move(id)).value(), MediaKind::Video,
-               "media/screen.mp4", DurationNs{5'000'000'000},
+               path, DurationNs{5'000'000'000},
                VideoAssetMetadata{1920, 1080, FrameRate::create(60, 1).value()},
                std::nullopt, 42'000, "fingerprint",
+               AssetAvailability::Available)
+        .value();
+}
+
+MediaAsset audioAsset(std::string id) {
+    const std::string path = "media/" + id + ".wav";
+    return MediaAsset::create(
+               AssetId::create(std::move(id)).value(), MediaKind::Audio, path,
+               DurationNs{5'000'000'000}, std::nullopt,
+               AudioAssetMetadata{48'000, 2}, 21'000, "audio-fingerprint",
                AssetAvailability::Available)
         .value();
 }
@@ -207,6 +226,104 @@ TEST(EditorControllerTest, FailedUpdateKeepsDurableStateAndReloadsPreview) {
     EXPECT_FALSE(controller.previewStale());
     EXPECT_EQ(controller.statusMessage(),
               QStringLiteral("preview graph update failed"));
+}
+
+TEST(EditorControllerAcceptanceTest,
+     OpensMultitrackTakeSeeksCommitsSplitAndRecoversPreviewGraph) {
+    const MediaAsset screen = asset("screen");
+    const MediaAsset camera = asset("camera");
+    const MediaAsset microphone = audioAsset("microphone");
+    auto timeline = Timeline::create(TimelineId::create("take-1").value(),
+                                     "Recorded take",
+                                     FrameRate::create(60, 1).value())
+                        .value();
+    const TrackId screenTrack = TrackId::create("screen-track").value();
+    const TrackId cameraTrack = TrackId::create("camera-track").value();
+    const TrackId microphoneTrack = TrackId::create("microphone-track").value();
+    ASSERT_TRUE(timeline.addTrack(Track::create(screenTrack, TrackKind::Video,
+                                                "Screen", true, false)
+                                      .value())
+                    .hasValue());
+    ASSERT_TRUE(timeline.addTrack(Track::create(cameraTrack, TrackKind::Video,
+                                                "Camera", true, false)
+                                      .value())
+                    .hasValue());
+    ASSERT_TRUE(timeline.addTrack(Track::create(microphoneTrack, TrackKind::Audio,
+                                                "Microphone", true, false)
+                                      .value())
+                    .hasValue());
+    const auto range = TimeRange::create(TimestampNs{}, DurationNs{4'000'000'000})
+                           .value();
+    ASSERT_TRUE(timeline.insertClip(
+                            screenTrack,
+                            Clip::createAsset(ClipId::create("screen-clip").value(),
+                                              screen, range, range, true,
+                                              std::nullopt, std::nullopt)
+                                .value())
+                    .hasValue());
+    ASSERT_TRUE(timeline.insertClip(
+                            cameraTrack,
+                            Clip::createAsset(ClipId::create("camera-clip").value(),
+                                              camera, range, range, true,
+                                              std::nullopt, std::nullopt)
+                                .value())
+                    .hasValue());
+    ASSERT_TRUE(timeline.insertClip(
+                            microphoneTrack,
+                            Clip::createAsset(
+                                ClipId::create("microphone-clip").value(), microphone,
+                                range, range, true, std::nullopt, std::nullopt)
+                                .value())
+                    .hasValue());
+
+    auto engine = std::make_unique<FakeEditEngine>();
+    FakeEditEngine* fake = engine.get();
+    EditorController controller{std::move(engine)};
+    controller.openSession(
+        {screen, camera, microphone},
+        TimelineSnapshot{timeline, TimelineRevision::create(1).value()});
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    EXPECT_EQ(controller.mediaBinModel()->rowCount(), 3);
+    EXPECT_EQ(controller.timelineTrackModel()->rowCount(), 3);
+
+    controller.seek(2'000'000'000);
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    EXPECT_EQ(controller.playheadNs(), 2'000'000'000);
+
+    SplitClipCommand split{
+        CommandId::create("split-screen").value(), screenTrack,
+        ClipId::create("screen-clip").value(),
+        ClipId::create("screen-clip-right").value(),
+        TimestampNs{DurationNs{2'000'000'000}}};
+    ASSERT_TRUE(split.execute(timeline).hasValue());
+    auto change = TimelineChangeSet::create(
+                      TimelineRevision::create(1).value(),
+                      TimelineSnapshot{timeline,
+                                       TimelineRevision::create(2).value()},
+                      {screenTrack}, false)
+                      .value();
+    fake->failNext(FakeEditOperation::Update,
+                   creator::core::AppError{creator::core::ErrorCode::IoFailure,
+                                           "rebuild acceptance failure"});
+
+    controller.commitTimeline(change);
+
+    const QVariantList committedClips =
+        controller.timelineTrackModel()
+            ->data(controller.timelineTrackModel()->index(0, 0),
+                   TimelineTrackModel::ClipsRole)
+            .toList();
+    EXPECT_EQ(committedClips.size(), 2);
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.busy() && fake->calls().size() >= 4U;
+    }));
+    EXPECT_EQ(controller.timelineRevision(), 2);
+    EXPECT_FALSE(controller.previewStale());
+    ASSERT_EQ(fake->calls().size(), 4U);
+    EXPECT_EQ(fake->calls()[0].operation, FakeEditOperation::Load);
+    EXPECT_EQ(fake->calls()[1].operation, FakeEditOperation::Seek);
+    EXPECT_EQ(fake->calls()[2].operation, FakeEditOperation::Update);
+    EXPECT_EQ(fake->calls()[3].operation, FakeEditOperation::Load);
 }
 
 struct DrainState final {
