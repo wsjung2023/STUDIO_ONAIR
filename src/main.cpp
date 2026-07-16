@@ -7,6 +7,7 @@
 #include "capture/UnsupportedDeviceCaptureBackend.h"
 #if defined(__APPLE__)
 #include "capture/macos/MacScreenCaptureBackend.h"
+#include "capture/macos/MacDeviceCaptureBackend.h"
 #endif
 #include "domain/Identifiers.h"
 #include "fakes/FakeCaptureSource.h"
@@ -27,14 +28,16 @@ int main(int argc, char* argv[]) {
 
     auto packageStore = std::make_unique<creator::project_store::ProjectPackageStore>();
     creator::app::ProjectController projectController{std::move(packageStore), &app};
-    creator::app::DeviceCaptureController deviceCaptureController{
-        std::make_unique<creator::capture::UnsupportedDeviceCaptureBackend>(), &app};
 #if defined(__APPLE__)
+    creator::app::DeviceCaptureController deviceCaptureController{
+        creator::capture::macos::makeMacDeviceCaptureBackend(), &app};
     auto screenCaptureBackend = creator::capture::macos::makeMacScreenCaptureBackend();
     creator::app::ScreenCaptureController screenCaptureController{
         std::move(screenCaptureBackend.permission), std::move(screenCaptureBackend.discovery),
         std::move(screenCaptureBackend.sourceFactory), &app};
 #else
+    creator::app::DeviceCaptureController deviceCaptureController{
+        std::make_unique<creator::capture::UnsupportedDeviceCaptureBackend>(), &app};
     creator::app::ScreenCaptureController screenCaptureController{
         std::make_unique<creator::capture::UnsupportedScreenCapturePermission>(),
         std::make_unique<creator::capture::UnsupportedScreenCaptureDiscovery>(),

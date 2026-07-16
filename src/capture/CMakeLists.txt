@@ -49,10 +49,13 @@ if(APPLE)
     find_library(CS_COREMEDIA_FRAMEWORK CoreMedia REQUIRED)
     find_library(CS_COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
     find_library(CS_FOUNDATION_FRAMEWORK Foundation REQUIRED)
+    find_library(CS_AVFOUNDATION_FRAMEWORK AVFoundation REQUIRED)
 
     add_library(cs_capture_macos STATIC
         macos/MacScreenCaptureBackend.h
         macos/MacScreenCaptureBackend.mm
+        macos/MacDeviceCaptureBackend.h
+        macos/MacDeviceCaptureBackend.mm
     )
     add_library(CreatorStudio::cs_capture_macos ALIAS cs_capture_macos)
     target_include_directories(cs_capture_macos PUBLIC ${PROJECT_SOURCE_DIR}/src)
@@ -66,6 +69,7 @@ if(APPLE)
             ${CS_COREMEDIA_FRAMEWORK}
             ${CS_COREVIDEO_FRAMEWORK}
             ${CS_FOUNDATION_FRAMEWORK}
+            ${CS_AVFOUNDATION_FRAMEWORK}
     )
     cs_apply_warnings(cs_capture_macos)
     cs_assert_qt_free(cs_capture_macos)

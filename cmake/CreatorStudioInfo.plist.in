@@ -22,6 +22,9 @@
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
     <string>Creator Studio needs screen recording access to preview and record the screen or window you explicitly select.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Creator Studio needs camera access to capture the camera source you explicitly enable.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Creator Studio needs microphone access to capture the microphone source you explicitly enable.</string>
 </dict>
 </plist>
-
