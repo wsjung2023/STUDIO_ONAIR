@@ -43,6 +43,19 @@ Item {
                           .arg((root.controller.playheadNs / 1000000000).toFixed(2))
                     font.family: "monospace"
                 }
+                Slider {
+                    id: seekSlider
+                    objectName: "editorSeekSlider"
+                    Layout.fillWidth: true
+                    from: 0
+                    to: Math.max(1, root.controller.timelineDurationNs)
+                    value: root.controller.playheadNs
+                    enabled: root.controller.timelineDurationNs > 0
+                             && !root.controller.busy
+                             && !root.controller.previewStale
+                    onMoved: root.controller.seek(Math.round(value))
+                    Accessible.name: qsTr("Timeline position")
+                }
                 Item { Layout.fillWidth: true }
                 BusyIndicator {
                     running: root.controller.busy

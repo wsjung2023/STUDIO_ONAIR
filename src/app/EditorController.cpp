@@ -8,6 +8,19 @@
 #include <utility>
 
 namespace creator::app {
+namespace {
+
+std::int64_t timelineFrameCount(const domain::Timeline& timeline) {
+    core::TimestampNs end{};
+    for (const auto& track : timeline.tracks()) {
+        for (const auto& clip : track.clips()) {
+            end = std::max(end, clip.timelineRange().end());
+        }
+    }
+    return core::timestampToFrame(end, timeline.frameRate());
+}
+
+}  // namespace
 
 EditorController::EditorController(
     std::unique_ptr<edit_engine::IEditEngine> engine, QObject* parent)
@@ -39,6 +52,17 @@ EditorController::~EditorController() {
 
 qlonglong EditorController::timelineRevision() const noexcept {
     return snapshot_.has_value() ? snapshot_->revision.value() : -1;
+}
+
+qlonglong EditorController::timelineDurationNs() const noexcept {
+    if (!snapshot_.has_value()) return 0;
+    core::TimestampNs end{};
+    for (const auto& track : snapshot_->timeline.tracks()) {
+        for (const auto& clip : track.clips()) {
+            end = std::max(end, clip.timelineRange().end());
+        }
+    }
+    return end.time_since_epoch().count();
 }
 
 void EditorController::openSession(
@@ -323,13 +347,23 @@ void EditorController::handleFrameCompleted(
             *command.expectedRevision != snapshot_->revision.value();
         const bool returnedExpectedRevision = command.expectedRevision.has_value() &&
                                               revision == *command.expectedRevision;
+        const bool returnedExpectedPosition =
+            command.position.has_value() &&
+            positionNs == command.position->time_since_epoch().count();
         if (commandBecameStale) {
             // The durable timeline changed while the worker decoded this frame.
             // The queued update/load will request a frame for the new revision.
-        } else if (!success || !returnedExpectedRevision || image.isNull()) {
-            setStatus(success && !returnedExpectedRevision
-                          ? QStringLiteral("Edit engine returned the wrong preview revision")
-                          : errorMessage);
+        } else if (!success || !returnedExpectedRevision ||
+                   !returnedExpectedPosition || image.isNull()) {
+            if (success && !returnedExpectedRevision) {
+                setStatus(QStringLiteral(
+                    "Edit engine returned the wrong preview revision"));
+            } else if (success && !returnedExpectedPosition) {
+                setStatus(QStringLiteral(
+                    "Edit engine returned the wrong preview position"));
+            } else {
+                setStatus(errorMessage);
+            }
             setPreviewStale(true);
             setPlaying(false);
         } else {
@@ -351,6 +385,19 @@ void EditorController::requestPlaybackFrame() {
     const auto unquantized = playbackStart_ + elapsed;
     const auto rate = snapshot_->timeline.frameRate();
     const auto frameIndex = core::timestampToFrame(unquantized, rate);
+    const auto frameCount = timelineFrameCount(snapshot_->timeline);
+    if (frameCount <= 0) {
+        setPlaying(false);
+        queueSimple(EditorEngineOperation::Pause);
+        return;
+    }
+    if (frameIndex >= frameCount) {
+        const auto lastPosition = core::frameToTimestamp(frameCount - 1, rate);
+        if (lastPosition > playhead_) queueFrame(lastPosition);
+        setPlaying(false);
+        queueSimple(EditorEngineOperation::Pause);
+        return;
+    }
     const auto position = core::frameToTimestamp(frameIndex, rate);
     if (position <= playhead_) return;
     queueFrame(position);

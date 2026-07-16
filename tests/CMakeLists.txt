@@ -236,6 +236,13 @@ if(CS_ENABLE_MLT)
     target_compile_definitions(cs_r1_mlt_acceptance_tests PRIVATE
         CS_TEST_STAGED_MLT_ROOT="$<TARGET_FILE_DIR:creator_studio>/mlt-runtime"
     )
+    if(WIN32 AND MSVC)
+        target_link_libraries(cs_r1_mlt_acceptance_tests PRIVATE delayimp)
+        target_link_options(cs_r1_mlt_acceptance_tests PRIVATE
+            "/DELAYLOAD:mlt++-7.dll"
+            "/DELAYLOAD:mlt-7.dll"
+        )
+    endif()
     add_dependencies(cs_r1_mlt_acceptance_tests creator_studio)
     cs_apply_warnings(cs_r1_mlt_acceptance_tests)
     gtest_discover_tests(cs_r1_mlt_acceptance_tests
@@ -243,7 +250,6 @@ if(CS_ENABLE_MLT)
         PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
             ENVIRONMENT_MODIFICATION
-                "PATH=path_list_prepend:$<TARGET_FILE_DIR:creator_studio>/mlt-runtime/bin"
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 endif()

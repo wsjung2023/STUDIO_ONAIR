@@ -30,11 +30,24 @@ Using MLT as the product data model would couple project migrations and UX to an
   initialization.
 - Shipping builds stage only runtime roles under the application-local
   `mlt-runtime` directory. On Windows the two MLT imports are delay-loaded,
-  the verified runtime `bin` directory is registered explicitly, and no
+  the adapter verifies and preloads them before its first imported MLT call,
+  and the verified runtime `bin` directory remains registered for the native
+  factory lifetime. Missing, corrupt, or wrong-architecture libraries become
+  product `AppError` values instead of delay-load process termination. No
   development-machine MLT path is compiled into the application.
+- Every manifest file records its component, version, immutable source
+  identity, and SPDX license expression. The verifier independently enforces
+  exact MLT, FFmpeg, PThreads4W, GNU libiconv, and dlfcn-win32 identities in
+  addition to the exact file set and SHA-256 hashes.
 - Video layering uses MLT's LGPL core `composite` transition because the other
   compositors belong to excluded optional modules. Audio layering uses the
   LGPL core `mix` transition. Service identifiers are selected only by the
   product-owned graph builder; project data cannot choose arbitrary services.
+- MLT's native factory is process-global. A named process-lifetime owner closes
+  the native factory during orderly process teardown and releases the verified
+  Windows DLL-directory registration. The tiny C++ `Repository` wrapper itself
+  is intentionally not deleted across the Release-DLL/Debug-application CRT
+  boundary on Windows; doing so crosses heaps. Per-project graphs and media
+  services remain deterministically owned and destroyed by each edit engine.
 - This is an engineering distribution boundary, not a conclusion about codec
   patent or royalty obligations; those remain an R4 release gate.

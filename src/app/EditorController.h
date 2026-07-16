@@ -34,6 +34,7 @@ class EditorController final : public QObject {
     Q_PROPERTY(bool previewStale READ previewStale NOTIFY previewStaleChanged)
     Q_PROPERTY(bool playing READ playing NOTIFY playingChanged)
     Q_PROPERTY(qlonglong playheadNs READ playheadNs NOTIFY playheadChanged)
+    Q_PROPERTY(qlonglong timelineDurationNs READ timelineDurationNs NOTIFY timelineChanged)
     Q_PROPERTY(qlonglong timelineRevision READ timelineRevision NOTIFY timelineChanged)
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
     Q_PROPERTY(QImage previewImage READ previewImage NOTIFY previewImageChanged)
@@ -57,6 +58,7 @@ public:
         return playhead_.time_since_epoch().count();
     }
     [[nodiscard]] qlonglong timelineRevision() const noexcept;
+    [[nodiscard]] qlonglong timelineDurationNs() const noexcept;
     [[nodiscard]] QString statusMessage() const { return statusMessage_; }
     [[nodiscard]] QImage previewImage() const { return previewImage_; }
     [[nodiscard]] bool hasPreviewFrame() const noexcept {

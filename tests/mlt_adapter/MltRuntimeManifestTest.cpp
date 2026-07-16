@@ -1,4 +1,5 @@
 #include "mlt_adapter/MltRuntimeManifest.h"
+#include "mlt_adapter/MltEditEngine.h"
 
 #include <gtest/gtest.h>
 
@@ -47,6 +48,11 @@ struct Entry final {
     std::string path;
     std::string hash{kHelloSha256};
     std::string role;
+    std::string component{"MLT Framework"};
+    std::string version{"7.40.0"};
+    std::string sourceIdentity{
+        "bef9d89c0c279e558d9625dac3399c2aa3d961bc"};
+    std::string license{"LGPL-2.1-or-later"};
 };
 
 class RuntimeFixture final {
@@ -90,12 +96,22 @@ public:
                << "\",\"source_commit\":"
                   "\"bef9d89c0c279e558d9625dac3399c2aa3d961bc\","
                   "\"linking\":\"dynamic\","
-                  "\"allowed_modules\":[\"core\",\"avformat\"],\"files\":[";
+                  "\"allowed_modules\":[\"core\",\"avformat\"],"
+                  "\"dependencies\":["
+                  "{\"component\":\"FFmpeg\",\"version\":\"8.1.2\","
+                  "\"source_identity\":\"sha256:464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c\",\"license\":\"LGPL-2.1-or-later\"},"
+                  "{\"component\":\"PThreads4W\",\"version\":\"3.0.0\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"Apache-2.0\"},"
+                  "{\"component\":\"GNU libiconv\",\"version\":\"1.19\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"LGPL-2.1-or-later\"},"
+                  "{\"component\":\"dlfcn-win32\",\"version\":\"1.4.2\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"MIT\"}],\"files\":[";
         for (std::size_t index = 0; index < entries_.size(); ++index) {
             if (index != 0) output << ',';
             const auto& entry = entries_[index];
             output << "{\"path\":\"" << entry.path << "\",\"sha256\":\""
-                   << entry.hash << "\",\"role\":\"" << entry.role << "\"}";
+                   << entry.hash << "\",\"role\":\"" << entry.role
+                   << "\",\"component\":\"" << entry.component
+                   << "\",\"version\":\"" << entry.version
+                   << "\",\"source_identity\":\"" << entry.sourceIdentity
+                   << "\",\"license\":\"" << entry.license << "\"}";
         }
         output << "]}";
     }
@@ -115,9 +131,32 @@ TEST(MltRuntimeManifestTest, AcceptsExactAuditedFileSetAndHashes) {
     ASSERT_TRUE(result.hasValue()) << result.error().message();
 }
 
+#ifdef _WIN32
+TEST(MltRuntimeManifestTest, RejectsUnloadableLibrariesWithoutCrashingProcess) {
+    RuntimeFixture fixture;
+
+    const auto result =
+        creator::mlt_adapter::MltEditEngine::preflightRuntime(fixture.root());
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), creator::core::ErrorCode::UnsupportedVersion);
+    EXPECT_NE(result.error().message().find("could not be loaded"),
+              std::string::npos);
+}
+#endif
+
 TEST(MltRuntimeManifestTest, RejectsChangedHash) {
     RuntimeFixture fixture;
     fixture.writeFile("bin/mlt-7.dll", "tampered");
+    EXPECT_FALSE(
+        creator::mlt_adapter::verifyMltRuntimeManifest(fixture.root()).hasValue());
+}
+
+TEST(MltRuntimeManifestTest, RejectsFalsePerFileProvenance) {
+    RuntimeFixture fixture;
+    fixture.entries().front().license = "GPL-3.0-only";
+    fixture.writeManifest();
+
     EXPECT_FALSE(
         creator::mlt_adapter::verifyMltRuntimeManifest(fixture.root()).hasValue());
 }

@@ -6,7 +6,7 @@
   dynamic LGPL build with only `core` and `avformat` modules.
 - Qt-free graph compiler and manifest verifier with canonical package paths,
   checked frame ranges, exact file-set hashes, reparse rejection, and
-  fail-closed source identity.
+  fail-closed per-file component/version/source/license identity.
 - Native multitrack graph with black background, core video composites, core
   audio mixes, real avformat media, deterministic full rebuild, and last-good
   graph retention after failed updates.
@@ -16,6 +16,10 @@
 - Runtime-only application staging. Windows delay-loads `mlt++-7.dll` and
   `mlt-7.dll`, registers the staged DLL directory before native use, and does
   not compile the build-machine MLT prefix into the executable.
+- Empty timelines produce a deterministic one-frame black preview. Playback
+  stops normally at the last timeline frame, returned native frame positions
+  must exactly match their request, and the editor toolbar exposes bounded
+  timeline seeking.
 
 ## Review corrections
 
@@ -35,6 +39,19 @@ assets now repeat their decoded first frame in the MLT playlist instead of
 requesting nonexistent temporal frames. A direct 600 ms random seek proves the
 fix.
 
+A second independent review found seven additional gaps. The corrected gate:
+
+- treats empty timelines and normal end-of-timeline playback as valid states;
+- rejects a native frame returned for any position other than the request;
+- provides a QML seek slider tied to the timeline duration and playhead;
+- validates every shipped DLL's immutable provenance and license identity;
+- preloads verified delay-import libraries and retains their DLL search
+  directory, with an invalid-PE test proving failure becomes `AppError`;
+- extracts actual mixed PCM and proves the sum of two real WAV tracks, exposing
+  and fixing missing `audioconvert` normalization plus transition ordering; and
+- gives the process-global MLT factory an explicit teardown owner, with the
+  Windows cross-CRT wrapper exception documented in ADR-0003.
+
 ## Physical acceptance
 
 - A real Unicode media package with red lower and delayed blue upper tracks is
@@ -53,19 +70,22 @@ fix.
 
 - Configuration: MSVC Debug, `/W4 /permissive- /WX`, MLT enabled.
 - Clean build: **254/254 steps passed**, zero warnings.
-- Complete sequential CTest: **473/473 passed** in 61.67 seconds.
+- Complete sequential CTest: **478/478 passed** in 63.33 seconds.
 - Parallel CTest first produced two transient failures in pre-existing SQLite
   edit-history tests; both passed immediately in isolation and the complete
   sequential gate passed. No failure was skipped or disabled.
-- Native MLT suite: **13/13 passed**.
-- Application suite: **89/89 passed**.
+- Native MLT suite: **16/16 passed**.
+- Application suite: **91/91 passed**.
 - R1 physical MLT acceptance: **2/2 passed**.
+- The physical acceptance executable also delay-loads both MLT DLLs and passed
+  with no MLT directory on `PATH`; the adapter loaded only its staged runtime.
 - `dumpbin`: normal imports are Qt/MSVC/Windows only; MLT appears only in the
   delay-import table.
 - Link command contains product libraries and no `cs_fakes`.
 - A `cmake --install` rehearsal produced only the application `bin` tree
   (test-framework install rules disabled) and its installed MLT runtime passed
-  the standalone verifier.
+  the standalone verifier: 156 files, four exact dependency identities, and
+  zero development artifacts.
 - `creator_studio.exe` launched from the clean output with no top-level MLT
   DLLs and reported `Responding=True`.
 - `git diff --check` passed.

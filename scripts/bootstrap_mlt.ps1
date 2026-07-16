@@ -16,6 +16,8 @@ $PinnedVcpkgCommit = "43643e1f5cf73db40d0d4bd610183348eb09b24e"
 $ExpectedMltVersion = "7.40.0"
 $ExpectedSourceCommit = "bef9d89c0c279e558d9625dac3399c2aa3d961bc"
 $ExpectedSourceArchiveSha256 = "49070c3aa84af719de77875d44a62a1c115aff923aff60657fe6dbaaef877601"
+$ExpectedFfmpegVersion = "8.1.2"
+$ExpectedFfmpegArchiveSha256 = "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"
 $OfficialSourceArchiveUrl = "https://github.com/mltframework/mlt/archive/refs/tags/v$ExpectedMltVersion.tar.gz"
 
 if ([string]::IsNullOrWhiteSpace($VcpkgRoot)) {
@@ -71,6 +73,11 @@ if (-not (Test-Path -LiteralPath (Join-Path $FfmpegRoot "creator-studio-ffmpeg-b
 $FfmpegEvidence = Get-Content -LiteralPath (Join-Path $FfmpegRoot "creator-studio-ffmpeg-build.txt") -Raw -Encoding utf8
 if ($FfmpegEvidence -match '--enable-(gpl|nonfree)' -or $FfmpegEvidence -notmatch '--enable-shared') {
     throw "FFmpeg root does not satisfy the dynamic LGPL policy"
+}
+if ($FfmpegEvidence -notmatch "(?m)^ffmpeg_version=$ExpectedFfmpegVersion$" -or
+    $FfmpegEvidence -notmatch "(?m)^official_release_archive_sha256=$ExpectedFfmpegArchiveSha256$" -or
+    $FfmpegEvidence -notmatch "(?m)^vcpkg_commit=$PinnedVcpkgCommit$") {
+    throw "FFmpeg root identity does not match the audited release"
 }
 
 if (-not (Test-Path -LiteralPath $OfficialArchivePath)) {
@@ -285,14 +292,46 @@ $Evidence = @(
 ) -join [Environment]::NewLine
 [System.IO.File]::WriteAllText($EvidencePath, $Evidence, [System.Text.UTF8Encoding]::new($false))
 
+function Get-FileProvenance {
+    param([string]$Relative)
+    $Lower = $Relative.ToLowerInvariant()
+    $Name = [System.IO.Path]::GetFileName($Lower)
+    $VcpkgIdentity = "vcpkg:$PinnedVcpkgCommit"
+    if ($Name -match '^(avcodec-|avfilter-|avformat-|avutil-|swresample-|swscale-).*\.dll$') {
+        return [ordered]@{ component = "FFmpeg"; version = $ExpectedFfmpegVersion; source_identity = "sha256:$ExpectedFfmpegArchiveSha256"; license = "LGPL-2.1-or-later" }
+    }
+    if ($Name -match '^pthread.*\.dll$' -or $Lower.StartsWith("include/mlt-deps/")) {
+        return [ordered]@{ component = "PThreads4W"; version = "3.0.0"; source_identity = $VcpkgIdentity; license = "Apache-2.0" }
+    }
+    if ($Name -in @("iconv-2.dll", "libiconv-2.dll")) {
+        return [ordered]@{ component = "GNU libiconv"; version = "1.19"; source_identity = $VcpkgIdentity; license = "LGPL-2.1-or-later" }
+    }
+    if ($Name -eq "dl.dll") {
+        return [ordered]@{ component = "dlfcn-win32"; version = "1.4.2"; source_identity = $VcpkgIdentity; license = "MIT" }
+    }
+    if ($Lower -eq "creator-studio-mlt-build.txt") {
+        return [ordered]@{ component = "Creator Studio"; version = "1"; source_identity = "repository:R1-03"; license = "LicenseRef-Creator-Studio-Proprietary" }
+    }
+    if ($Lower.StartsWith("bin/mlt") -or $Lower.StartsWith("lib/") -or
+        $Lower.StartsWith("share/") -or $Lower.StartsWith("include/mlt-7/")) {
+        return [ordered]@{ component = "MLT Framework"; version = $ExpectedMltVersion; source_identity = $ExpectedSourceCommit; license = "LGPL-2.1-or-later" }
+    }
+    throw "No approved provenance classification for MLT artifact: $Relative"
+}
+
 $ManifestFiles = @()
 foreach ($File in Get-ChildItem -LiteralPath $InstallRoot -Recurse -File | Sort-Object FullName) {
     $Relative = (Get-CompatibleRelativePath $InstallRoot $File.FullName).Replace('\', '/')
     $Role = if ($Relative.StartsWith("bin/")) { "runtime-library" } elseif ($Relative.StartsWith("lib/mlt-7/")) { "runtime-module" } elseif ($Relative.StartsWith("share/")) { "runtime-data" } elseif ($Relative.StartsWith("include/") -or $Relative.EndsWith(".lib")) { "development" } else { "evidence" }
+    $Provenance = Get-FileProvenance $Relative
     $ManifestFiles += [ordered]@{
         path = $Relative
         sha256 = (Get-FileHash -LiteralPath $File.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         role = $Role
+        component = $Provenance.component
+        version = $Provenance.version
+        source_identity = $Provenance.source_identity
+        license = $Provenance.license
     }
 }
 $Manifest = [ordered]@{
@@ -302,6 +341,12 @@ $Manifest = [ordered]@{
     source_commit = $ExpectedSourceCommit
     linking = "dynamic"
     allowed_modules = @("core", "avformat")
+    dependencies = @(
+        [ordered]@{ component = "FFmpeg"; version = $ExpectedFfmpegVersion; source_identity = "sha256:$ExpectedFfmpegArchiveSha256"; license = "LGPL-2.1-or-later" }
+        [ordered]@{ component = "PThreads4W"; version = "3.0.0"; source_identity = "vcpkg:$PinnedVcpkgCommit"; license = "Apache-2.0" }
+        [ordered]@{ component = "GNU libiconv"; version = "1.19"; source_identity = "vcpkg:$PinnedVcpkgCommit"; license = "LGPL-2.1-or-later" }
+        [ordered]@{ component = "dlfcn-win32"; version = "1.4.2"; source_identity = "vcpkg:$PinnedVcpkgCommit"; license = "MIT" }
+    )
     files = $ManifestFiles
 }
 $ManifestPath = Join-Path $InstallRoot "mlt-runtime-manifest.json"

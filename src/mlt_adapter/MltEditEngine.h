@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <vector>
 
 namespace creator::mlt_adapter {
 
@@ -26,6 +27,11 @@ public:
     explicit MltEditEngine(MltEditEngineConfig config);
     ~MltEditEngine() override;
 
+    /// Verifies both the signed file set and the Windows loader boundary before
+    /// any delay-imported MLT symbol is called by the application.
+    [[nodiscard]] static core::Result<void> preflightRuntime(
+        const std::filesystem::path& runtimeRoot);
+
     [[nodiscard]] core::Result<void> load(
         const edit_engine::TimelineSnapshot& snapshot) override;
     [[nodiscard]] core::Result<void> update(
@@ -36,6 +42,8 @@ public:
     [[nodiscard]] core::Result<edit_engine::PreviewFrame> requestFrame(
         core::TimestampNs position) override;
     [[nodiscard]] core::Result<MltEditEngineDiagnostics> diagnostics() const;
+    [[nodiscard]] core::Result<std::vector<float>> requestMixedAudio(
+        core::TimestampNs position, int frequency, int channels, int samples);
     [[nodiscard]] core::Result<std::unique_ptr<edit_engine::IRenderJob>> render(
         const edit_engine::RenderRequest& request) override;
 

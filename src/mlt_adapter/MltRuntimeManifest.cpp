@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <string>
@@ -221,6 +222,75 @@ bool isForbiddenArtifact(const std::string& path) {
            name.find("xine") != std::string::npos;
 }
 
+struct FileProvenance final {
+    std::string_view component;
+    std::string_view version;
+    std::string_view sourceIdentity;
+    std::string_view license;
+};
+
+constexpr std::string_view kVcpkgIdentity =
+    "vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e";
+constexpr std::string_view kFfmpegIdentity =
+    "sha256:464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c";
+
+std::optional<FileProvenance> expectedProvenance(const std::string& path) {
+    const auto lower = asciiLower(path);
+    const auto nameOffset = lower.find_last_of('/');
+    const auto name = lower.substr(
+        nameOffset == std::string::npos ? 0 : nameOffset + 1);
+    if (name.starts_with("avcodec-") || name.starts_with("avfilter-") ||
+        name.starts_with("avformat-") || name.starts_with("avutil-") ||
+        name.starts_with("swresample-") || name.starts_with("swscale-")) {
+        return FileProvenance{"FFmpeg", "8.1.2", kFfmpegIdentity,
+                              "LGPL-2.1-or-later"};
+    }
+    if (name.starts_with("pthread") ||
+        lower.starts_with("include/mlt-deps/")) {
+        return FileProvenance{"PThreads4W", "3.0.0", kVcpkgIdentity,
+                              "Apache-2.0"};
+    }
+    if (name == "iconv-2.dll" || name == "libiconv-2.dll") {
+        return FileProvenance{"GNU libiconv", "1.19", kVcpkgIdentity,
+                              "LGPL-2.1-or-later"};
+    }
+    if (name == "dl.dll") {
+        return FileProvenance{"dlfcn-win32", "1.4.2", kVcpkgIdentity,
+                              "MIT"};
+    }
+    if (lower == "creator-studio-mlt-build.txt") {
+        return FileProvenance{"Creator Studio", "1", "repository:R1-03",
+                              "LicenseRef-Creator-Studio-Proprietary"};
+    }
+    if (lower.starts_with("bin/mlt") || lower.starts_with("lib/") ||
+        lower.starts_with("share/") || lower.starts_with("include/mlt-7/")) {
+        return FileProvenance{"MLT Framework", CS_MLT_EXPECTED_VERSION,
+                              CS_MLT_EXPECTED_COMMIT, "LGPL-2.1-or-later"};
+    }
+    return std::nullopt;
+}
+
+nlohmann::json expectedDependencies() {
+    return nlohmann::json::array({
+        {{"component", "FFmpeg"},
+         {"version", "8.1.2"},
+         {"source_identity", kFfmpegIdentity},
+         {"license", "LGPL-2.1-or-later"}},
+        {{"component", "PThreads4W"},
+         {"version", "3.0.0"},
+         {"source_identity", kVcpkgIdentity},
+         {"license", "Apache-2.0"}},
+        {{"component", "GNU libiconv"},
+         {"version", "1.19"},
+         {"source_identity", kVcpkgIdentity},
+         {"license", "LGPL-2.1-or-later"}},
+        {{"component", "dlfcn-win32"},
+         {"version", "1.4.2"},
+         {"source_identity", kVcpkgIdentity},
+         {"license", "MIT"}},
+    });
+}
+
 std::filesystem::path pathFromUtf8(const std::string& text) {
     std::u8string encoded;
     encoded.reserve(text.size());
@@ -278,6 +348,7 @@ Result<void> verifyMltRuntimeManifest(
             manifest.at("linking").get<std::string>() != "dynamic" ||
             manifest.at("allowed_modules") !=
                 nlohmann::json::array({"core", "avformat"}) ||
+            manifest.at("dependencies") != expectedDependencies() ||
             !manifest.at("files").is_array()) {
             return AppError{ErrorCode::UnsupportedVersion,
                             "MLT runtime identity is not approved"};
@@ -296,11 +367,24 @@ Result<void> verifyMltRuntimeManifest(
             const auto path = entry.at("path").get<std::string>();
             const auto hash = entry.at("sha256").get<std::string>();
             const auto role = entry.at("role").get<std::string>();
+            const auto component = entry.at("component").get<std::string>();
+            const auto version = entry.at("version").get<std::string>();
+            const auto sourceIdentity =
+                entry.at("source_identity").get<std::string>();
+            const auto license = entry.at("license").get<std::string>();
             if (auto valid = validateRelativePath(path); !valid.hasValue()) {
                 return valid;
             }
             if (!isLowerHexSha256(hash) || !allowedRoles.contains(role)) {
                 return invalid("MLT manifest contains invalid file metadata");
+            }
+            const auto provenance = expectedProvenance(path);
+            if (!provenance || component != provenance->component ||
+                version != provenance->version ||
+                sourceIdentity != provenance->sourceIdentity ||
+                license != provenance->license) {
+                return invalid(
+                    "MLT manifest contains unapproved file provenance");
             }
             if (isForbiddenArtifact(path)) {
                 return invalid("MLT manifest contains a forbidden artifact");

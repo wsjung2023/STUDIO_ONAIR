@@ -5,6 +5,7 @@
 #include "mlt_adapter/MltRuntimeManifest.h"
 
 #include <mlt++/MltFactory.h>
+#include <mlt++/MltFilter.h>
 #include <mlt++/MltFrame.h>
 #include <mlt++/MltPlaylist.h>
 #include <mlt++/MltProducer.h>
@@ -19,8 +20,10 @@
 #include <cstdlib>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -68,6 +71,152 @@ void setMltEnvironment(const std::filesystem::path& root) {
 #endif
 }
 
+class LoadedRuntimeLibraries final {
+public:
+    LoadedRuntimeLibraries() = default;
+    LoadedRuntimeLibraries(const LoadedRuntimeLibraries&) = delete;
+    LoadedRuntimeLibraries& operator=(const LoadedRuntimeLibraries&) = delete;
+    LoadedRuntimeLibraries(LoadedRuntimeLibraries&& other) noexcept
+#ifdef _WIN32
+        : modules_(std::move(other.modules_)),
+          directoryCookie_(std::exchange(other.directoryCookie_, nullptr))
+#endif
+    {}
+    LoadedRuntimeLibraries& operator=(LoadedRuntimeLibraries&& other) noexcept {
+        if (this != &other) {
+            release();
+#ifdef _WIN32
+            modules_ = std::move(other.modules_);
+            directoryCookie_ =
+                std::exchange(other.directoryCookie_, nullptr);
+#endif
+        }
+        return *this;
+    }
+    ~LoadedRuntimeLibraries() { release(); }
+
+#ifdef _WIN32
+    void add(HMODULE module) { modules_.push_back(module); }
+    void setDirectoryCookie(DLL_DIRECTORY_COOKIE cookie) {
+        directoryCookie_ = cookie;
+    }
+#endif
+
+private:
+    void release() noexcept {
+#ifdef _WIN32
+        for (auto module = modules_.rbegin(); module != modules_.rend(); ++module) {
+            if (*module) FreeLibrary(*module);
+        }
+        modules_.clear();
+        if (directoryCookie_) {
+            RemoveDllDirectory(directoryCookie_);
+            directoryCookie_ = nullptr;
+        }
+#endif
+    }
+
+#ifdef _WIN32
+    std::vector<HMODULE> modules_;
+    DLL_DIRECTORY_COOKIE directoryCookie_{};
+#endif
+};
+
+core::Result<LoadedRuntimeLibraries> loadRuntimeLibraries(
+    const std::filesystem::path& root) {
+    LoadedRuntimeLibraries loaded;
+#ifdef _WIN32
+    if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
+                                  LOAD_LIBRARY_SEARCH_USER_DIRS)) {
+        return core::AppError{
+            core::ErrorCode::UnsupportedVersion,
+            "Windows could not enable the audited MLT DLL search policy (error=" +
+                std::to_string(GetLastError()) + ")"};
+    }
+    const auto runtimeBin = root / "bin";
+    const auto cookie = AddDllDirectory(runtimeBin.c_str());
+    if (!cookie) {
+        return core::AppError{
+            core::ErrorCode::UnsupportedVersion,
+            "Windows could not register the audited MLT runtime (error=" +
+                std::to_string(GetLastError()) + ")"};
+    }
+    loaded.setDirectoryCookie(cookie);
+    constexpr DWORD kSearchFlags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+                                   LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
+                                   LOAD_LIBRARY_SEARCH_USER_DIRS;
+    for (const auto* name : {L"mlt-7.dll", L"mlt++-7.dll"}) {
+        const auto path = root / "bin" / name;
+        HMODULE module = LoadLibraryExW(path.c_str(), nullptr, kSearchFlags);
+        if (!module) {
+            return core::AppError{
+                core::ErrorCode::UnsupportedVersion,
+                "Audited MLT runtime could not be loaded by Windows (error=" +
+                    std::to_string(GetLastError()) + ")"};
+        }
+        loaded.add(module);
+    }
+#else
+    static_cast<void>(root);
+#endif
+    return loaded;
+}
+
+class MltProcessRuntime final {
+public:
+    static MltProcessRuntime& instance() {
+        static MltProcessRuntime runtime;
+        return runtime;
+    }
+
+    core::Result<void> bind(const std::filesystem::path& runtimeRoot) {
+        std::lock_guard lock(mutex_);
+        if (repository_) {
+            std::error_code equivalentError;
+            const bool sameRuntime = std::filesystem::equivalent(
+                root_, runtimeRoot, equivalentError);
+            if (equivalentError || !sameRuntime) {
+                return stateError(
+                    "MLT factory is already bound to another runtime");
+            }
+            return core::ok();
+        }
+
+        auto libraries = loadRuntimeLibraries(runtimeRoot);
+        if (!libraries.hasValue()) return libraries.error();
+        setMltEnvironment(runtimeRoot);
+        const auto modules = utf8Path(runtimeRoot / "lib/mlt-7");
+        Mlt::Repository* repository = Mlt::Factory::init(modules.c_str());
+        if (!repository) {
+            return stateError("MLT repository initialization failed");
+        }
+        libraries_ = std::move(libraries).value();
+        repository_ = repository;
+        root_ = runtimeRoot;
+        return core::ok();
+    }
+
+    ~MltProcessRuntime() {
+        if (repository_) {
+            Mlt::Factory::close();
+            // MLT allocates the C++ Repository wrapper inside its release CRT
+            // DLL. Deleting it from a debug-CRT application crosses heaps on
+            // Windows. It contains only the process-global native handle, so
+            // the wrapper intentionally lives until process teardown while
+            // Factory::close() deterministically releases the native factory.
+            repository_ = nullptr;
+        }
+    }
+
+private:
+    MltProcessRuntime() = default;
+
+    std::mutex mutex_;
+    std::filesystem::path root_;
+    LoadedRuntimeLibraries libraries_;
+    Mlt::Repository* repository_{};
+};
+
 }  // namespace
 
 class MltEditEngine::Impl final {
@@ -77,6 +226,7 @@ public:
         std::unique_ptr<Mlt::Tractor> tractor;
         std::vector<std::unique_ptr<Mlt::Playlist>> playlists;
         std::vector<std::unique_ptr<Mlt::Producer>> producers;
+        std::vector<std::unique_ptr<Mlt::Filter>> filters;
         std::vector<std::unique_ptr<Mlt::Transition>> transitions;
         domain::TimelineRevision revision;
         core::FrameRate frameRate;
@@ -97,26 +247,8 @@ public:
         if (pathError) {
             return stateError("MLT runtime root could not be canonicalized");
         }
-        static std::mutex factoryMutex;
-        std::lock_guard lock(factoryMutex);
-        static Mlt::Repository* repository = nullptr;
-        static std::filesystem::path repositoryRoot;
-        if (repository) {
-            std::error_code equivalentError;
-            const bool sameRuntime = std::filesystem::equivalent(
-                repositoryRoot, runtimeRoot, equivalentError);
-            if (equivalentError || !sameRuntime) {
-                return stateError(
-                    "MLT factory is already bound to another runtime");
-            }
-        }
-        setMltEnvironment(runtimeRoot);
-        if (!repository) {
-            const auto modules = utf8Path(runtimeRoot / "lib/mlt-7");
-            repository = Mlt::Factory::init(modules.c_str());
-            if (repository) repositoryRoot = runtimeRoot;
-        }
-        if (!repository) return stateError("MLT repository initialization failed");
+        auto bound = MltProcessRuntime::instance().bind(runtimeRoot);
+        if (!bound.hasValue()) return bound;
         const auto bin = utf8Path(runtimeRoot / "bin");
         const auto data = utf8Path(runtimeRoot / "share/mlt-7");
         mlt_environment_set("MLT_APPDIR", bin.c_str());
@@ -138,9 +270,11 @@ public:
             return core::AppError{core::ErrorCode::InvalidArgument,
                                   "MLT preview timeline is too long"};
         }
+        const auto graphDurationFrames =
+            std::max<std::int64_t>(1, plan.durationFrames);
         auto graph = std::make_unique<Graph>(Graph{
-            std::make_unique<Mlt::Profile>(), nullptr, {}, {}, {},
-            plan.revision, plan.frameRate, plan.durationFrames, 0, 0});
+            std::make_unique<Mlt::Profile>(), nullptr, {}, {}, {}, {},
+            plan.revision, plan.frameRate, graphDurationFrames, 0, 0});
         graph->profile->set_explicit(1);
         graph->profile->set_width(static_cast<int>(config_.previewWidth));
         graph->profile->set_height(static_cast<int>(config_.previewHeight));
@@ -155,23 +289,25 @@ public:
             static_cast<int>(plan.frameRate.denominator()));
         graph->tractor = std::make_unique<Mlt::Tractor>(*graph->profile);
 
-        int trackIndex = 0;
-        if (plan.durationFrames > 0) {
-            auto background = std::make_unique<Mlt::Producer>(
-                *graph->profile, "colour", "black");
-            auto backgroundTrack =
-                std::make_unique<Mlt::Playlist>(*graph->profile);
-            if (!background->is_valid() ||
-                backgroundTrack->append(
-                    *background, 0,
-                    static_cast<int>(plan.durationFrames) - 1) != 0 ||
-                graph->tractor->set_track(*backgroundTrack, trackIndex++) != 0) {
-                return stateError("MLT could not create the preview background");
-            }
-            graph->producers.push_back(std::move(background));
-            graph->playlists.push_back(std::move(backgroundTrack));
-        }
+        const auto isAudible = [](const MltGraphTrack& track) {
+            return track.kind == domain::TrackKind::Audio && track.enabled &&
+                   std::any_of(track.clips.begin(), track.clips.end(),
+                               [](const auto& clip) {
+                                   return clip.enabled && clip.available;
+                               });
+        };
+        const MltGraphTrack* audioBase = nullptr;
         for (const auto& track : plan.tracks) {
+            if (isAudible(track)) {
+                audioBase = &track;
+                break;
+            }
+        }
+
+        int trackIndex = 0;
+        std::vector<std::pair<const MltGraphTrack*, int>> nativeTracks;
+        const auto appendTimelineTrack = [&](const MltGraphTrack& track)
+            -> core::Result<int> {
             auto playlist = std::make_unique<Mlt::Playlist>(*graph->profile);
             int cursor = 0;
             for (const auto& clip : track.clips) {
@@ -185,6 +321,16 @@ public:
                         *graph->profile, "avformat", utf8Path(clip.mediaPath).c_str());
                     if (!producer->is_valid()) {
                         return stateError("MLT could not open a timeline media asset");
+                    }
+                    if (clip.mediaKind != domain::MediaKind::Image) {
+                        auto converter = std::make_unique<Mlt::Filter>(
+                            *graph->profile, "audioconvert");
+                        if (!converter->is_valid() ||
+                            producer->attach(*converter) != 0) {
+                            return stateError(
+                                "MLT could not attach the audio format converter");
+                        }
+                        graph->filters.push_back(std::move(converter));
                     }
                     if (clip.mediaKind == domain::MediaKind::Image) {
                         if (playlist->append(*producer, 0, 0) != 0 ||
@@ -203,16 +349,70 @@ public:
                 }
                 cursor = timelineIn + length;
             }
-            if (plan.durationFrames > cursor) {
-                playlist->blank(static_cast<int>(plan.durationFrames) - cursor - 1);
+            if (graphDurationFrames > cursor) {
+                playlist->blank(
+                    static_cast<int>(graphDurationFrames) - cursor - 1);
             }
             const int nativeTrackIndex = trackIndex++;
             if (graph->tractor->set_track(*playlist, nativeTrackIndex) != 0) {
                 return stateError("MLT could not connect a timeline track");
             }
             graph->playlists.push_back(std::move(playlist));
-            if (plan.durationFrames > 0 &&
-                track.kind == domain::TrackKind::Video) {
+            nativeTracks.emplace_back(&track, nativeTrackIndex);
+            return nativeTrackIndex;
+        };
+
+        std::optional<int> audioBaseTrackIndex;
+        if (audioBase) {
+            auto appended = appendTimelineTrack(*audioBase);
+            if (!appended.hasValue()) return appended.error();
+            audioBaseTrackIndex = appended.value();
+        }
+
+        const int backgroundTrackIndex = trackIndex++;
+        auto background = std::make_unique<Mlt::Producer>(
+            *graph->profile, "colour", "black");
+        auto backgroundTrack =
+            std::make_unique<Mlt::Playlist>(*graph->profile);
+        if (!background->is_valid() ||
+            backgroundTrack->append(
+                *background, 0,
+                static_cast<int>(graphDurationFrames) - 1) != 0 ||
+            graph->tractor->set_track(*backgroundTrack,
+                                      backgroundTrackIndex) != 0) {
+            return stateError("MLT could not create the preview background");
+        }
+        graph->producers.push_back(std::move(background));
+        graph->playlists.push_back(std::move(backgroundTrack));
+
+        for (const auto& track : plan.tracks) {
+            if (&track == audioBase) continue;
+            auto appended = appendTimelineTrack(track);
+            if (!appended.hasValue()) return appended.error();
+        }
+
+        for (const auto& [track, nativeTrackIndex] : nativeTracks) {
+            if (isAudible(*track) && track != audioBase) {
+                auto mix =
+                    std::make_unique<Mlt::Transition>(*graph->profile, "mix");
+                if (!mix->is_valid()) {
+                    return stateError("MLT core audio mix transition is unavailable");
+                }
+                mix->set("always_active", 1);
+                mix->set("sum", 1);
+                if (mlt_field_plant_transition(
+                        mlt_tractor_field(graph->tractor->get_tractor()),
+                        mix->get_transition(), *audioBaseTrackIndex,
+                        nativeTrackIndex) != 0) {
+                    return stateError(
+                        "MLT could not connect an audio mix transition");
+                }
+                ++graph->audioMixTransitions;
+                graph->transitions.push_back(std::move(mix));
+            }
+        }
+        for (const auto& [track, nativeTrackIndex] : nativeTracks) {
+            if (track->kind == domain::TrackKind::Video) {
                 auto composite = std::make_unique<Mlt::Transition>(
                     *graph->profile, "composite");
                 if (!composite->is_valid()) {
@@ -223,29 +423,13 @@ public:
                 composite->set("distort", 1);
                 if (mlt_field_plant_transition(
                         mlt_tractor_field(graph->tractor->get_tractor()),
-                        composite->get_transition(), 0, nativeTrackIndex) != 0) {
+                        composite->get_transition(), backgroundTrackIndex,
+                        nativeTrackIndex) != 0) {
                     return stateError(
                         "MLT could not connect a video composite transition");
                 }
                 ++graph->videoCompositeTransitions;
                 graph->transitions.push_back(std::move(composite));
-            } else if (plan.durationFrames > 0 &&
-                       track.kind == domain::TrackKind::Audio) {
-                auto mix =
-                    std::make_unique<Mlt::Transition>(*graph->profile, "mix");
-                if (!mix->is_valid()) {
-                    return stateError("MLT core audio mix transition is unavailable");
-                }
-                mix->set("always_active", 1);
-                mix->set("sum", 1);
-                if (mlt_field_plant_transition(
-                        mlt_tractor_field(graph->tractor->get_tractor()),
-                        mix->get_transition(), 0, nativeTrackIndex) != 0) {
-                    return stateError(
-                        "MLT could not connect an audio mix transition");
-                }
-                ++graph->audioMixTransitions;
-                graph->transitions.push_back(std::move(mix));
             }
         }
         graph->tractor->refresh();
@@ -262,6 +446,18 @@ public:
 MltEditEngine::MltEditEngine(MltEditEngineConfig config)
     : impl_(std::make_unique<Impl>(std::move(config))) {}
 MltEditEngine::~MltEditEngine() = default;
+
+core::Result<void> MltEditEngine::preflightRuntime(
+    const std::filesystem::path& runtimeRoot) {
+    auto verified = verifyMltRuntimeManifest(runtimeRoot);
+    if (!verified.hasValue()) return verified;
+    std::error_code error;
+    const auto root = std::filesystem::weakly_canonical(runtimeRoot, error);
+    if (error) return stateError("MLT runtime root could not be canonicalized");
+    auto libraries = loadRuntimeLibraries(root);
+    if (!libraries.hasValue()) return libraries.error();
+    return core::ok();
+}
 
 core::Result<void> MltEditEngine::load(
     const edit_engine::TimelineSnapshot& snapshot) {
@@ -418,6 +614,63 @@ core::Result<MltEditEngineDiagnostics> MltEditEngine::diagnostics() const {
         .videoCompositeTransitions =
             impl_->graph_->videoCompositeTransitions,
         .audioMixTransitions = impl_->graph_->audioMixTransitions};
+}
+
+core::Result<std::vector<float>> MltEditEngine::requestMixedAudio(
+    core::TimestampNs position, int frequency, int channels, int samples) {
+    if (!impl_->graph_) return stateError("MLT timeline is not loaded");
+    if (frequency <= 0 || frequency > 384'000 || channels <= 0 || channels > 32 ||
+        samples <= 0 || samples > frequency * 2) {
+        return core::AppError{core::ErrorCode::InvalidArgument,
+                              "MLT audio request is outside supported limits"};
+    }
+    const auto frameNumber =
+        core::timestampToFrame(position, impl_->graph_->frameRate);
+    if (frameNumber < 0 || frameNumber >= impl_->graph_->durationFrames ||
+        frameNumber > std::numeric_limits<int>::max()) {
+        return core::AppError{core::ErrorCode::InvalidArgument,
+                              "audio position is outside the timeline"};
+    }
+    impl_->graph_->tractor->seek(static_cast<int>(frameNumber));
+    std::unique_ptr<Mlt::Frame> frame{impl_->graph_->tractor->get_frame()};
+    if (!frame || !frame->is_valid()) {
+        return stateError("MLT did not return an audio frame");
+    }
+    void* buffer = nullptr;
+    mlt_audio_format format = mlt_audio_f32le;
+    int returnedFrequency = frequency;
+    int returnedChannels = channels;
+    int returnedSamples = samples;
+    const int result = mlt_frame_get_audio(
+        frame->get_frame(), &buffer, &format, &returnedFrequency,
+        &returnedChannels, &returnedSamples);
+    if (result != 0 || !buffer ||
+        returnedFrequency != frequency || returnedChannels != channels ||
+        returnedSamples <= 0 || returnedSamples > samples) {
+        return stateError(
+            "MLT could not produce the requested mixed audio (result=" +
+            std::to_string(result) + ", format=" +
+            std::string{mlt_audio_format_name(format)} + ", frequency=" +
+            std::to_string(returnedFrequency) + ", channels=" +
+            std::to_string(returnedChannels) + ", samples=" +
+            std::to_string(returnedSamples) + ")");
+    }
+    const auto sampleCount = static_cast<std::size_t>(returnedSamples) *
+                             static_cast<std::size_t>(returnedChannels);
+    if (format == mlt_audio_f32le) {
+        const auto* values = static_cast<const float*>(buffer);
+        return std::vector<float>{values, values + sampleCount};
+    }
+    if (format == mlt_audio_s16) {
+        const auto* values = static_cast<const std::int16_t*>(buffer);
+        std::vector<float> converted(sampleCount);
+        std::transform(values, values + sampleCount, converted.begin(),
+                       [](std::int16_t value) {
+                           return static_cast<float>(value) / 32768.0F;
+                       });
+        return converted;
+    }
+    return stateError("MLT returned an unsupported mixed audio format");
 }
 
 core::Result<std::unique_ptr<edit_engine::IRenderJob>> MltEditEngine::render(

@@ -19,18 +19,12 @@
 #endif
 
 #include <QGuiApplication>
-#include <QLibraryInfo>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <qqml.h>
 
 #include <filesystem>
 #include <memory>
-
-#if defined(CS_APP_ENABLE_MLT) && defined(_WIN32)
-#define NOMINMAX
-#include <Windows.h>
-#endif
 
 namespace {
 
@@ -47,34 +41,6 @@ std::filesystem::path stagedMltRuntimeRoot() {
 #endif
 }
 
-#if defined(_WIN32)
-bool configureMltDllSearch(const std::filesystem::path& runtimeRoot) {
-    using SetDefaultDirectories = BOOL(WINAPI*)(DWORD);
-    using AddDirectory = DLL_DIRECTORY_COOKIE(WINAPI*)(PCWSTR);
-    const auto kernel = GetModuleHandleW(L"kernel32.dll");
-    if (!kernel) return false;
-    const auto setDefaultDirectories = reinterpret_cast<SetDefaultDirectories>(
-        GetProcAddress(kernel, "SetDefaultDllDirectories"));
-    const auto addDirectory = reinterpret_cast<AddDirectory>(
-        GetProcAddress(kernel, "AddDllDirectory"));
-    if (!setDefaultDirectories || !addDirectory ||
-        !setDefaultDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
-                               LOAD_LIBRARY_SEARCH_USER_DIRS)) {
-        return false;
-    }
-    static DLL_DIRECTORY_COOKIE runtimeCookie = nullptr;
-    static DLL_DIRECTORY_COOKIE qtCookie = nullptr;
-    if (!qtCookie) {
-        const auto qtBin = std::filesystem::path{
-            QLibraryInfo::path(QLibraryInfo::BinariesPath).toStdWString()};
-        qtCookie = addDirectory(qtBin.c_str());
-    }
-    if (!runtimeCookie) {
-        runtimeCookie = addDirectory((runtimeRoot / L"bin").c_str());
-    }
-    return qtCookie != nullptr && runtimeCookie != nullptr;
-}
-#endif
 #endif
 
 }  // namespace
@@ -115,20 +81,10 @@ int main(int argc, char* argv[]) {
         [] { return creator::core::ProjectClock::now(); }, &app};
 #if defined(CS_APP_ENABLE_MLT)
     const auto mltRuntimeRoot = stagedMltRuntimeRoot();
-#if defined(_WIN32)
-    const bool mltRuntimeReady = configureMltDllSearch(mltRuntimeRoot);
-#else
-    const bool mltRuntimeReady = true;
-#endif
-    std::unique_ptr<creator::edit_engine::IEditEngine> editEngine;
-    if (mltRuntimeReady) {
-        editEngine = std::make_unique<creator::mlt_adapter::MltEditEngine>(
+    std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
+        std::make_unique<creator::mlt_adapter::MltEditEngine>(
             creator::mlt_adapter::MltEditEngineConfig{
                 .runtimeRoot = mltRuntimeRoot});
-    } else {
-        editEngine =
-            std::make_unique<creator::edit_engine::UnavailableEditEngine>();
-    }
 #else
     std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
         std::make_unique<creator::edit_engine::UnavailableEditEngine>();

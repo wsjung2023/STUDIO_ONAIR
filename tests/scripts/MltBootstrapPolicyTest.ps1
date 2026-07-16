@@ -85,6 +85,9 @@ $CMake = Get-Content -LiteralPath (Join-Path $RepositoryRoot "CMakeLists.txt") `
     -Raw -Encoding utf8
 $Main = Get-Content -LiteralPath (Join-Path $RepositoryRoot "src/main.cpp") `
     -Raw -Encoding utf8
+$MltEngine = Get-Content -LiteralPath `
+    (Join-Path $RepositoryRoot "src/mlt_adapter/MltEditEngine.cpp") `
+    -Raw -Encoding utf8
 foreach ($Pattern in @(
     'stage_mlt_runtime\.ps1',
     'DELAYLOAD:mlt\+\+-7\.dll',
@@ -98,9 +101,14 @@ foreach ($Pattern in @(
 if ($CMake -match 'CS_APP_MLT_ROOT') {
     throw "Shipping CMake must not compile a development-machine MLT path into the app"
 }
-foreach ($Pattern in @('applicationDirPath', 'mlt-runtime', 'AddDllDirectory')) {
+foreach ($Pattern in @('applicationDirPath', 'mlt-runtime')) {
     if ($Main -notmatch $Pattern) {
         throw "Application startup is missing the staged MLT runtime boundary: $Pattern"
+    }
+}
+foreach ($Pattern in @('AddDllDirectory', 'LoadLibraryExW', 'verifyMltRuntimeManifest')) {
+    if ($MltEngine -notmatch $Pattern) {
+        throw "MLT adapter is missing its verified delay-load boundary: $Pattern"
     }
 }
 

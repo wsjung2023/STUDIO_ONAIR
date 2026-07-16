@@ -270,6 +270,7 @@ class FakeEditorController final : public QObject {
     Q_PROPERTY(bool previewStale READ previewStale CONSTANT)
     Q_PROPERTY(bool playing READ playing CONSTANT)
     Q_PROPERTY(qlonglong playheadNs READ playheadNs CONSTANT)
+    Q_PROPERTY(qlonglong timelineDurationNs READ timelineDurationNs CONSTANT)
     Q_PROPERTY(qlonglong timelineRevision READ timelineRevision CONSTANT)
     Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
     Q_PROPERTY(QImage previewImage READ previewImage CONSTANT)
@@ -324,6 +325,10 @@ public:
     [[nodiscard]] bool previewStale() const noexcept { return true; }
     [[nodiscard]] bool playing() const noexcept { return false; }
     [[nodiscard]] qlonglong playheadNs() const noexcept { return 1'000'000'000; }
+    [[nodiscard]] qlonglong timelineDurationNs() const noexcept {
+        return 3'000'000'000;
+    }
+    [[nodiscard]] qlonglong lastSeekNs() const noexcept { return lastSeekNs_; }
     [[nodiscard]] qlonglong timelineRevision() const noexcept { return 4; }
     [[nodiscard]] QString statusMessage() const {
         return QStringLiteral("Preview engine unavailable");
@@ -336,11 +341,12 @@ public:
     [[nodiscard]] bool hasPreviewFrame() const noexcept { return true; }
     Q_INVOKABLE void play() {}
     Q_INVOKABLE void pause() {}
-    Q_INVOKABLE void seek(qlonglong) {}
+    Q_INVOKABLE void seek(qlonglong position) { lastSeekNs_ = position; }
 
 private:
     creator::app::MediaBinModel mediaBin_;
     creator::app::TimelineTrackModel tracks_;
+    qlonglong lastSeekNs_{-1};
 };
 
 TEST(QmlSmokeTest, RecoveryPageLoadsWithProjectControllerContract) {
@@ -418,6 +424,8 @@ TEST(QmlSmokeTest, EditorPageRendersTypedModelsAndPreviewState) {
     auto* previewSurface =
         object->findChild<QObject*>(QStringLiteral("editorPreviewSurface"));
     auto* status = object->findChild<QObject*>(QStringLiteral("editorStatus"));
+    auto* seekSlider =
+        object->findChild<QObject*>(QStringLiteral("editorSeekSlider"));
     ASSERT_NE(mediaList, nullptr);
     ASSERT_EQ(mediaList->property("count").toInt(), 1);
     ASSERT_NE(media, nullptr);
@@ -427,6 +435,7 @@ TEST(QmlSmokeTest, EditorPageRendersTypedModelsAndPreviewState) {
     ASSERT_NE(preview, nullptr);
     ASSERT_NE(previewSurface, nullptr);
     ASSERT_NE(status, nullptr);
+    ASSERT_NE(seekSlider, nullptr);
     EXPECT_TRUE(media->property("text").toString().contains(
         QString::fromUtf8("화면 녹화.mp4")));
     EXPECT_TRUE(offline->property("visible").toBool());
@@ -438,6 +447,10 @@ TEST(QmlSmokeTest, EditorPageRendersTypedModelsAndPreviewState) {
     EXPECT_TRUE(previewSurface->property("stale").toBool());
     EXPECT_EQ(status->property("text").toString(),
               QStringLiteral("Preview engine unavailable"));
+    EXPECT_EQ(seekSlider->property("to").toLongLong(), 3'000'000'000);
+    seekSlider->setProperty("value", 1'500'000'000);
+    ASSERT_TRUE(QMetaObject::invokeMethod(seekSlider, "moved"));
+    EXPECT_EQ(controller.lastSeekNs(), 1'500'000'000);
 }
 
 TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {

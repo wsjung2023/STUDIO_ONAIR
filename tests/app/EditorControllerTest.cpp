@@ -113,6 +113,23 @@ TimelineSnapshot snapshot(std::int64_t revision, std::string name,
                             TimelineRevision::create(revision).value()};
 }
 
+TimelineSnapshot snapshotWithVideo(std::int64_t revision,
+                                   DurationNs duration) {
+    auto video = asset();
+    auto value = snapshot(revision, "Timed timeline");
+    const auto range = TimeRange::create(TimestampNs{}, duration).value();
+    EXPECT_TRUE(value.timeline.insertClip(
+                                  TrackId::create("v1").value(),
+                                  Clip::createAsset(
+                                      ClipId::create("timed-clip").value(),
+                                      video, range, range, true, std::nullopt,
+                                      std::nullopt)
+                                      .value())
+                    .hasValue());
+    value.assets = {std::move(video)};
+    return value;
+}
+
 TEST(EditorControllerTest, PublishesModelsBeforeAsynchronousEngineLoadCompletes) {
     auto engine = std::make_unique<FakeEditEngine>();
     FakeEditEngine* fake = engine.get();
@@ -405,6 +422,7 @@ struct PreviewThreadState final {
     std::atomic<int> maximumActiveFrameCalls{0};
     std::atomic<int> blockCall{0};
     std::atomic<bool> blockedCallEntered{false};
+    std::atomic<std::int64_t> returnedPositionOffset{0};
     std::mutex blockMutex;
     std::condition_variable blockCondition;
     bool releaseBlockedCall{false};
@@ -452,8 +470,10 @@ public:
                                                 0x40, 0x50, 0x60, 0xff});
         (*pixels)[2] = static_cast<std::uint8_t>(revision_.value());
         --state_->activeFrameCalls;
+        const auto returnedPosition =
+            position + DurationNs{state_->returnedPositionOffset.load()};
         creator::media::VideoFrame frame{
-            .timestamp = position,
+            .timestamp = returnedPosition,
             .width = 2,
             .height = 1,
             .visibleRect = {.x = 0, .y = 0, .width = 2, .height = 1},
@@ -465,7 +485,8 @@ public:
             .colorSpace = creator::media::ColorSpace::Rec709Sdr,
             .platformHandle =
                 std::shared_ptr<void>{pixels, pixels->data()}};
-        return PreviewFrame::create(position, revision_, std::move(frame));
+        return PreviewFrame::create(returnedPosition, revision_,
+                                    std::move(frame));
     }
     creator::core::Result<std::unique_ptr<IRenderJob>> render(
         const RenderRequest&) override {
@@ -568,7 +589,8 @@ TEST(EditorControllerTest, PlaybackAdvancesAtTimelineRateAndPauseStopsIt) {
     auto engine = std::make_unique<FakeEditEngine>();
     FakeEditEngine* fake = engine.get();
     EditorController controller{std::move(engine)};
-    controller.openSession({asset()}, snapshot(13, "Playback clock"));
+    auto timed = snapshotWithVideo(13, DurationNs{5'000'000'000});
+    controller.openSession(timed.assets, std::move(timed));
     ASSERT_TRUE(waitUntil([&] { return fake->calls().size() == 2U; }));
 
     controller.play();
@@ -600,12 +622,54 @@ TEST(EditorControllerTest, PlaybackAdvancesAtTimelineRateAndPauseStopsIt) {
     EXPECT_EQ(controller.playheadNs(), pausedPosition);
 }
 
+TEST(EditorControllerTest, PlaybackStopsAtLastFrameWithoutMarkingPreviewStale) {
+    auto engine = std::make_unique<FakeEditEngine>();
+    FakeEditEngine* fake = engine.get();
+    EditorController controller{std::move(engine)};
+    auto timed = snapshotWithVideo(16, DurationNs{100'000'000});
+    controller.openSession(timed.assets, std::move(timed));
+    ASSERT_TRUE(waitUntil([&] { return fake->calls().size() == 2U; }));
+
+    controller.play();
+
+    const auto rate = FrameRate::create(60, 1).value();
+    const auto lastPosition = creator::core::frameToTimestamp(5, rate)
+                                  .time_since_epoch()
+                                  .count();
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.busy() && !controller.playing() &&
+               controller.playheadNs() == lastPosition;
+    }, 2000));
+    EXPECT_FALSE(controller.previewStale());
+    EXPECT_TRUE(controller.statusMessage().isEmpty());
+    ASSERT_GE(fake->calls().size(), 6U);
+    EXPECT_EQ(fake->calls().back().operation, FakeEditOperation::Pause);
+}
+
+TEST(EditorControllerTest, RejectsFrameReturnedForDifferentPosition) {
+    auto state = std::make_shared<PreviewThreadState>();
+    state->uiThread = std::this_thread::get_id();
+    state->returnedPositionOffset = 1;
+    EditorController controller{
+        std::make_unique<PreviewThreadEngine>(state)};
+
+    controller.openSession({asset()}, snapshot(17, "Wrong position"));
+
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.busy() && controller.previewStale();
+    }));
+    EXPECT_FALSE(controller.hasPreviewFrame());
+    EXPECT_EQ(controller.statusMessage(),
+              QStringLiteral("Edit engine returned the wrong preview position"));
+}
+
 TEST(EditorControllerTest, PlaybackKeepsOnlyOneFrameRequestInFlight) {
     auto state = std::make_shared<PreviewThreadState>();
     state->uiThread = std::this_thread::get_id();
     EditorController controller{
         std::make_unique<PreviewThreadEngine>(state)};
-    controller.openSession({asset()}, snapshot(14, "Backpressure"));
+    controller.openSession(
+        {asset()}, snapshotWithVideo(14, DurationNs{5'000'000'000}));
     ASSERT_TRUE(waitUntil([&] {
         return state->frameCalls.load() == 1 && controller.hasPreviewFrame();
     }));

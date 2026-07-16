@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -88,7 +89,7 @@ public:
                                 std::ios::binary);
         malformed << "not a media container";
         writeMonoWave(root_ / "media/microphone.wav", 1000);
-        writeMonoWave(root_ / "media/system.wav", -1000);
+        writeMonoWave(root_ / "media/system.wav", 2000);
     }
     ~MltFixture() { fs::remove_all(root_); }
     const fs::path& root() const { return root_; }
@@ -317,6 +318,35 @@ TEST(MltEditEngineTest, RejectsFrameBeforeLoadAndOutsideTimeline) {
                      .hasValue());
 }
 
+TEST(MltEditEngineTest, EmptyTimelineReturnsDeterministicBlackFrame) {
+    MltFixture fixture;
+    const auto rate = core::FrameRate::create(30, 1).value();
+    auto timeline = domain::Timeline::create(
+                        domain::TimelineId::create("empty").value(), "Empty",
+                        rate)
+                        .value();
+    edit_engine::TimelineSnapshot empty{
+        std::move(timeline), domain::TimelineRevision::create(8).value(), {},
+        fixture.root()};
+    mlt_adapter::MltEditEngine engine{{
+        .runtimeRoot = fs::path{CS_TEST_MLT_ROOT},
+        .previewWidth = 2,
+        .previewHeight = 2}};
+
+    ASSERT_TRUE(engine.load(empty).hasValue());
+    auto frame = engine.requestFrame(core::TimestampNs{});
+
+    ASSERT_TRUE(frame.hasValue()) << frame.error().message();
+    const auto* bgra = static_cast<const std::uint8_t*>(
+        frame.value().frame().platformHandle.get());
+    ASSERT_NE(bgra, nullptr);
+    EXPECT_LT(bgra[0], 8U);
+    EXPECT_LT(bgra[1], 8U);
+    EXPECT_LT(bgra[2], 8U);
+    EXPECT_EQ(bgra[3], 255U);
+    EXPECT_EQ(frame.value().revision().value(), 8);
+}
+
 TEST(MltEditEngineTest, CompositesUpperVideoTrackOverLowerTrack) {
     MltFixture fixture;
     mlt_adapter::MltEditEngine engine{{
@@ -410,10 +440,21 @@ TEST(MltEditEngineTest, LoadsTwoRealAudioTracksWithCoreMixTransitions) {
     ASSERT_TRUE(diagnostics.hasValue()) << diagnostics.error().message();
     EXPECT_EQ(diagnostics.value().nativeTrackCount, 4U);
     EXPECT_EQ(diagnostics.value().videoCompositeTransitions, 1U);
-    EXPECT_EQ(diagnostics.value().audioMixTransitions, 2U);
-    auto frame = engine.requestFrame(core::TimestampNs{});
-    ASSERT_TRUE(frame.hasValue()) << frame.error().message();
-    EXPECT_EQ(frame.value().revision().value(), 5);
+    EXPECT_EQ(diagnostics.value().audioMixTransitions, 1U);
+    auto mixed = engine.requestMixedAudio(
+        core::TimestampNs{}, 48'000, 1, 1'600);
+    ASSERT_TRUE(mixed.hasValue()) << mixed.error().message();
+    ASSERT_EQ(mixed.value().size(), 1'600U);
+    double mean = 0.0;
+    for (const float sample : mixed.value()) mean += sample;
+    mean /= static_cast<double>(mixed.value().size());
+    const auto [minimum, maximum] =
+        std::minmax_element(mixed.value().begin(), mixed.value().end());
+    EXPECT_GT(mean, 0.08) << "first=" << mixed.value().front()
+                          << " min=" << *minimum << " max=" << *maximum;
+    EXPECT_LT(mean, 0.10);
+    // Audio extraction consumes this graph position; video is covered by the
+    // dedicated composite tests.
 }
 
 TEST(MltEditEngineTest, RepeatedEngineDestructionDoesNotCorruptNextGraph) {

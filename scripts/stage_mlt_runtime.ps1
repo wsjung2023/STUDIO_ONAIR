@@ -67,6 +67,7 @@ try {
         source_commit = $SourceManifest.source_commit
         linking = $SourceManifest.linking
         allowed_modules = @($SourceManifest.allowed_modules)
+        dependencies = @($SourceManifest.dependencies)
         files = @($RuntimeFiles)
     }
     $TemporaryManifestPath = Join-Path $TemporaryRoot $ManifestName
