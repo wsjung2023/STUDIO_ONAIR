@@ -11,10 +11,19 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <chrono>
+#include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <Windows.h>
+#include <winioctl.h>
+#endif
 
 namespace {
 
@@ -35,6 +44,62 @@ using creator::project_store::SqliteProjectDatabase;
 Utc utc(std::string_view text) {
     return Utc::parseRfc3339(text).value();
 }
+
+#ifdef _WIN32
+std::error_code createDirectoryJunction(const fs::path& junction,
+                                        const fs::path& target) {
+    struct MountPointReparseData final {
+        DWORD tag;
+        WORD dataLength;
+        WORD reserved;
+        WORD substituteNameOffset;
+        WORD substituteNameLength;
+        WORD printNameOffset;
+        WORD printNameLength;
+        WCHAR pathBuffer[1];
+    };
+
+    if (!CreateDirectoryW(junction.c_str(), nullptr)) {
+        return {static_cast<int>(GetLastError()), std::system_category()};
+    }
+    const std::wstring printName = fs::absolute(target).wstring();
+    const std::wstring substituteName = L"\\??\\" + printName;
+    const auto substituteBytes = static_cast<WORD>(substituteName.size() * sizeof(WCHAR));
+    const auto printBytes = static_cast<WORD>(printName.size() * sizeof(WCHAR));
+    constexpr std::size_t mountPointHeaderBytes = 8;
+    const std::size_t pathBytes = static_cast<std::size_t>(substituteBytes) +
+                                  sizeof(WCHAR) + printBytes + sizeof(WCHAR);
+    alignas(void*) std::array<std::byte, MAXIMUM_REPARSE_DATA_BUFFER_SIZE> storage{};
+    auto* data = reinterpret_cast<MountPointReparseData*>(storage.data());
+    data->tag = IO_REPARSE_TAG_MOUNT_POINT;
+    data->dataLength = static_cast<WORD>(mountPointHeaderBytes + pathBytes);
+    data->substituteNameOffset = 0;
+    data->substituteNameLength = substituteBytes;
+    data->printNameOffset = static_cast<WORD>(substituteBytes + sizeof(WCHAR));
+    data->printNameLength = printBytes;
+    std::memcpy(data->pathBuffer, substituteName.data(), substituteBytes);
+    std::memcpy(reinterpret_cast<std::byte*>(data->pathBuffer) + data->printNameOffset,
+                printName.data(), printBytes);
+
+    const HANDLE handle = CreateFileW(
+        junction.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        const auto error = std::error_code{static_cast<int>(GetLastError()),
+                                           std::system_category()};
+        RemoveDirectoryW(junction.c_str());
+        return error;
+    }
+    DWORD returned = 0;
+    const DWORD inputBytes = static_cast<DWORD>(8 + data->dataLength);
+    const BOOL created = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, data,
+                                         inputBytes, nullptr, 0, &returned, nullptr);
+    const DWORD code = created ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(handle);
+    if (!created) RemoveDirectoryW(junction.c_str());
+    return {static_cast<int>(code), std::system_category()};
+}
+#endif
 
 class ProjectPackageStoreTest : public ::testing::Test {
 protected:
@@ -150,14 +215,22 @@ TEST_F(ProjectPackageStoreTest, OpenRejectsDatabaseHardLinkedFromOutsidePackage)
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
 }
 
-TEST_F(ProjectPackageStoreTest, OpenRejectsDatabaseSymlinkFromOutsidePackage) {
-    ASSERT_TRUE(store_.create(packagePath_, "Symlink").hasValue());
-    const fs::path outsideDatabase = root_ / "outside.db";
-    ASSERT_TRUE(fs::copy_file(packagePath_ / "project.db", outsideDatabase));
+TEST_F(ProjectPackageStoreTest, OpenRejectsDatabaseReparseFromOutsidePackage) {
+    ASSERT_TRUE(store_.create(packagePath_, "Reparse").hasValue());
     ASSERT_TRUE(fs::remove(packagePath_ / "project.db"));
+#ifdef _WIN32
+    const fs::path outsideDirectory = root_ / "outside-database";
+    ASSERT_TRUE(fs::create_directory(outsideDirectory));
+    const auto junctionError =
+        createDirectoryJunction(packagePath_ / "project.db", outsideDirectory);
+    ASSERT_FALSE(junctionError) << junctionError.message();
+#else
+    const fs::path outsideDatabase = root_ / "outside.db";
+    std::ofstream{outsideDatabase, std::ios::binary} << "outside";
     std::error_code ec;
     fs::create_symlink(outsideDatabase, packagePath_ / "project.db", ec);
-    if (ec) GTEST_SKIP() << "symlink creation is unavailable: " << ec.message();
+    ASSERT_FALSE(ec) << ec.message();
+#endif
 
     const auto result = store_.open(packagePath_);
 
