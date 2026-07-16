@@ -2,6 +2,9 @@ cs_add_qtfree_library(cs_sync
     SOURCES
         ClockCoordinator.h
         ClockCoordinator.cpp
+        VideoSyncPlanner.h
+        VideoSyncPlanner.cpp
     DEPENDS
         cs_domain
+        cs_media
 )

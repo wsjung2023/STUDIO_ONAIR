@@ -39,6 +39,7 @@ add_executable(cs_tests
     domain/RecordingSessionTest.cpp
     media/MediaTypesTest.cpp
     sync/ClockCoordinatorTest.cpp
+    sync/VideoSyncPlannerTest.cpp
     capture/PortContractTest.cpp
     capture/CaptureTimestampMapperTest.cpp
     capture/ScreenCapturePortsTest.cpp
