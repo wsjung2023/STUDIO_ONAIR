@@ -3,8 +3,6 @@
 #include "core/Timebase.h"
 #include "core/Uuid.h"
 #include "domain/Identifiers.h"
-#include "fakes/FakeCaptureSource.h"
-#include "fakes/FakeRecorder.h"
 #include "recorder/IRecorder.h"
 
 #include <chrono>
@@ -44,12 +42,6 @@ QString formatDuration(DurationNs duration) {
 }
 
 }  // namespace
-
-StudioController::StudioController(QObject* parent)
-    : StudioController(
-          std::make_unique<fakes::FakeCaptureSource>(
-              domain::SourceId::create("screen-1").value(), "Test Pattern"),
-          std::make_unique<fakes::FakeRecorder>(), parent) {}
 
 StudioController::StudioController(std::unique_ptr<capture::IPullCaptureSource> source,
                                    std::unique_ptr<recorder::IRecorder> recorder, QObject* parent)

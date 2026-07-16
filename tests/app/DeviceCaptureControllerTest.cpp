@@ -303,6 +303,9 @@ TEST(DeviceCaptureControllerTest, StartsCameraMicrophoneAndSystemAudioIndependen
     EXPECT_EQ(fixture.backendRaw->cameraSource->startCalls, 1);
     EXPECT_EQ(fixture.backendRaw->microphoneSource->startCalls, 1);
     EXPECT_EQ(fixture.backendRaw->systemAudioSource->startCalls, 1);
+    ASSERT_TRUE(fixture.controller->activeCameraSourceId().has_value());
+    ASSERT_TRUE(fixture.controller->activeMicrophoneSourceId().has_value());
+    ASSERT_TRUE(fixture.controller->activeSystemAudioSourceId().has_value());
 }
 
 TEST(DeviceCaptureControllerTest, PublishesCameraGeometryAndSeparateAudioLevels) {

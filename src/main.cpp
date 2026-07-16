@@ -1,17 +1,15 @@
 #include "app/ProjectController.h"
 #include "app/DeviceCaptureController.h"
+#include "app/LiveRecordingController.h"
+#include "app/LiveRecordingEngineFactory.h"
 #include "app/ScreenCaptureController.h"
 #include "app/ScreenPreviewItem.h"
-#include "app/StudioController.h"
 #include "capture/UnsupportedScreenCaptureBackend.h"
 #include "capture/UnsupportedDeviceCaptureBackend.h"
 #if defined(__APPLE__)
 #include "capture/macos/MacScreenCaptureBackend.h"
 #include "capture/macos/MacDeviceCaptureBackend.h"
 #endif
-#include "domain/Identifiers.h"
-#include "fakes/FakeCaptureSource.h"
-#include "fakes/FakeRecorder.h"
 #include "project_store/ProjectPackageStore.h"
 
 #include <QGuiApplication>
@@ -43,10 +41,14 @@ int main(int argc, char* argv[]) {
         std::make_unique<creator::capture::UnsupportedScreenCaptureDiscovery>(),
         std::make_unique<creator::capture::UnsupportedScreenCaptureSourceFactory>(), &app};
 #endif
-    creator::app::StudioController studioController{
-        std::make_unique<creator::fakes::FakeCaptureSource>(
-            creator::domain::SourceId::create("screen-1").value(), "Test Pattern"),
-        std::make_unique<creator::fakes::FakeRecorder>(), &projectController, &app};
+    auto recordingStore =
+        std::make_shared<creator::project_store::ProjectPackageStore>();
+    auto recordingEngine = creator::app::makeLiveRecordingEngine(
+        &screenCaptureController, &deviceCaptureController, std::move(recordingStore));
+    creator::app::LiveRecordingController studioController{
+        std::move(recordingEngine), &projectController,
+        [&projectController] { return projectController.recordingPackagePath(); },
+        [] { return creator::core::ProjectClock::now(); }, &app};
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),

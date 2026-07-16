@@ -166,6 +166,8 @@ TrackRecorderSnapshot AsyncTrackRecorder::snapshot() const {
         .queuedVideoFrames = videoQueue_.size(),
         .queuedAudioFrames = queuedAudioFrames_,
         .summary = summary_,
+        .diskSpace = diskSpaceSnapshot_,
+        .encoderName = encoderName_,
         .terminalError = inputError_,
     };
 }
@@ -308,10 +310,14 @@ core::Result<void> AsyncTrackRecorder::ensureSegment(core::TimestampNs timestamp
 }
 
 core::Result<void> AsyncTrackRecorder::openSegment(core::TimestampNs startTime) {
-    if (auto space = diskSpaceMonitor_->check(config_.packageRoot,
-                                               config_.nextSegmentEstimateBytes);
-        !space.hasValue()) {
+    auto space = diskSpaceMonitor_->check(config_.packageRoot,
+                                          config_.nextSegmentEstimateBytes);
+    if (!space.hasValue()) {
         return space.error();
+    }
+    {
+        std::lock_guard lock{mutex_};
+        diskSpaceSnapshot_ = space.value();
     }
     auto paths = publisher_->begin(config_.track, nextSegmentIndex_, startTime);
     if (!paths.hasValue()) return paths.error();
@@ -346,6 +352,7 @@ core::Result<void> AsyncTrackRecorder::finishSegment(core::TimestampNs endTime) 
         std::lock_guard lock{mutex_};
         ++summary_.segmentsPublished;
         summary_.bytesPublished += encoded.value().bytesWritten;
+        encoderName_ = encoded.value().codecName;
     }
     ++nextSegmentIndex_;
     return core::ok();

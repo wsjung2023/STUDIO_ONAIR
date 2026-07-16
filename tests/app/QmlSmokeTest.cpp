@@ -60,7 +60,13 @@ class FakeStudioController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy CONSTANT)
     Q_PROPERTY(bool recording READ recording CONSTANT)
+    Q_PROPERTY(bool recordingAvailable READ recordingAvailable CONSTANT)
     Q_PROPERTY(int segmentCount READ segmentCount CONSTANT)
+    Q_PROPERTY(int trackCount READ trackCount CONSTANT)
+    Q_PROPERTY(qulonglong queuedItems READ queuedItems CONSTANT)
+    Q_PROPERTY(qulonglong droppedFrames READ droppedFrames CONSTANT)
+    Q_PROPERTY(qulonglong diskAvailableBytes READ diskAvailableBytes CONSTANT)
+    Q_PROPERTY(QString encoderName READ encoderName CONSTANT)
     Q_PROPERTY(QString takeDuration READ takeDuration CONSTANT)
     Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
 
@@ -68,7 +74,15 @@ public:
     using QObject::QObject;
     [[nodiscard]] bool busy() const noexcept { return false; }
     [[nodiscard]] bool recording() const noexcept { return false; }
+    [[nodiscard]] bool recordingAvailable() const noexcept { return true; }
     [[nodiscard]] int segmentCount() const noexcept { return 0; }
+    [[nodiscard]] int trackCount() const noexcept { return 2; }
+    [[nodiscard]] qulonglong queuedItems() const noexcept { return 3; }
+    [[nodiscard]] qulonglong droppedFrames() const noexcept { return 1; }
+    [[nodiscard]] qulonglong diskAvailableBytes() const noexcept {
+        return 8ULL * 1024ULL * 1024ULL * 1024ULL;
+    }
+    [[nodiscard]] QString encoderName() const { return QStringLiteral("mpeg4, aac"); }
     [[nodiscard]] QString takeDuration() const { return QStringLiteral("00:00:00"); }
     [[nodiscard]] QString statusMessage() const { return {}; }
     Q_INVOKABLE void startRecording() {}
@@ -275,12 +289,21 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     auto* microphoneSelector =
         object->findChild<QObject*>(QStringLiteral("microphoneDeviceSelector"));
     auto* microphoneMeter = object->findChild<QObject*>(QStringLiteral("microphoneLevelMeter"));
+    auto* disk = object->findChild<QObject*>(QStringLiteral("recordingDiskLabel"));
+    auto* encoder = object->findChild<QObject*>(QStringLiteral("recordingEncoderLabel"));
+    auto* queue = object->findChild<QObject*>(QStringLiteral("recordingQueueLabel"));
     ASSERT_NE(selector, nullptr);
     ASSERT_NE(status, nullptr);
     ASSERT_NE(preview, nullptr);
     ASSERT_NE(cameraSelector, nullptr);
     ASSERT_NE(microphoneSelector, nullptr);
     ASSERT_NE(microphoneMeter, nullptr);
+    ASSERT_NE(disk, nullptr);
+    ASSERT_NE(encoder, nullptr);
+    ASSERT_NE(queue, nullptr);
+    EXPECT_TRUE(disk->property("text").toString().contains(QStringLiteral("8.0 GiB")));
+    EXPECT_TRUE(encoder->property("text").toString().contains(QStringLiteral("mpeg4, aac")));
+    EXPECT_TRUE(queue->property("text").toString().contains(QStringLiteral("Queue: 3")));
     EXPECT_EQ(selector->property("count").toInt(), 1);
     EXPECT_EQ(status->property("text").toString(),
               QStringLiteral("captured window closed"));

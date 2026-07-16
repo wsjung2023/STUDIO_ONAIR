@@ -75,7 +75,10 @@ ApplicationWindow {
                 visible: window.currentPage === "Studio"
                 text: studioController.recording ? qsTr("Stop") : qsTr("Record")
                 highlighted: studioController.recording
-                enabled: projectController.hasOpenProject && !studioController.busy
+                enabled: projectController.hasOpenProject
+                         && !studioController.busy
+                         && (studioController.recordingAvailable
+                             || studioController.recording)
                 onClicked: studioController.recording
                            ? studioController.stopRecording()
                            : studioController.startRecording()

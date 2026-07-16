@@ -121,6 +121,23 @@ public:
     [[nodiscard]] qulonglong systemAudioOverruns() const noexcept {
         return systemAudioOverruns_;
     }
+    [[nodiscard]] std::optional<creator::domain::SourceId>
+    activeCameraSourceId() const {
+        return cameraSource_ ? std::optional<creator::domain::SourceId>{cameraSource_->id()}
+                             : std::nullopt;
+    }
+    [[nodiscard]] std::optional<creator::domain::SourceId>
+    activeMicrophoneSourceId() const {
+        return microphoneSource_
+                   ? std::optional<creator::domain::SourceId>{microphoneSource_->id()}
+                   : std::nullopt;
+    }
+    [[nodiscard]] std::optional<creator::domain::SourceId>
+    activeSystemAudioSourceId() const {
+        return systemAudioSource_
+                   ? std::optional<creator::domain::SourceId>{systemAudioSource_->id()}
+                   : std::nullopt;
+    }
 
     void setCameraRecordingSink(
         std::shared_ptr<creator::capture::IVideoFrameSink> sink) noexcept;

@@ -259,6 +259,10 @@ TEST(AsyncTrackRecorderTest, PublishesAtProjectTwoSecondBoundariesAndFlushesTail
 
     ASSERT_TRUE(result.hasValue()) << result.error().message();
     EXPECT_EQ(result.value().segmentsPublished, 3u);
+    const auto snapshot = fixture.recorder->snapshot();
+    ASSERT_TRUE(snapshot.diskSpace.has_value());
+    EXPECT_EQ(snapshot.diskSpace->availableBytes, 1ULL << 40U);
+    EXPECT_EQ(snapshot.encoderName, "fake");
     std::lock_guard lock{fixture.encoderState->mutex};
     ASSERT_EQ(fixture.encoderState->starts.size(), 3u);
     ASSERT_EQ(fixture.encoderState->finishes.size(), 3u);

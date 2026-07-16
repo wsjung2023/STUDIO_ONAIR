@@ -225,7 +225,7 @@ void ProjectController::refreshRecentProjects() {
                               Qt::QueuedConnection);
 }
 
-std::optional<std::filesystem::path> ProjectController::recordingPath() const {
+std::optional<std::filesystem::path> ProjectController::recordingPackagePath() const {
     if (project_.isEmpty()) return std::nullopt;
     const QUrl url = project_.value(QStringLiteral("url")).toUrl();
     if (!url.isLocalFile()) return std::nullopt;
@@ -259,7 +259,7 @@ void ProjectController::finishRecordingCommand(quint64 commandId,
 
 void ProjectController::begin(const domain::SessionId& sessionId,
                               core::TimestampNs startedAt, Completion completion) {
-    auto path = recordingPath();
+    auto path = recordingPackagePath();
     if (!path) {
         failRecordingCommandAsync(std::move(completion));
         return;
@@ -275,7 +275,7 @@ void ProjectController::begin(const domain::SessionId& sessionId,
 
 void ProjectController::complete(const domain::RecordingSession& session,
                                  Completion completion) {
-    auto path = recordingPath();
+    auto path = recordingPackagePath();
     if (!path) {
         failRecordingCommandAsync(std::move(completion));
         return;
@@ -291,7 +291,7 @@ void ProjectController::complete(const domain::RecordingSession& session,
 
 void ProjectController::abort(const domain::SessionId& sessionId, std::string reason,
                               Completion completion) {
-    auto path = recordingPath();
+    auto path = recordingPackagePath();
     if (!path) {
         failRecordingCommandAsync(std::move(completion));
         return;

@@ -364,8 +364,27 @@ Item {
                     text: qsTr("Reported Capture Drops: %1").arg(
                               screenCaptureController.droppedFrames)
                 }
-                Label { text: qsTr("Disk: —") }
-                Label { text: qsTr("Encoder: —") }
+                Label {
+                    objectName: "recordingDiskLabel"
+                    text: studioController.diskAvailableBytes > 0
+                          ? qsTr("Disk: %1 GiB available").arg(
+                                (studioController.diskAvailableBytes
+                                 / 1073741824).toFixed(1))
+                          : studioController.recording
+                            ? qsTr("Disk: Checking")
+                            : qsTr("Disk: Not active")
+                }
+                Label {
+                    objectName: "recordingEncoderLabel"
+                    text: qsTr("Encoder: %1").arg(studioController.encoderName)
+                }
+                Label {
+                    objectName: "recordingQueueLabel"
+                    text: qsTr("Tracks: %1 · Queue: %2 · Recording Drops: %3")
+                          .arg(studioController.trackCount)
+                          .arg(studioController.queuedItems)
+                          .arg(studioController.droppedFrames)
+                }
 
                 Item { Layout.fillWidth: true }
 

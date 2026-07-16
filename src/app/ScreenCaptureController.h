@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace creator::app {
@@ -92,6 +93,10 @@ public:
     [[nodiscard]] std::shared_ptr<creator::capture::LatestVideoFrameMailbox>
     previewMailbox() const noexcept {
         return mailbox_;
+    }
+    [[nodiscard]] std::optional<creator::domain::SourceId> activeSourceId() const {
+        return source_ ? std::optional<creator::domain::SourceId>{source_->id()}
+                       : std::nullopt;
     }
 
     /// Atomically attaches the live recorder while keeping preview active.

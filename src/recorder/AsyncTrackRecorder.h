@@ -16,6 +16,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 #include <condition_variable>
@@ -47,6 +48,8 @@ struct TrackRecorderSnapshot final {
     std::size_t queuedVideoFrames{0};
     std::uint64_t queuedAudioFrames{0};
     TrackRecordingSummary summary;
+    std::optional<DiskSpaceSnapshot> diskSpace;
+    std::string encoderName;
     std::optional<core::AppError> terminalError;
 };
 
@@ -101,6 +104,8 @@ private:
     std::vector<StopCompletion> stopCompletions_;
     StopCompletion completionObserver_;
     TrackRecordingSummary summary_;
+    std::optional<DiskSpaceSnapshot> diskSpaceSnapshot_;
+    std::string encoderName_;
     std::thread worker_;
 
     bool segmentOpen_{false};

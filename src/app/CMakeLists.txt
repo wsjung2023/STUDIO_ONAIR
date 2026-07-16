@@ -11,6 +11,11 @@ add_library(cs_app STATIC
     MultiTrackRecordingService.h
     MultiTrackRecordingService.cpp
     ILiveRecordingEngine.h
+    ILiveCaptureBindings.h
+    ControllerLiveCaptureBindings.h
+    ControllerLiveCaptureBindings.cpp
+    LiveRecordingEngineFactory.h
+    LiveRecordingEngineFactory.cpp
     LiveRecordingController.h
     LiveRecordingController.cpp
     StudioController.h
@@ -30,6 +35,14 @@ add_library(cs_app STATIC
     ProjectController.h
     ProjectController.cpp
 )
+
+if(CS_ENABLE_FFMPEG)
+    target_sources(cs_app PRIVATE
+        FfmpegLiveRecordingEngine.h
+        FfmpegLiveRecordingEngine.cpp
+    )
+    target_compile_definitions(cs_app PRIVATE CS_APP_ENABLE_FFMPEG=1)
+endif()
 
 if(APPLE)
     find_library(CS_APP_COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
@@ -59,9 +72,11 @@ target_link_libraries(cs_app
         cs_capture
         cs_recorder
     PRIVATE
-        # R0-03 deletes this line and the fakes leave the shipped binary.
-        cs_fakes
         cs_project_store
 )
+
+if(CS_ENABLE_FFMPEG)
+    target_link_libraries(cs_app PRIVATE cs_ffmpeg_adapter)
+endif()
 
 cs_apply_warnings(cs_app)

@@ -44,6 +44,7 @@ public:
     [[nodiscard]] QVariantList recentProjects() const { return recentProjects_; }
     [[nodiscard]] QVariantList recoveries() const { return recoveries_; }
     [[nodiscard]] QString statusMessage() const { return statusMessage_; }
+    [[nodiscard]] std::optional<std::filesystem::path> recordingPackagePath() const;
 
     Q_INVOKABLE void createProject(const QUrl& packageUrl, const QString& displayName);
     Q_INVOKABLE void openProject(const QUrl& packageUrl);
@@ -75,7 +76,6 @@ private:
     [[nodiscard]] std::optional<std::filesystem::path> localPath(const QUrl& url);
     void handleOpenFinished(bool success, QVariantMap project, QVariantList recoveries,
                             QString errorMessage);
-    [[nodiscard]] std::optional<std::filesystem::path> recordingPath() const;
     void failRecordingCommandAsync(Completion completion);
     [[nodiscard]] quint64 retainRecordingCompletion(Completion completion);
     void finishRecordingCommand(quint64 commandId, core::Result<void> result);

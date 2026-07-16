@@ -135,6 +135,23 @@ target_link_libraries(creator_studio
         Qt6::QuickControls2
 )
 
+if(CS_ENABLE_FFMPEG)
+    if(WIN32)
+        file(GLOB CS_APP_FFMPEG_RUNTIME_DLLS CONFIGURE_DEPENDS
+            "${CS_FFMPEG_ROOT}/bin/*.dll")
+        add_custom_command(TARGET creator_studio POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CS_APP_FFMPEG_RUNTIME_DLLS}
+                $<TARGET_FILE_DIR:creator_studio>
+            COMMAND_EXPAND_LISTS
+        )
+    elseif(APPLE)
+        set_property(TARGET creator_studio APPEND PROPERTY
+            BUILD_RPATH "${CS_FFMPEG_ROOT}/lib"
+        )
+    endif()
+endif()
+
 if(APPLE)
     target_link_libraries(creator_studio PRIVATE cs_capture_macos)
     set_target_properties(creator_studio PROPERTIES

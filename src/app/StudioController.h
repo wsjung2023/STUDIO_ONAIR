@@ -37,9 +37,6 @@ class StudioController final : public QObject {
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
 
 public:
-    /// Assembles the fakes itself. This is what main.cpp uses.
-    explicit StudioController(QObject* parent = nullptr);
-
     /// Injects the source and recorder. Tests use this to drive the controller
     /// with no timer and no event loop.
     StudioController(std::unique_ptr<creator::capture::IPullCaptureSource> source,

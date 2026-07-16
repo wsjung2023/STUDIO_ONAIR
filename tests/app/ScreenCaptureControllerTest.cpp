@@ -277,6 +277,8 @@ TEST(ScreenCaptureControllerTest, StartsSelectedPushSourceAndPublishesLiveGeomet
     fixture.controller->startPreview();
 
     ASSERT_EQ(fixture.controller->state(), ScreenCaptureState::Previewing);
+    ASSERT_TRUE(fixture.controller->activeSourceId().has_value());
+    EXPECT_EQ(fixture.controller->activeSourceId()->value(), "preview-screen");
     ASSERT_NE(fixture.factoryFake->lastSource, nullptr);
     EXPECT_EQ(fixture.factoryFake->lastTargetId, "window:7");
     ASSERT_TRUE(fixture.factoryFake->lastSource
@@ -400,6 +402,7 @@ TEST(ScreenCaptureControllerTest, StopReturnsToReadyAndReleasesSource) {
     EXPECT_EQ(fixture.controller->state(), ScreenCaptureState::Ready);
     EXPECT_FALSE(fixture.controller->previewing());
     EXPECT_EQ(fixture.controller->statusMessage(), QStringLiteral("Preview stopped"));
+    EXPECT_FALSE(fixture.controller->activeSourceId().has_value());
 }
 
 TEST(ScreenCaptureControllerTest, RemainsStoppingUntilNativeStopCompletes) {

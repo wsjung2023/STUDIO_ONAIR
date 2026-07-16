@@ -86,6 +86,7 @@ target_link_libraries(cs_tests
 target_compile_definitions(cs_tests PRIVATE
     CS_CRASH_FIXTURE_PATH="$<TARGET_FILE:cs_crash_recovery_fixture>"
 )
+add_dependencies(cs_tests cs_crash_recovery_fixture)
 
 cs_apply_warnings(cs_tests)
 
@@ -154,6 +155,7 @@ if(CS_ENABLE_FFMPEG)
         ffmpeg_adapter/BgraFrameMappersTest.cpp
         ffmpeg_adapter/RecordingPipelineIntegrationTest.cpp
         ffmpeg_adapter/LongTimelineRecordingTest.cpp
+        ffmpeg_adapter/FfmpegLiveRecordingEngineTest.cpp
     )
     target_link_libraries(cs_ffmpeg_tests PRIVATE
         cs_ffmpeg_adapter
