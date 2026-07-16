@@ -48,6 +48,11 @@ struct TimelineCommit final {
     std::optional<std::size_t> cleanCursor;
 };
 
+struct PersistedEditSession final {
+    PersistedTimeline persisted;
+    domain::EditHistory history;
+};
+
 class ITimelineStore {
 public:
     [[nodiscard]] virtual core::Result<void> putAsset(
@@ -60,6 +65,8 @@ public:
     [[nodiscard]] virtual core::Result<PersistedTimeline> loadPrimaryTimeline() = 0;
     [[nodiscard]] virtual core::Result<domain::EditHistory> loadEditHistory(
         std::size_t limit) = 0;
+    [[nodiscard]] virtual core::Result<PersistedEditSession> loadEditSession(
+        std::size_t historyLimit) = 0;
     [[nodiscard]] virtual core::Result<void> commitEdit(
         const TimelineCommit& commit) = 0;
     [[nodiscard]] virtual core::Result<void> markExplicitSave(

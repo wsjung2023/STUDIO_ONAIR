@@ -251,6 +251,14 @@ int SqliteConnection::changes() const noexcept {
     return sqlite3_changes(database_);
 }
 
+Result<SqliteTransaction> SqliteTransaction::beginDeferred(
+    SqliteConnection& connection) {
+    if (auto begun = connection.execute("BEGIN"); !begun.hasValue()) {
+        return begun.error();
+    }
+    return SqliteTransaction{connection};
+}
+
 Result<SqliteTransaction> SqliteTransaction::beginImmediate(SqliteConnection& connection) {
     if (auto begun = connection.execute("BEGIN IMMEDIATE"); !begun.hasValue()) {
         return begun.error();

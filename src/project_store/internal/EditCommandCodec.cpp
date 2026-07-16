@@ -14,6 +14,7 @@
 #include <initializer_list>
 #include <limits>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -67,6 +68,14 @@ Result<std::string> textField(const Json& value, std::string_view key) {
 
 Result<std::int64_t> integerField(const Json& value, std::string_view key) {
     const auto& field = value.at(std::string{key});
+    if (field.is_number_unsigned()) {
+        const auto number = field.get<std::uint64_t>();
+        if (number > static_cast<std::uint64_t>(
+                         std::numeric_limits<std::int64_t>::max())) {
+            return parseError(std::string{key} + " exceeds int64");
+        }
+        return static_cast<std::int64_t>(number);
+    }
     if (!field.is_number_integer()) {
         return parseError(std::string{key} + " is not an integer");
     }
@@ -233,6 +242,8 @@ Result<std::vector<DeleteRangeCommand::PreviousTrack>> previousTracks(
     if (!tracks.is_array()) return parseError("tracks is not an array");
     std::vector<DeleteRangeCommand::PreviousTrack> result;
     result.reserve(tracks.size());
+    std::set<std::string> trackIds;
+    std::set<std::string> clipIds;
     for (const auto& track : tracks) {
         if (auto exact = exactObject(track, {"clips", "trackId"}, "track undo");
             !exact.hasValue()) {
@@ -240,6 +251,9 @@ Result<std::vector<DeleteRangeCommand::PreviousTrack>> previousTracks(
         }
         auto trackId = idField<TrackId>(track, "trackId");
         if (!trackId.hasValue()) return trackId.error();
+        if (!trackIds.insert(trackId.value().value()).second) {
+            return parseError("delete undo contains a duplicate track id");
+        }
         const auto& clips = track.at("clips");
         if (!clips.is_array()) return parseError("clips is not an array");
         std::vector<Clip> parsedClips;
@@ -247,6 +261,9 @@ Result<std::vector<DeleteRangeCommand::PreviousTrack>> previousTracks(
         for (const auto& item : clips) {
             auto parsed = clip(item, assetLoader);
             if (!parsed.hasValue()) return parsed.error();
+            if (!clipIds.insert(parsed.value().id().value()).second) {
+                return parseError("delete undo contains a duplicate clip id");
+            }
             parsedClips.push_back(std::move(parsed).value());
         }
         result.emplace_back(std::move(trackId).value(), std::move(parsedClips));
@@ -278,10 +295,17 @@ Result<std::unique_ptr<domain::IEditCommand>> EditCommandCodec::decode(
             if (!rightId.hasValue()) return rightId.error();
             if (!split.hasValue()) return split.error();
             if (!original.hasValue()) return original.error();
+            const auto splitAt = TimestampNs{DurationNs{split.value()}};
+            if (original.value().id() != clipId.value() ||
+                rightId.value() == clipId.value() ||
+                splitAt <= original.value().timelineRange().start() ||
+                splitAt >= original.value().timelineRange().end()) {
+                return parseError("split undo state contradicts payload");
+            }
             return domain::SplitClipCommand::rehydrate(
                 record.commandId, std::move(trackId).value(),
                 std::move(clipId).value(), std::move(rightId).value(),
-                TimestampNs{DurationNs{split.value()}},
+                splitAt,
                 std::move(original).value(), applied);
         }
         if (record.type == "TRIM_CLIP") {
@@ -304,11 +328,17 @@ Result<std::unique_ptr<domain::IEditCommand>> EditCommandCodec::decode(
             if (edge.value() != "LEADING" && edge.value() != "TRAILING") {
                 return parseError("trim edge is unknown");
             }
+            const auto trimAt = TimestampNs{DurationNs{boundary.value()}};
+            if (original.value().id() != clipId.value() ||
+                trimAt <= original.value().timelineRange().start() ||
+                trimAt >= original.value().timelineRange().end()) {
+                return parseError("trim undo state contradicts payload");
+            }
             return domain::TrimClipCommand::rehydrate(
                 record.commandId, std::move(trackId).value(),
                 std::move(clipId).value(),
                 edge.value() == "LEADING" ? TrimEdge::Leading : TrimEdge::Trailing,
-                TimestampNs{DurationNs{boundary.value()}},
+                trimAt,
                 std::move(original).value(), applied);
         }
         if (record.type == "DELETE_RANGE") {
@@ -332,14 +362,36 @@ Result<std::unique_ptr<domain::IEditCommand>> EditCommandCodec::decode(
             if (!ids.is_array()) return parseError("rightClipIds is not an array");
             std::vector<ClipId> rightIds;
             rightIds.reserve(ids.size());
+            std::set<std::string> rightIdValues;
             for (const auto& item : ids) {
                 if (!item.is_string()) return parseError("rightClipId is not text");
                 auto id = ClipId::create(item.get<std::string>());
                 if (!id.hasValue()) return parseError("rightClipId is empty");
+                if (!rightIdValues.insert(id.value().value()).second) {
+                    return parseError("rightClipIds contains a duplicate id");
+                }
                 rightIds.push_back(std::move(id).value());
             }
             auto tracks = previousTracks(undo, assetLoader_);
             if (!tracks.hasValue()) return tracks.error();
+            std::size_t requiredRightIds = 0;
+            for (const auto& [trackId, clips] : tracks.value()) {
+                static_cast<void>(trackId);
+                for (const auto& original : clips) {
+                    if (rightIdValues.contains(original.id().value())) {
+                        return parseError(
+                            "rightClipId collides with a restored clip id");
+                    }
+                    if (original.timelineRange().start() < deletion.value().start() &&
+                        original.timelineRange().end() > deletion.value().end()) {
+                        ++requiredRightIds;
+                    }
+                }
+            }
+            if (requiredRightIds != rightIds.size()) {
+                return parseError(
+                    "rightClipIds count contradicts delete undo state");
+            }
             return DeleteRangeCommand::rehydrate(
                 record.commandId, deletion.value(), ripple.value(),
                 std::move(rightIds), std::move(tracks).value(), applied);

@@ -3,9 +3,7 @@
 #include "core/AppError.h"
 #include "domain/EditCommandJson.h"
 
-#include <iomanip>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,32 +14,6 @@ namespace {
 using core::AppError;
 using core::ErrorCode;
 using core::Result;
-
-std::string jsonString(std::string_view value) {
-    std::ostringstream output;
-    output << '"';
-    for (const unsigned char character : value) {
-        switch (character) {
-            case '"': output << "\\\""; break;
-            case '\\': output << "\\\\"; break;
-            case '\b': output << "\\b"; break;
-            case '\f': output << "\\f"; break;
-            case '\n': output << "\\n"; break;
-            case '\r': output << "\\r"; break;
-            case '\t': output << "\\t"; break;
-            default:
-                if (character < 0x20U) {
-                    output << "\\u00" << std::hex << std::setw(2)
-                           << std::setfill('0') << static_cast<int>(character)
-                           << std::dec;
-                } else {
-                    output << static_cast<char>(character);
-                }
-        }
-    }
-    output << '"';
-    return output.str();
-}
 
 Result<Clip> resegment(const Clip& clip, ClipId id,
                        core::TimestampNs sourceStart,
@@ -181,7 +153,7 @@ EditCommandRecord DeleteRangeCommand::record() const {
     std::string rightIds{"["};
     for (std::size_t index = 0; index < rightClipIds_.size(); ++index) {
         if (index != 0) rightIds.push_back(',');
-        rightIds += jsonString(rightClipIds_[index].value());
+        rightIds += internal::serializeJsonString(rightClipIds_[index].value());
     }
     rightIds.push_back(']');
 

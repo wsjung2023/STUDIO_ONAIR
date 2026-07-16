@@ -166,9 +166,11 @@ Result<MediaAsset> readAssetRow(SqliteStatement& statement) {
         if (!frameRate.hasValue()) return corrupt("asset frame rate is invalid");
         const auto width = statement.columnInt64(4);
         const auto height = statement.columnInt64(5);
-        if (width > std::numeric_limits<std::int32_t>::max() ||
+        if (width < std::numeric_limits<std::int32_t>::min() ||
+            width > std::numeric_limits<std::int32_t>::max() ||
+            height < std::numeric_limits<std::int32_t>::min() ||
             height > std::numeric_limits<std::int32_t>::max()) {
-            return corrupt("asset dimensions exceed int32");
+            return corrupt("asset dimensions are outside int32");
         }
         video = VideoAssetMetadata{.width = static_cast<std::int32_t>(width),
                                    .height = static_cast<std::int32_t>(height),
@@ -183,9 +185,11 @@ Result<MediaAsset> readAssetRow(SqliteStatement& statement) {
         }
         const auto sampleRate = statement.columnInt64(8);
         const auto channels = statement.columnInt64(9);
-        if (sampleRate > std::numeric_limits<std::int32_t>::max() ||
+        if (sampleRate < std::numeric_limits<std::int32_t>::min() ||
+            sampleRate > std::numeric_limits<std::int32_t>::max() ||
+            channels < std::numeric_limits<std::int32_t>::min() ||
             channels > std::numeric_limits<std::int32_t>::max()) {
-            return corrupt("asset audio metadata exceeds int32");
+            return corrupt("asset audio metadata is outside int32");
         }
         audio = AudioAssetMetadata{.sampleRate = static_cast<std::int32_t>(sampleRate),
                                    .channels = static_cast<std::int32_t>(channels)};
@@ -217,6 +221,11 @@ Result<std::optional<VisualTransform>> loadVisual(
     auto row = statement.step();
     if (!row.hasValue()) return row.error();
     if (row.value() == SqliteStep::Done) return std::optional<VisualTransform>{};
+    const auto zOrder = statement.columnInt64(12);
+    if (zOrder < std::numeric_limits<std::int32_t>::min() ||
+        zOrder > std::numeric_limits<std::int32_t>::max()) {
+        return corrupt("visual z-order is outside int32");
+    }
     auto value = VisualTransform::create(
         statement.columnDouble(0), statement.columnDouble(1),
         statement.columnDouble(2), statement.columnDouble(3),
@@ -224,7 +233,7 @@ Result<std::optional<VisualTransform>> loadVisual(
         statement.columnDouble(6), statement.columnDouble(7),
         statement.columnDouble(8), statement.columnDouble(9),
         statement.columnDouble(10), statement.columnDouble(11),
-        static_cast<std::int32_t>(statement.columnInt64(12)));
+        static_cast<std::int32_t>(zOrder));
     if (!value.hasValue()) return corrupt(value.error().message());
     auto end = statement.step();
     if (!end.hasValue()) return end.error();
@@ -294,18 +303,14 @@ Result<SqliteTimelineStore> SqliteTimelineStore::open(
 }
 
 Result<void> SqliteTimelineStore::putAsset(const MediaAsset& mediaAsset) {
-    auto existing = asset(mediaAsset.id());
-    if (existing.hasValue()) {
-        if (existing.value() == mediaAsset) return core::ok();
-        return AppError{ErrorCode::AlreadyExists,
-                        "media asset identity already has different metadata"};
-    }
-    if (existing.error().code() != ErrorCode::NotFound) return existing.error();
     auto fileSize = unsignedToSqlInteger(mediaAsset.fileSize(), "asset file size");
     if (!fileSize.hasValue()) return fileSize.error();
+    auto begun = SqliteTransaction::beginImmediate(connection_);
+    if (!begun.hasValue()) return begun.error();
+    auto transaction = std::move(begun).value();
 
     auto prepared = connection_.prepare(
-        "INSERT INTO media_assets(asset_id,project_id,kind,relative_path,duration_ns,"
+        "INSERT OR IGNORE INTO media_assets(asset_id,project_id,kind,relative_path,duration_ns,"
         "width,height,frame_rate_numerator,frame_rate_denominator,sample_rate,channels,"
         "file_size,fingerprint,availability) "
         "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)");
@@ -337,7 +342,20 @@ Result<void> SqliteTimelineStore::putAsset(const MediaAsset& mediaAsset) {
     if (auto r = statement.bindInt64(12, fileSize.value()); !r.hasValue()) return r.error();
     if (auto r = statement.bindText(13, mediaAsset.fingerprint()); !r.hasValue()) return r.error();
     if (auto r = statement.bindText(14, availabilityText(mediaAsset.availability())); !r.hasValue()) return r.error();
-    return expectDone(statement, "insert media asset");
+    if (auto inserted = expectDone(statement, "insert media asset");
+        !inserted.hasValue()) {
+        return inserted.error();
+    }
+    if (connection_.changes() == 0) {
+        auto existing = asset(mediaAsset.id());
+        if (!existing.hasValue()) return existing.error();
+        if (existing.value() != mediaAsset) {
+            return AppError{
+                ErrorCode::AlreadyExists,
+                "media asset identity already has different metadata"};
+        }
+    }
+    return transaction.commit();
 }
 
 Result<MediaAsset> SqliteTimelineStore::asset(const AssetId& assetId) {
@@ -434,7 +452,9 @@ Result<void> SqliteTimelineStore::writeSnapshot(const Timeline& timeline) {
             if (clip.visualTransform().has_value()) {
                 const auto& v = *clip.visualTransform();
                 auto inserted = connection_.prepare(
-                    "INSERT INTO clip_visual_transforms VALUES("
+                    "INSERT INTO clip_visual_transforms(clip_id,x,y,width,height,"
+                    "scale_x,scale_y,rotation_degrees,crop_left,crop_top,crop_right,"
+                    "crop_bottom,opacity,z_order) VALUES("
                     "?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)");
                 if (!inserted.hasValue()) return inserted.error();
                 auto statement = std::move(inserted).value();
@@ -451,7 +471,8 @@ Result<void> SqliteTimelineStore::writeSnapshot(const Timeline& timeline) {
             if (clip.audioEnvelope().has_value()) {
                 const auto& a = *clip.audioEnvelope();
                 auto inserted = connection_.prepare(
-                    "INSERT INTO clip_audio_envelopes VALUES(?1,?2,?3,?4,?5)");
+                    "INSERT INTO clip_audio_envelopes(clip_id,gain_db,fade_in_ns,"
+                    "fade_out_ns,clip_duration_ns) VALUES(?1,?2,?3,?4,?5)");
                 if (!inserted.hasValue()) return inserted.error();
                 auto statement = std::move(inserted).value();
                 if (auto r = statement.bindText(1, clip.id().value()); !r.hasValue()) return r.error();
@@ -482,7 +503,9 @@ Result<void> SqliteTimelineStore::createTimeline(const Timeline& timeline) {
     if (auto r = statement.bindInt64(5, timeline.frameRate().denominator()); !r.hasValue()) return r.error();
     if (auto r = expectDone(statement, "insert timeline"); !r.hasValue()) return r.error();
     auto checkpoint = connection_.prepare(
-        "INSERT INTO edit_checkpoints VALUES(?1,0,0,0,0,0)");
+        "INSERT INTO edit_checkpoints(timeline_id,revision,history_count,"
+        "history_cursor,clean_cursor,explicit_saved_revision) "
+        "VALUES(?1,0,0,0,0,0)");
     if (!checkpoint.hasValue()) return checkpoint.error();
     auto checkpointStatement = std::move(checkpoint).value();
     if (auto r = checkpointStatement.bindText(1, timeline.id().value()); !r.hasValue()) return r.error();
@@ -620,9 +643,15 @@ Result<PersistedTimeline> SqliteTimelineStore::loadPrimaryTimeline() {
     if (!checkpoint.columnIsNull(3)) {
         auto clean = toSize(checkpoint.columnInt64(3), "clean cursor");
         if (!clean.hasValue()) return clean.error();
+        if (clean.value() > historyCount.value()) {
+            return corrupt("clean cursor exceeds history count");
+        }
         cleanCursor = clean.value();
     }
     const auto explicitSavedRevision = checkpoint.columnInt64(4);
+    if (explicitSavedRevision < 0 || explicitSavedRevision > revision) {
+        return corrupt("explicit saved revision is outside timeline revision");
+    }
     auto checkpointEnd = checkpoint.step();
     if (!checkpointEnd.hasValue()) return checkpointEnd.error();
     if (checkpointEnd.value() != SqliteStep::Done) return corrupt("duplicate edit checkpoint");
@@ -666,19 +695,44 @@ Result<PersistedTimeline> SqliteTimelineStore::loadPrimaryTimeline() {
 
 Result<domain::EditHistory> SqliteTimelineStore::loadEditHistory(
     std::size_t limit) {
+    auto session = loadEditSession(limit);
+    if (!session.hasValue()) return session.error();
+    return std::move(session).value().history;
+}
+
+Result<PersistedEditSession> SqliteTimelineStore::loadEditSession(
+    std::size_t historyLimit) {
+    if (historyLimit == 0) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "edit history limit must be positive"};
+    }
+    auto begun = SqliteTransaction::beginDeferred(connection_);
+    if (!begun.hasValue()) return begun.error();
+    auto transaction = std::move(begun).value();
+    auto persisted = loadPrimaryTimeline();
+    if (!persisted.hasValue()) return persisted.error();
+    auto history = decodeHistory(persisted.value(), historyLimit);
+    if (!history.hasValue()) return history.error();
+    if (auto committed = transaction.commit(); !committed.hasValue()) {
+        return committed.error();
+    }
+    return PersistedEditSession{.persisted = std::move(persisted).value(),
+                                .history = std::move(history).value()};
+}
+
+Result<domain::EditHistory> SqliteTimelineStore::decodeHistory(
+    const PersistedTimeline& persisted, std::size_t limit) {
     if (limit == 0) {
         return AppError{ErrorCode::InvalidArgument,
                         "edit history limit must be positive"};
     }
-    auto persisted = loadPrimaryTimeline();
-    if (!persisted.hasValue()) return persisted.error();
-    if (persisted.value().historyCount > limit) {
+    if (persisted.historyCount > limit) {
         return corrupt("history count exceeds configured limit");
     }
 
     std::vector<domain::EditCommandRecord> records;
     std::size_t cursor = 0;
-    for (const auto& event : persisted.value().events) {
+    for (const auto& event : persisted.events) {
         switch (event.kind) {
             case EditEventKind::Apply:
                 if (cursor < records.size()) {
@@ -694,21 +748,25 @@ Result<domain::EditHistory> SqliteTimelineStore::loadEditHistory(
                 }
                 break;
             case EditEventKind::Undo:
-                if (cursor == 0 || records[cursor - 1] != event.command) {
+                if (cursor == 0 ||
+                    records[cursor - 1].commandId != event.command.commandId ||
+                    records[cursor - 1].type != event.command.type) {
                     return corrupt("undo audit event does not match history");
                 }
                 --cursor;
                 break;
             case EditEventKind::Redo:
-                if (cursor >= records.size() || records[cursor] != event.command) {
+                if (cursor >= records.size() ||
+                    records[cursor].commandId != event.command.commandId ||
+                    records[cursor].type != event.command.type) {
                     return corrupt("redo audit event does not match history");
                 }
                 ++cursor;
                 break;
         }
     }
-    if (records.size() != persisted.value().historyCount ||
-        cursor != persisted.value().historyCursor) {
+    if (records.size() != persisted.historyCount ||
+        cursor != persisted.historyCursor) {
         return corrupt("audit events differ from edit checkpoint");
     }
 
@@ -722,7 +780,7 @@ Result<domain::EditHistory> SqliteTimelineStore::loadEditHistory(
         commands.push_back(std::move(decoded).value());
     }
     return domain::EditHistory::restore(
-        limit, std::move(commands), cursor, persisted.value().cleanCursor);
+        limit, std::move(commands), cursor, persisted.cleanCursor);
 }
 
 Result<void> SqliteTimelineStore::commitEdit(const TimelineCommit& commit) {

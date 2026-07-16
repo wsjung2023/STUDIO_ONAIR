@@ -63,6 +63,8 @@ private:
 
 class SqliteTransaction final {
 public:
+    [[nodiscard]] static core::Result<SqliteTransaction> beginDeferred(
+        SqliteConnection& connection);
     [[nodiscard]] static core::Result<SqliteTransaction> beginImmediate(
         SqliteConnection& connection);
     SqliteTransaction(SqliteTransaction&& other) noexcept;

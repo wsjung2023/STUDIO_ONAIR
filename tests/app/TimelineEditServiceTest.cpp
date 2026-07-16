@@ -4,6 +4,7 @@
 #include "core/Utc.h"
 #include "domain/MediaAsset.h"
 #include "domain/ProjectManifest.h"
+#include "domain/DeleteRangeCommand.h"
 #include "domain/SplitClipCommand.h"
 #include "domain/TrimClipCommand.h"
 #include "project_store/SqliteProjectDatabase.h"
@@ -14,6 +15,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <locale>
 #include <memory>
 #include <string>
 #include <utility>
@@ -29,9 +31,12 @@ using creator::core::TimestampNs;
 using creator::core::Utc;
 using creator::domain::AssetAvailability;
 using creator::domain::AssetId;
+using creator::domain::AudioAssetMetadata;
+using creator::domain::AudioEnvelope;
 using creator::domain::Clip;
 using creator::domain::ClipId;
 using creator::domain::CommandId;
+using creator::domain::DeleteRangeCommand;
 using creator::domain::MediaAsset;
 using creator::domain::MediaKind;
 using creator::domain::ProjectId;
@@ -46,6 +51,7 @@ using creator::domain::TrackKind;
 using creator::domain::TrimClipCommand;
 using creator::domain::TrimEdge;
 using creator::domain::VideoAssetMetadata;
+using creator::domain::VisualTransform;
 using creator::project_store::SqliteProjectDatabase;
 using creator::project_store::SqliteTimelineStore;
 
@@ -87,6 +93,27 @@ MediaAsset videoAsset() {
         .value();
 }
 
+MediaAsset cameraAsset() {
+    return MediaAsset::create(
+               AssetId::create("camera-asset").value(), MediaKind::Video,
+               "media/camera.mkv", DurationNs{1'000},
+               VideoAssetMetadata{.width = 1920,
+                                  .height = 1080,
+                                  .frameRate = FrameRate::create(60, 1).value()},
+               std::nullopt, 21'000, "camera-fingerprint",
+               AssetAvailability::Available)
+        .value();
+}
+
+MediaAsset microphoneAsset() {
+    return MediaAsset::create(
+               AssetId::create("microphone-asset").value(), MediaKind::Audio,
+               "audio/microphone.mka", DurationNs{1'000}, std::nullopt,
+               AudioAssetMetadata{.sampleRate = 48'000, .channels = 2}, 8'000,
+               "microphone-fingerprint", AssetAvailability::Available)
+        .value();
+}
+
 Timeline initialTimeline() {
     auto result = Timeline::create(TimelineId::create("main").value(), "Main",
                                    FrameRate::create(60, 1).value());
@@ -109,6 +136,103 @@ Timeline initialTimeline() {
                     .hasValue());
     return timeline;
 }
+
+Timeline recordingTimeline() {
+    auto timeline = Timeline::create(TimelineId::create("main").value(), "Recording",
+                                     FrameRate::create(60, 1).value())
+                        .value();
+    const auto screenTrack = TrackId::create("screen-track").value();
+    const auto cameraTrack = TrackId::create("camera-track").value();
+    const auto microphoneTrack = TrackId::create("microphone-track").value();
+    EXPECT_TRUE(timeline.addTrack(
+                            Track::create(screenTrack, TrackKind::Video, "Screen", true,
+                                          false)
+                                .value())
+                    .hasValue());
+    EXPECT_TRUE(timeline.addTrack(
+                            Track::create(cameraTrack, TrackKind::Video, "Camera", true,
+                                          false)
+                                .value())
+                    .hasValue());
+    EXPECT_TRUE(timeline.addTrack(
+                            Track::create(microphoneTrack, TrackKind::Audio,
+                                          "Microphone", true, false)
+                                .value())
+                    .hasValue());
+    const auto full = TimeRange::create(at(0), DurationNs{1'000}).value();
+    const auto screenTransform = VisualTransform::create(
+        0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0)
+                                     .value();
+    const auto cameraTransform = VisualTransform::create(
+        0.72, 0.68, 0.25, 0.25, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.95, 10)
+                                     .value();
+    const auto microphoneEnvelope = AudioEnvelope::create(
+        -3.0, DurationNs{25}, DurationNs{50}, full.duration())
+                                        .value();
+    EXPECT_TRUE(timeline.insertClip(
+                            screenTrack,
+                            Clip::createAsset(
+                                ClipId::create("screen-clip").value(), videoAsset(),
+                                full, full, true, screenTransform, std::nullopt)
+                                .value())
+                    .hasValue());
+    EXPECT_TRUE(timeline.insertClip(
+                            cameraTrack,
+                            Clip::createAsset(
+                                ClipId::create("camera-clip").value(), cameraAsset(),
+                                full, full, true, cameraTransform, std::nullopt)
+                                .value())
+                    .hasValue());
+    EXPECT_TRUE(timeline.insertClip(
+                            microphoneTrack,
+                            Clip::createAsset(
+                                ClipId::create("microphone-clip").value(),
+                                microphoneAsset(), full, full, true, std::nullopt,
+                                microphoneEnvelope)
+                                .value())
+                    .hasValue());
+    return timeline;
+}
+
+Timeline signedZeroTimeline() {
+    auto timeline = initialTimeline();
+    const auto transform = VisualTransform::create(
+        -0.0, 0.25, 1.0, 0.75, 1.0, 1.0, -0.0, -0.0, 0.0, 0.0, -0.0,
+        1.0, 0)
+                               .value();
+    const auto* original = timeline.clip(
+        TrackId::create("screen-track").value(),
+        ClipId::create("screen-clip").value());
+    EXPECT_NE(original, nullptr);
+    auto replacement = Clip::createAsset(
+        original->id(), videoAsset(), original->sourceRange(),
+        original->timelineRange(), true, transform, std::nullopt);
+    EXPECT_TRUE(replacement.hasValue());
+    EXPECT_TRUE(timeline.replaceClip(
+                            TrackId::create("screen-track").value(),
+                            ClipId::create("screen-clip").value(),
+                            std::move(replacement).value())
+                    .hasValue());
+    return timeline;
+}
+
+class CommaDecimal final : public std::numpunct<char> {
+protected:
+    [[nodiscard]] char do_decimal_point() const override { return ','; }
+};
+
+class ScopedGlobalLocale final {
+public:
+    ScopedGlobalLocale()
+        : previous_(std::locale()),
+          active_(std::locale::global(
+              std::locale{std::locale::classic(), new CommaDecimal})) {}
+    ~ScopedGlobalLocale() { std::locale::global(previous_); }
+
+private:
+    std::locale previous_;
+    std::locale active_;
+};
 
 class TempProject final {
 public:
@@ -273,6 +397,172 @@ TEST(TimelineEditServiceTest, NewEditAfterUndoPersistsWithoutTheOldRedoBranch) {
     EXPECT_EQ(reopenedResult.value().snapshot(), branched);
     EXPECT_EQ(reopenedResult.value().revision(), 3);
     EXPECT_FALSE(reopenedResult.value().redo().hasValue());
+}
+
+TEST(TimelineEditServiceTest, RecordingEditWorkflowSurvivesCloseAndReopenExactly) {
+    TempProject project;
+    auto storeResult = SqliteTimelineStore::open(project.path(), projectId());
+    ASSERT_TRUE(storeResult.hasValue());
+    auto store = std::move(storeResult).value();
+    ASSERT_TRUE(store.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(store.putAsset(cameraAsset()).hasValue());
+    ASSERT_TRUE(store.putAsset(microphoneAsset()).hasValue());
+    ASSERT_TRUE(store.createTimeline(recordingTimeline()).hasValue());
+
+    SequentialIds ids;
+    auto serviceResult = TimelineEditService::open(
+        store, 100, [&ids] { return ids(); }, [] { return fixedUtc(); });
+    ASSERT_TRUE(serviceResult.hasValue());
+    auto service = std::move(serviceResult).value();
+    ASSERT_TRUE(service.execute(std::make_unique<SplitClipCommand>(
+                                    CommandId::create("split-mistake").value(),
+                                    TrackId::create("screen-track").value(),
+                                    ClipId::create("screen-clip").value(),
+                                    ClipId::create("screen-right").value(), at(400)))
+                    .hasValue());
+    ASSERT_TRUE(service.execute(std::make_unique<DeleteRangeCommand>(
+                                    CommandId::create("delete-mistake").value(),
+                                    TimeRange::create(at(400), DurationNs{100}).value(),
+                                    true,
+                                    std::vector<ClipId>{
+                                        ClipId::create("camera-right").value(),
+                                        ClipId::create("microphone-right").value()}))
+                    .hasValue());
+    ASSERT_TRUE(service.execute(std::make_unique<TrimClipCommand>(
+                                    CommandId::create("trim-camera").value(),
+                                    TrackId::create("camera-track").value(),
+                                    ClipId::create("camera-right").value(),
+                                    TrimEdge::Trailing, at(800)))
+                    .hasValue());
+    ASSERT_TRUE(service.undo().hasValue());
+    ASSERT_TRUE(service.redo().hasValue());
+    ASSERT_TRUE(service.markExplicitSave().hasValue());
+    const auto finalSnapshot = service.snapshot();
+    EXPECT_EQ(service.revision(), 5);
+    EXPECT_TRUE(service.isClean());
+
+    auto persisted = store.loadPrimaryTimeline();
+    ASSERT_TRUE(persisted.hasValue());
+    EXPECT_EQ(persisted.value().timeline, finalSnapshot);
+    EXPECT_EQ(persisted.value().revision, 5);
+    EXPECT_EQ(persisted.value().historyCount, 3U);
+    EXPECT_EQ(persisted.value().historyCursor, 3U);
+    ASSERT_TRUE(persisted.value().cleanCursor.has_value());
+    EXPECT_EQ(*persisted.value().cleanCursor, 3U);
+    EXPECT_EQ(persisted.value().explicitSavedRevision, 5);
+    EXPECT_EQ(persisted.value().events.size(), 5U);
+
+    auto reopenedStoreResult = SqliteTimelineStore::open(project.path(), projectId());
+    ASSERT_TRUE(reopenedStoreResult.hasValue());
+    auto reopenedStore = std::move(reopenedStoreResult).value();
+    auto reopenedResult = TimelineEditService::open(
+        reopenedStore, 100, [&ids] { return ids(); }, [] { return fixedUtc(); });
+    ASSERT_TRUE(reopenedResult.hasValue()) << reopenedResult.error().message();
+    auto reopened = std::move(reopenedResult).value();
+    EXPECT_EQ(reopened.snapshot(), finalSnapshot);
+    EXPECT_EQ(reopened.revision(), 5);
+    EXPECT_TRUE(reopened.isClean());
+    ASSERT_TRUE(reopened.undo().hasValue());
+    ASSERT_TRUE(reopened.undo().hasValue());
+    ASSERT_TRUE(reopened.redo().hasValue());
+    ASSERT_TRUE(reopened.redo().hasValue());
+    EXPECT_EQ(reopened.snapshot(), finalSnapshot);
+    EXPECT_EQ(reopened.revision(), 9);
+    EXPECT_TRUE(reopened.isClean());
+}
+
+TEST(TimelineEditServiceTest, BoundedHistorySurvivesReopenWithoutRevivingEvictedEdits) {
+    TempProject project;
+    auto storeResult = SqliteTimelineStore::open(project.path(), projectId());
+    ASSERT_TRUE(storeResult.hasValue());
+    auto store = std::move(storeResult).value();
+    ASSERT_TRUE(store.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(store.createTimeline(initialTimeline()).hasValue());
+
+    SequentialIds ids;
+    auto serviceResult = TimelineEditService::open(
+        store, 2, [&ids] { return ids(); }, [] { return fixedUtc(); });
+    ASSERT_TRUE(serviceResult.hasValue());
+    auto service = std::move(serviceResult).value();
+    ASSERT_TRUE(service.execute(std::make_unique<TrimClipCommand>(
+                                    CommandId::create("trim-oldest").value(),
+                                    TrackId::create("screen-track").value(),
+                                    ClipId::create("screen-clip").value(),
+                                    TrimEdge::Trailing, at(550)))
+                    .hasValue());
+    const auto afterEvictedEdit = service.snapshot();
+    ASSERT_TRUE(service.execute(std::make_unique<TrimClipCommand>(
+                                    CommandId::create("trim-middle").value(),
+                                    TrackId::create("screen-track").value(),
+                                    ClipId::create("screen-clip").value(),
+                                    TrimEdge::Trailing, at(500)))
+                    .hasValue());
+    ASSERT_TRUE(service.execute(std::make_unique<TrimClipCommand>(
+                                    CommandId::create("trim-newest").value(),
+                                    TrackId::create("screen-track").value(),
+                                    ClipId::create("screen-clip").value(),
+                                    TrimEdge::Trailing, at(450)))
+                    .hasValue());
+
+    auto reopenedStoreResult = SqliteTimelineStore::open(project.path(), projectId());
+    ASSERT_TRUE(reopenedStoreResult.hasValue());
+    auto reopenedStore = std::move(reopenedStoreResult).value();
+    auto reopenedResult = TimelineEditService::open(
+        reopenedStore, 2, [&ids] { return ids(); }, [] { return fixedUtc(); });
+    ASSERT_TRUE(reopenedResult.hasValue()) << reopenedResult.error().message();
+    auto reopened = std::move(reopenedResult).value();
+    ASSERT_TRUE(reopened.undo().hasValue());
+    ASSERT_TRUE(reopened.undo().hasValue());
+    EXPECT_EQ(reopened.snapshot(), afterEvictedEdit);
+    EXPECT_FALSE(reopened.undo().hasValue());
+
+    auto undoneStoreResult = SqliteTimelineStore::open(project.path(), projectId());
+    ASSERT_TRUE(undoneStoreResult.hasValue());
+    auto undoneStore = std::move(undoneStoreResult).value();
+    auto undoneResult = TimelineEditService::open(
+        undoneStore, 2, [&ids] { return ids(); }, [] { return fixedUtc(); });
+    ASSERT_TRUE(undoneResult.hasValue()) << undoneResult.error().message();
+    EXPECT_EQ(undoneResult.value().snapshot(), afterEvictedEdit);
+    EXPECT_FALSE(undoneResult.value().undo().hasValue());
+}
+
+TEST(TimelineEditServiceTest, CanonicalCommandNumbersSurviveLocaleAndSignedZeroReopens) {
+    TempProject project;
+    auto storeResult = SqliteTimelineStore::open(project.path(), projectId());
+    ASSERT_TRUE(storeResult.hasValue());
+    auto store = std::move(storeResult).value();
+    ASSERT_TRUE(store.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(store.createTimeline(signedZeroTimeline()).hasValue());
+
+    ScopedGlobalLocale locale;
+    SequentialIds ids;
+    auto serviceResult = TimelineEditService::open(
+        store, 100, [&ids] { return ids(); }, [] { return fixedUtc(); });
+    ASSERT_TRUE(serviceResult.hasValue());
+    auto service = std::move(serviceResult).value();
+    ASSERT_TRUE(service.execute(std::make_unique<SplitClipCommand>(
+                                    CommandId::create("signed-zero-split").value(),
+                                    TrackId::create("screen-track").value(),
+                                    ClipId::create("screen-clip").value(),
+                                    ClipId::create("screen-right").value(), at(250)))
+                    .hasValue());
+
+    auto reopenedStoreResult = SqliteTimelineStore::open(project.path(), projectId());
+    ASSERT_TRUE(reopenedStoreResult.hasValue());
+    auto reopenedStore = std::move(reopenedStoreResult).value();
+    auto reopenedResult = TimelineEditService::open(
+        reopenedStore, 100, [&ids] { return ids(); }, [] { return fixedUtc(); });
+    ASSERT_TRUE(reopenedResult.hasValue()) << reopenedResult.error().message();
+    auto reopened = std::move(reopenedResult).value();
+    ASSERT_TRUE(reopened.undo().hasValue());
+
+    auto undoneStoreResult = SqliteTimelineStore::open(project.path(), projectId());
+    ASSERT_TRUE(undoneStoreResult.hasValue());
+    auto undoneStore = std::move(undoneStoreResult).value();
+    auto undoneResult = TimelineEditService::open(
+        undoneStore, 100, [&ids] { return ids(); }, [] { return fixedUtc(); });
+    ASSERT_TRUE(undoneResult.hasValue()) << undoneResult.error().message();
+    ASSERT_TRUE(undoneResult.value().redo().hasValue());
 }
 
 }  // namespace

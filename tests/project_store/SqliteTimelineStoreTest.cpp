@@ -4,9 +4,11 @@
 #include "core/Timebase.h"
 #include "core/Utc.h"
 #include "domain/EditCommand.h"
+#include "domain/DeleteRangeCommand.h"
 #include "domain/Identifiers.h"
 #include "domain/MediaAsset.h"
 #include "domain/ProjectManifest.h"
+#include "domain/SplitClipCommand.h"
 #include "domain/Timeline.h"
 #include "domain/TimelineTypes.h"
 #include "project_store/ITimelineStore.h"
@@ -15,10 +17,13 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <barrier>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace {
@@ -37,11 +42,13 @@ using creator::domain::AudioEnvelope;
 using creator::domain::Clip;
 using creator::domain::ClipId;
 using creator::domain::CommandId;
+using creator::domain::DeleteRangeCommand;
 using creator::domain::EditCommandRecord;
 using creator::domain::MediaAsset;
 using creator::domain::MediaKind;
 using creator::domain::ProjectId;
 using creator::domain::ProjectManifest;
+using creator::domain::SplitClipCommand;
 using creator::domain::TimeRange;
 using creator::domain::Timeline;
 using creator::domain::TimelineId;
@@ -202,6 +209,39 @@ TEST_F(SqliteTimelineStoreTest, StoresAssetsIdempotentlyAndRejectsIdentityConfli
     EXPECT_EQ(conflict.error().code(), ErrorCode::AlreadyExists);
 }
 
+TEST_F(SqliteTimelineStoreTest, ConcurrentIdenticalAssetInsertionsAreIdempotent) {
+    auto firstResult = SqliteTimelineStore::open(databasePath(), projectId());
+    auto secondResult = SqliteTimelineStore::open(databasePath(), projectId());
+    ASSERT_TRUE(firstResult.hasValue());
+    ASSERT_TRUE(secondResult.hasValue());
+    auto first = std::move(firstResult).value();
+    auto second = std::move(secondResult).value();
+    std::barrier ready{3};
+    std::atomic_bool firstOk{false};
+    std::atomic_bool secondOk{false};
+    std::thread firstThread{
+        [store = std::move(first), &ready, &firstOk]() mutable {
+            ready.arrive_and_wait();
+            firstOk = store.putAsset(videoAsset()).hasValue();
+        }};
+    std::thread secondThread{
+        [store = std::move(second), &ready, &secondOk]() mutable {
+            ready.arrive_and_wait();
+            secondOk = store.putAsset(videoAsset()).hasValue();
+        }};
+    ready.arrive_and_wait();
+    firstThread.join();
+    secondThread.join();
+    EXPECT_TRUE(firstOk);
+    EXPECT_TRUE(secondOk);
+
+    auto verified = store();
+    auto all = verified.assets();
+    ASSERT_TRUE(all.hasValue());
+    ASSERT_EQ(all.value().size(), 1U);
+    EXPECT_EQ(all.value().front(), videoAsset());
+}
+
 TEST_F(SqliteTimelineStoreTest, RoundTripsMultitrackSnapshotAcrossReopen) {
     const auto expected = populatedTimeline();
     {
@@ -327,6 +367,115 @@ TEST_F(SqliteTimelineStoreTest, RejectsMalformedPersistedTrackKind) {
 
     ASSERT_FALSE(loaded.hasValue());
     EXPECT_EQ(loaded.error().code(), ErrorCode::IoFailure);
+}
+
+TEST_F(SqliteTimelineStoreTest, RejectsPersistedIntegersOutsideDomainRanges) {
+    auto timelineStore = store();
+    ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.createTimeline(populatedTimeline()).hasValue());
+    auto rawResult = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(rawResult.hasValue());
+    auto raw = std::move(rawResult).value();
+    ASSERT_TRUE(raw.execute(
+        "PRAGMA ignore_check_constraints=ON; "
+        "UPDATE media_assets SET width=-2147483649 WHERE asset_id='video-asset';")
+                    .hasValue());
+
+    const auto invalidAsset = timelineStore.asset(
+        AssetId::create("video-asset").value());
+
+    ASSERT_FALSE(invalidAsset.hasValue());
+    EXPECT_EQ(invalidAsset.error().code(), ErrorCode::IoFailure);
+}
+
+TEST_F(SqliteTimelineStoreTest, RejectsPersistedCheckpointOutsideTimelineState) {
+    auto timelineStore = store();
+    ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.createTimeline(populatedTimeline()).hasValue());
+    auto rawResult = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(rawResult.hasValue());
+    auto raw = std::move(rawResult).value();
+    ASSERT_TRUE(raw.execute(
+        "PRAGMA ignore_check_constraints=ON; "
+        "UPDATE edit_checkpoints SET clean_cursor=1,explicit_saved_revision=1;")
+                    .hasValue());
+
+    const auto loaded = timelineStore.loadPrimaryTimeline();
+
+    ASSERT_FALSE(loaded.hasValue());
+    EXPECT_EQ(loaded.error().code(), ErrorCode::IoFailure);
+}
+
+TEST_F(SqliteTimelineStoreTest, RejectsUnsignedOverflowInPersistedCommandJson) {
+    auto timelineStore = store();
+    ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+    auto snapshot = populatedTimeline();
+    ASSERT_TRUE(timelineStore.createTimeline(snapshot).hasValue());
+    SplitClipCommand command{
+        CommandId::create("overflow-command").value(),
+        TrackId::create("v1").value(), ClipId::create("video-clip").value(),
+        ClipId::create("video-right").value(), at(200)};
+    ASSERT_TRUE(command.execute(snapshot).hasValue());
+    auto record = command.record();
+    record.payload =
+        "{\"clipId\":\"video-clip\",\"rightClipId\":\"video-right\","
+        "\"splitNs\":18446744073709551615,\"trackId\":\"v1\"}";
+    ASSERT_TRUE(timelineStore.commitEdit(
+                                 TimelineCommit{
+                                     .snapshot = snapshot,
+                                     .expectedRevision = 0,
+                                     .event = EditEventRecord{
+                                         .eventId = "overflow-event",
+                                         .kind = EditEventKind::Apply,
+                                         .command = std::move(record),
+                                         .createdAt = utc("2026-07-17T00:00:01Z")},
+                                     .historyCount = 1,
+                                     .historyCursor = 1,
+                                     .cleanCursor = std::size_t{0}})
+                    .hasValue());
+
+    const auto history = timelineStore.loadEditHistory(100);
+    ASSERT_FALSE(history.hasValue());
+    EXPECT_EQ(history.error().code(), ErrorCode::ParseFailure);
+}
+
+TEST_F(SqliteTimelineStoreTest, RejectsDuplicateGeneratedIdsInDeleteCommandJson) {
+    auto timelineStore = store();
+    ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+    auto snapshot = populatedTimeline();
+    ASSERT_TRUE(timelineStore.createTimeline(snapshot).hasValue());
+    DeleteRangeCommand command{
+        CommandId::create("delete-duplicates").value(),
+        TimeRange::create(at(100), DurationNs{100}).value(), true,
+        {ClipId::create("video-right").value(),
+         ClipId::create("audio-right").value()}};
+    ASSERT_TRUE(command.execute(snapshot).hasValue());
+    auto record = command.record();
+    record.payload =
+        "{\"durationNs\":100,\"rightClipIds\":[\"same-right\",\"same-right\"],"
+        "\"ripple\":true,\"startNs\":100}";
+    ASSERT_TRUE(timelineStore.commitEdit(
+                                 TimelineCommit{
+                                     .snapshot = snapshot,
+                                     .expectedRevision = 0,
+                                     .event = EditEventRecord{
+                                         .eventId = "duplicate-delete-event",
+                                         .kind = EditEventKind::Apply,
+                                         .command = std::move(record),
+                                         .createdAt = utc("2026-07-17T00:00:01Z")},
+                                     .historyCount = 1,
+                                     .historyCursor = 1,
+                                     .cleanCursor = std::size_t{0}})
+                    .hasValue());
+
+    const auto history = timelineStore.loadEditHistory(100);
+
+    ASSERT_FALSE(history.hasValue());
+    EXPECT_EQ(history.error().code(), ErrorCode::ParseFailure);
 }
 
 }  // namespace

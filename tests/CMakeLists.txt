@@ -30,6 +30,7 @@ set_target_properties(cs_crash_recovery_fixture PROPERTIES
 cs_apply_warnings(cs_crash_recovery_fixture)
 
 add_executable(cs_tests
+    ${PROJECT_SOURCE_DIR}/src/app/TimelineEditService.cpp
     core/ResultTest.cpp
     core/TimebaseTest.cpp
     core/UuidTest.cpp
@@ -75,6 +76,7 @@ add_executable(cs_tests
     project_store/RecoveryTest.cpp
     project_store/ProjectPackageStoreTest.cpp
     project_store/CrashRecoveryIntegrationTest.cpp
+    app/TimelineEditServiceTest.cpp
     fakes/FakeCaptureSourceTest.cpp
     fakes/ManualPushCaptureSourceTest.cpp
     fakes/FakeRecorderTest.cpp
@@ -108,7 +110,6 @@ gtest_discover_tests(cs_tests)
 # standing check that the layers below the application really do build without
 # Qt on the include path.
 add_executable(cs_app_tests
-    app/TimelineEditServiceTest.cpp
     app/StudioControllerTest.cpp
     app/LiveRecordingControllerTest.cpp
     app/ProjectControllerTest.cpp
@@ -122,7 +123,6 @@ add_executable(cs_app_tests
 target_link_libraries(cs_app_tests
     PRIVATE
         cs_app
-        cs_project_store
         cs_fakes
         # QSignalSpy lives in QtTest, not QtCore; cs_app itself only needs
         # Qt6::Core, so the test binary requests Test for itself rather than
@@ -135,7 +135,9 @@ target_include_directories(cs_app_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 
 cs_apply_warnings(cs_app_tests)
 
-gtest_discover_tests(cs_app_tests)
+gtest_discover_tests(cs_app_tests
+    DISCOVERY_MODE PRE_TEST
+)
 
 add_executable(cs_qml_tests
     app/QmlSmokeTest.cpp

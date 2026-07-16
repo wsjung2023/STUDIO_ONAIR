@@ -1,14 +1,15 @@
 #include "domain/EditCommandJson.h"
 
+#include <array>
+#include <charconv>
 #include <iomanip>
 #include <limits>
 #include <sstream>
 #include <string_view>
 
 namespace creator::domain::internal {
-namespace {
 
-std::string jsonString(std::string_view value) {
+std::string serializeJsonString(std::string_view value) {
     std::ostringstream output;
     output << '"';
     for (const unsigned char character : value) {
@@ -34,10 +35,16 @@ std::string jsonString(std::string_view value) {
     return output.str();
 }
 
+namespace {
+
 std::string number(double value) {
-    std::ostringstream output;
-    output << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
-    return output.str();
+    if (value == 0.0) return "0";
+    std::array<char, 64> buffer{};
+    const auto [end, error] = std::to_chars(
+        buffer.data(), buffer.data() + buffer.size(), value,
+        std::chars_format::general, std::numeric_limits<double>::max_digits10);
+    if (error != std::errc{}) return {};
+    return std::string{buffer.data(), end};
 }
 
 std::string visualJson(const std::optional<VisualTransform>& visual) {
@@ -69,12 +76,12 @@ std::string audioJson(const std::optional<AudioEnvelope>& audio) {
 }  // namespace
 
 std::string serializeClip(const Clip& clip) {
-    return "{\"assetId\":" + jsonString(clip.assetId()->value()) +
+    return "{\"assetId\":" + serializeJsonString(clip.assetId()->value()) +
            ",\"audio\":" + audioJson(clip.audioEnvelope()) +
            ",\"enabled\":" + (clip.enabled() ? "true" : "false") +
-           ",\"id\":" + jsonString(clip.id().value()) +
+           ",\"id\":" + serializeJsonString(clip.id().value()) +
            ",\"mediaKind\":" +
-           jsonString(clip.mediaKind() == MediaKind::Video
+           serializeJsonString(clip.mediaKind() == MediaKind::Video
                           ? "VIDEO"
                           : (clip.mediaKind() == MediaKind::Audio ? "AUDIO"
                                                                   : "IMAGE")) +
@@ -99,7 +106,7 @@ std::string serializeTrackClips(const std::vector<TrackClips>& tracks) {
             if (clipIndex != 0) json.push_back(',');
             json += serializeClip(clips[clipIndex]);
         }
-        json += "],\"trackId\":" + jsonString(trackId.value()) + "}";
+        json += "],\"trackId\":" + serializeJsonString(trackId.value()) + "}";
     }
     json += "]}";
     return json;

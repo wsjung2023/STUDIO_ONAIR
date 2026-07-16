@@ -13,15 +13,14 @@ core::Result<TimelineEditService> TimelineEditService::open(
         return core::AppError{core::ErrorCode::InvalidArgument,
                               "timeline edit service dependencies are invalid"};
     }
-    auto persisted = store.loadPrimaryTimeline();
-    if (!persisted.hasValue()) return persisted.error();
-    auto history = store.loadEditHistory(historyLimit);
-    if (!history.hasValue()) return history.error();
-    auto revision = domain::TimelineRevision::create(persisted.value().revision);
+    auto session = store.loadEditSession(historyLimit);
+    if (!session.hasValue()) return session.error();
+    auto revision = domain::TimelineRevision::create(
+        session.value().persisted.revision);
     if (!revision.hasValue()) return revision.error();
     return TimelineEditService{
-        store, std::move(persisted).value().timeline,
-        std::move(history).value(), revision.value(),
+        store, std::move(session.value().persisted.timeline),
+        std::move(session.value().history), revision.value(),
         std::move(eventIdFactory), std::move(clock)};
 }
 

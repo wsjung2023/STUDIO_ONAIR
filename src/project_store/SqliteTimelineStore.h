@@ -31,6 +31,8 @@ public:
     [[nodiscard]] core::Result<PersistedTimeline> loadPrimaryTimeline() override;
     [[nodiscard]] core::Result<domain::EditHistory> loadEditHistory(
         std::size_t limit) override;
+    [[nodiscard]] core::Result<PersistedEditSession> loadEditSession(
+        std::size_t historyLimit) override;
     [[nodiscard]] core::Result<void> commitEdit(
         const TimelineCommit& commit) override;
     [[nodiscard]] core::Result<void> markExplicitSave(
@@ -44,6 +46,8 @@ private:
 
     [[nodiscard]] core::Result<void> writeSnapshot(
         const domain::Timeline& timeline);
+    [[nodiscard]] core::Result<domain::EditHistory> decodeHistory(
+        const PersistedTimeline& persisted, std::size_t limit);
 
     internal::SqliteConnection connection_;
     domain::ProjectId projectId_;

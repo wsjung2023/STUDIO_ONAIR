@@ -4,45 +4,14 @@
 #include "domain/EditCommandJson.h"
 
 #include <cstdint>
-#include <iomanip>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <utility>
 
 namespace creator::domain {
-namespace {
 
 using core::AppError;
 using core::ErrorCode;
-
-std::string jsonString(std::string_view value) {
-    std::ostringstream output;
-    output << '"';
-    for (const unsigned char character : value) {
-        switch (character) {
-            case '"': output << "\\\""; break;
-            case '\\': output << "\\\\"; break;
-            case '\b': output << "\\b"; break;
-            case '\f': output << "\\f"; break;
-            case '\n': output << "\\n"; break;
-            case '\r': output << "\\r"; break;
-            case '\t': output << "\\t"; break;
-            default:
-                if (character < 0x20U) {
-                    output << "\\u00" << std::hex << std::setw(2)
-                           << std::setfill('0') << static_cast<int>(character)
-                           << std::dec;
-                } else {
-                    output << static_cast<char>(character);
-                }
-        }
-    }
-    output << '"';
-    return output.str();
-}
-
-}  // namespace
 
 core::Result<void> SplitClipCommand::execute(Timeline& timeline) {
     if (applied_) {
@@ -113,10 +82,10 @@ core::Result<void> SplitClipCommand::undo(Timeline& timeline) {
 EditCommandRecord SplitClipCommand::record() const {
     const auto splitNs = splitAt_.time_since_epoch().count();
     const std::string payload =
-        "{\"clipId\":" + jsonString(clipId_.value()) +
-        ",\"rightClipId\":" + jsonString(rightClipId_.value()) +
+        "{\"clipId\":" + internal::serializeJsonString(clipId_.value()) +
+        ",\"rightClipId\":" + internal::serializeJsonString(rightClipId_.value()) +
         ",\"splitNs\":" + std::to_string(splitNs) +
-        ",\"trackId\":" + jsonString(trackId_.value()) + "}";
+        ",\"trackId\":" + internal::serializeJsonString(trackId_.value()) + "}";
     return EditCommandRecord{.commandId = commandId_,
                              .type = "SPLIT_CLIP",
                              .payload = payload,
