@@ -37,14 +37,15 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 ctest --test-dir build/r1-01-debug --output-on-failure
 ```
 
-Result: **421/421 tests passed**, 0 failed, 37.26 seconds.
+Result after integration: **421/421 tests passed**, 0 failed, 44.70 seconds.
 
 The fresh run executed the newly linked Qt application tests successfully.
 TimelineEditService tests intentionally run in `cs_tests.exe` because the
-service is Qt-free; Qt application test discovery happens at test time. This
-also avoids Windows App Control blocking a newly generated test executable
-before CMake can finish test discovery. No policy, certificate store, or
-security setting was weakened.
+service is Qt-free. Controller and QML smoke tests share `cs_app_tests.exe`, and
+Qt application test discovery happens at test time. Keeping one Qt test process
+prevents Windows App Control from blocking a newly generated one-purpose QML
+test executable before CMake can finish discovery. No test was removed, and no
+policy, certificate store, or security setting was weakened.
 
 ```powershell
 rg -n '^[ \t]*#include' -- src/domain src/project_store |

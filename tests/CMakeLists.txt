@@ -118,6 +118,7 @@ add_executable(cs_app_tests
     app/DeviceCaptureControllerTest.cpp
     app/ProjectSegmentLifecycleSinkTest.cpp
     app/MultiTrackRecordingServiceTest.cpp
+    app/QmlSmokeTest.cpp
 )
 
 target_link_libraries(cs_app_tests
@@ -127,6 +128,7 @@ target_link_libraries(cs_app_tests
         # QSignalSpy lives in QtTest, not QtCore; cs_app itself only needs
         # Qt6::Core, so the test binary requests Test for itself rather than
         # widening what the shipped library links.
+        Qt6::Quick
         Qt6::Test
         GTest::gtest
 )
@@ -135,29 +137,11 @@ target_include_directories(cs_app_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 
 cs_apply_warnings(cs_app_tests)
 
-gtest_discover_tests(cs_app_tests
-    DISCOVERY_MODE PRE_TEST
-)
-
-add_executable(cs_qml_tests
-    app/QmlSmokeTest.cpp
-)
-
-target_link_libraries(cs_qml_tests
-    PRIVATE
-        cs_app
-        Qt6::Quick
-        Qt6::Test
-        GTest::gtest
-)
-
-target_compile_definitions(cs_qml_tests PRIVATE
+target_compile_definitions(cs_app_tests PRIVATE
     CS_QML_SOURCE_DIR="${PROJECT_SOURCE_DIR}/qml"
 )
 
-cs_apply_warnings(cs_qml_tests)
-
-gtest_discover_tests(cs_qml_tests
+gtest_discover_tests(cs_app_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
