@@ -47,9 +47,15 @@ public:
         events->push_back("publish");
         EXPECT_EQ(part, partPath);
         EXPECT_EQ(final, finalPath);
+        if (publishBeforeError) published = true;
         if (publishError) return *publishError;
         published = true;
         return creator::core::ok();
+    }
+    bool didPublishLastAttempt(const std::filesystem::path&,
+                               const std::filesystem::path&) const noexcept override {
+        events->push_back("inspect-published");
+        return published;
     }
 
     std::shared_ptr<std::vector<std::string>> events;
@@ -57,6 +63,7 @@ public:
     std::optional<AppError> publishError;
     std::filesystem::path partPath;
     std::filesystem::path finalPath;
+    bool publishBeforeError{false};
     bool published{false};
 };
 
@@ -146,7 +153,8 @@ TEST(DurableSegmentPublisherTest, PublishFailureMarksWritingRowFailedExactlyOnce
     EXPECT_TRUE(duplicate.hasValue());
     EXPECT_EQ(fixture.sinkRaw->failedCalls, 1);
     EXPECT_EQ(*fixture.events,
-              (std::vector<std::string>{"prepare", "begin", "publish", "failed"}));
+              (std::vector<std::string>{"prepare", "begin", "publish",
+                                        "inspect-published", "failed"}));
 }
 
 TEST(DurableSegmentPublisherTest, ReadyFailurePreservesWritingRowForRecovery) {
@@ -162,6 +170,25 @@ TEST(DurableSegmentPublisherTest, ReadyFailurePreservesWritingRowForRecovery) {
     EXPECT_TRUE(fixture.filesRaw->published);
     EXPECT_EQ(fixture.sinkRaw->failedCalls, 0);
     EXPECT_FALSE(fixture.publisher->hasPendingSegment());
+}
+
+TEST(DurableSegmentPublisherTest, PostRenameDurabilityErrorPreservesWritingRowForRecovery) {
+    Fixture fixture;
+    fixture.filesRaw->publishBeforeError = true;
+    fixture.filesRaw->publishError = AppError{ErrorCode::IoFailure, "directory sync failed"};
+    ASSERT_TRUE(fixture.publisher->begin(screenTrack(), 0, {}).hasValue());
+
+    const auto result = fixture.publisher->publish(
+        {.endTime = creator::core::TimestampNs{std::chrono::seconds{2}},
+         .bytesWritten = 1, .codecName = "mpeg4"});
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().message(), "directory sync failed");
+    EXPECT_EQ(fixture.sinkRaw->failedCalls, 0);
+    EXPECT_FALSE(fixture.publisher->hasPendingSegment());
+    EXPECT_EQ(*fixture.events,
+              (std::vector<std::string>{"prepare", "begin", "publish",
+                                        "inspect-published"}));
 }
 
 TEST(DurableSegmentPublisherTest, NativeOperationsPublishWithoutOverwriting) {

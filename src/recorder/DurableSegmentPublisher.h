@@ -30,6 +30,9 @@ public:
     [[nodiscard]] virtual core::Result<void> publish(
         const std::filesystem::path& partPath,
         const std::filesystem::path& finalPath) = 0;
+    [[nodiscard]] virtual bool didPublishLastAttempt(
+        const std::filesystem::path& partPath,
+        const std::filesystem::path& finalPath) const noexcept = 0;
 
 protected:
     ISegmentFileOperations() = default;

@@ -88,6 +88,9 @@ public:
 
     core::Result<void> publish(const std::filesystem::path& partPath,
                                const std::filesystem::path& finalPath) override {
+        lastPartPath_ = partPath;
+        lastFinalPath_ = finalPath;
+        lastAttemptPublished_ = false;
 #ifdef _WIN32
         HANDLE handle = CreateFileW(partPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
                                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -103,6 +106,7 @@ public:
         if (!MoveFileExW(partPath.c_str(), finalPath.c_str(), MOVEFILE_WRITE_THROUGH)) {
             return fileError("publish without overwrite", GetLastError());
         }
+        lastAttemptPublished_ = true;
 #else
         const int descriptor = ::open(partPath.c_str(), O_RDONLY);
         if (descriptor < 0) {
@@ -120,10 +124,12 @@ public:
         if (::renamex_np(partPath.c_str(), finalPath.c_str(), RENAME_EXCL) != 0) {
             return fileError("publish without overwrite", static_cast<std::uint64_t>(errno));
         }
+        lastAttemptPublished_ = true;
 #else
         if (::link(partPath.c_str(), finalPath.c_str()) != 0) {
             return fileError("publish without overwrite", static_cast<std::uint64_t>(errno));
         }
+        lastAttemptPublished_ = true;
         if (::unlink(partPath.c_str()) != 0) {
             return fileError("remove published temporary", static_cast<std::uint64_t>(errno));
         }
@@ -144,8 +150,17 @@ public:
         return core::ok();
     }
 
+    bool didPublishLastAttempt(const std::filesystem::path& partPath,
+                               const std::filesystem::path& finalPath) const noexcept override {
+        return lastAttemptPublished_ && partPath == lastPartPath_ &&
+               finalPath == lastFinalPath_;
+    }
+
 private:
     std::filesystem::path packageRoot_;
+    std::filesystem::path lastPartPath_;
+    std::filesystem::path lastFinalPath_;
+    bool lastAttemptPublished_{false};
 };
 
 }  // namespace
@@ -221,6 +236,11 @@ core::Result<domain::SegmentInfo> DurableSegmentPublisher::publish(
                                                    pending_->paths.finalPath);
         !published.hasValue()) {
         const core::AppError original = published.error();
+        if (fileOperations_->didPublishLastAttempt(pending_->paths.partPath,
+                                                   pending_->paths.finalPath)) {
+            pending_.reset();
+            return original;
+        }
         const auto failed = fail();
         if (!failed.hasValue()) {
             return core::AppError{failed.error().code(),
