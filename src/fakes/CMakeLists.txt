@@ -9,7 +9,10 @@ cs_add_qtfree_library(cs_fakes
         ManualPushCaptureSource.cpp
         FakeRecorder.h
         FakeRecorder.cpp
+        FakeEditEngine.h
+        FakeEditEngine.cpp
     DEPENDS
         cs_capture
         cs_recorder
+        cs_edit_engine
 )

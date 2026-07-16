@@ -41,6 +41,7 @@ add_executable(cs_tests
     domain/TimelineTest.cpp
     domain/EditCommandTest.cpp
     domain/DeleteRangeCommandTest.cpp
+    edit_engine/EditEngineTypesTest.cpp
     domain/ProjectManifestTest.cpp
     domain/RecordingSessionTest.cpp
     media/MediaTypesTest.cpp
@@ -80,6 +81,7 @@ add_executable(cs_tests
     fakes/FakeCaptureSourceTest.cpp
     fakes/ManualPushCaptureSourceTest.cpp
     fakes/FakeRecorderTest.cpp
+    fakes/FakeEditEngineTest.cpp
 )
 
 target_link_libraries(cs_tests
@@ -91,6 +93,7 @@ target_link_libraries(cs_tests
         cs_capture
         cs_recorder
         cs_project_store
+        cs_edit_engine
         cs_fakes
         nlohmann_json::nlohmann_json
         GTest::gtest_main
@@ -110,6 +113,8 @@ gtest_discover_tests(cs_tests)
 # standing check that the layers below the application really do build without
 # Qt on the include path.
 add_executable(cs_app_tests
+    app/EditorModelsTest.cpp
+    app/EditorControllerTest.cpp
     app/StudioControllerTest.cpp
     app/LiveRecordingControllerTest.cpp
     app/ProjectControllerTest.cpp

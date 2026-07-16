@@ -1,0 +1,49 @@
+#pragma once
+
+#include "core/Timebase.h"
+#include "edit_engine/EditEngineTypes.h"
+#include "edit_engine/IEditEngine.h"
+
+#include <QObject>
+#include <QString>
+
+#include <memory>
+
+namespace creator::app {
+
+enum class EditorEngineOperation {
+    Load,
+    Update,
+    Play,
+    Pause,
+    Seek,
+};
+
+class EditorEngineWorker final : public QObject {
+    Q_OBJECT
+public:
+    explicit EditorEngineWorker(
+        std::unique_ptr<edit_engine::IEditEngine> engine);
+
+    void load(quint64 generation, quint64 commandId,
+              edit_engine::TimelineSnapshot snapshot);
+    void update(quint64 generation, quint64 commandId,
+                edit_engine::TimelineChangeSet change);
+    void play(quint64 generation, quint64 commandId);
+    void pause(quint64 generation, quint64 commandId);
+    void seek(quint64 generation, quint64 commandId,
+              core::TimestampNs position);
+
+signals:
+    void completed(quint64 generation, quint64 commandId, int operation,
+                   bool success, QString errorMessage);
+
+private:
+    void publish(quint64 generation, quint64 commandId,
+                 EditorEngineOperation operation,
+                 const core::Result<void>& result);
+
+    std::unique_ptr<edit_engine::IEditEngine> engine_;
+};
+
+}  // namespace creator::app
