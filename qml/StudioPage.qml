@@ -316,10 +316,8 @@ Item {
             }
         }
 
-        // PRODUCT_BLUEPRINT 6.2 bottom bar. Dropped frames, disk and encoder
-        // state are placeholders until R0-05 has something real to report -
-        // showing an invented 0 would be worse than showing nothing, because
-        // CLAUDE.md 9 forbids hiding recording failures.
+        // PRODUCT_BLUEPRINT 6.2 bottom bar. Capture and recording drops remain
+        // separate so preview pressure cannot hide encoder backpressure.
         Pane {
             Layout.fillWidth: true
             Layout.preferredHeight: 104
