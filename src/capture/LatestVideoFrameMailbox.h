@@ -13,6 +13,8 @@ struct LatestVideoFrameMailboxStats final {
     std::uint64_t replacedFrames{0};
     std::uint64_t terminalErrors{0};
     std::uint64_t framesAfterTerminalError{0};
+    std::uint32_t lastWidth{0};
+    std::uint32_t lastHeight{0};
 
     friend bool operator==(const LatestVideoFrameMailboxStats&,
                            const LatestVideoFrameMailboxStats&) = default;
@@ -44,4 +46,3 @@ private:
 };
 
 }  // namespace creator::capture
-

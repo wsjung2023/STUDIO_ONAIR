@@ -84,6 +84,7 @@ gtest_discover_tests(cs_tests)
 add_executable(cs_app_tests
     app/StudioControllerTest.cpp
     app/ProjectControllerTest.cpp
+    app/ScreenCaptureControllerTest.cpp
 )
 
 target_link_libraries(cs_app_tests

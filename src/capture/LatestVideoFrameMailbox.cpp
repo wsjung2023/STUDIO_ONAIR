@@ -11,6 +11,8 @@ void LatestVideoFrameMailbox::onVideoFrame(media::VideoFrame frame) noexcept {
         return;
     }
     ++stats_.publishedFrames;
+    stats_.lastWidth = frame.width;
+    stats_.lastHeight = frame.height;
     if (pendingFrame_) {
         ++stats_.replacedFrames;
     }
@@ -48,4 +50,3 @@ LatestVideoFrameMailboxStats LatestVideoFrameMailbox::stats() const noexcept {
 }
 
 }  // namespace creator::capture
-

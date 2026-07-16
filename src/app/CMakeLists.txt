@@ -8,6 +8,8 @@ add_library(cs_app STATIC
     IRecordingPersistence.h
     StudioController.h
     StudioController.cpp
+    ScreenCaptureController.h
+    ScreenCaptureController.cpp
     RecentProjectRegistry.h
     RecentProjectRegistry.cpp
     ProjectWorker.h
