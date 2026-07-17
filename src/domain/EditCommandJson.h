@@ -22,6 +22,11 @@ using TrackClips = std::pair<TrackId, std::vector<Clip>>;
 [[nodiscard]] std::string serializeCaptionCue(const CaptionCue& cue);
 [[nodiscard]] std::string serializeGeneratedClip(const Clip& clip);
 [[nodiscard]] std::string serializeClip(const Clip& clip);
+[[nodiscard]] std::string serializeTrack(const Track& track);
+[[nodiscard]] std::string serializeTimelineMarker(const TimelineMarker& marker);
+[[nodiscard]] std::string serializeTracks(const std::vector<Track>& tracks);
+[[nodiscard]] std::string serializeTimelineMarkers(
+    const std::vector<TimelineMarker>& markers);
 [[nodiscard]] std::string serializeTrackClips(
     const std::vector<TrackClips>& tracks);
 

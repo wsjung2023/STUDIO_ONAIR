@@ -4,6 +4,7 @@
 #include "core/Timebase.h"
 #include "domain/DeleteRangeCommand.h"
 #include "domain/GeneratedClipCommands.h"
+#include "domain/ImportRecordingCommand.h"
 #include "domain/SetAudioEnvelopeCommand.h"
 #include "domain/SetVisualTransformCommand.h"
 #include "domain/SplitClipCommand.h"
@@ -40,10 +41,16 @@ using domain::ClipId;
 using domain::CueId;
 using domain::DeleteRangeCommand;
 using domain::MediaKind;
+using domain::MarkerId;
 using domain::RgbaColor;
 using domain::TextAlignment;
 using domain::TimeRange;
 using domain::TrackId;
+using domain::Track;
+using domain::TrackKind;
+using domain::Timeline;
+using domain::TimelineId;
+using domain::TimelineMarker;
 using domain::TitlePayload;
 using domain::TrimEdge;
 using domain::VisualTransform;
@@ -367,6 +374,91 @@ Result<Clip> clip(const Json& value,
     return created;
 }
 
+Result<TrackKind> importTrackKind(const Json& value) {
+    auto kind = textField(value, "kind");
+    if (!kind.hasValue()) return kind.error();
+    if (kind.value() == "VIDEO") return TrackKind::Video;
+    if (kind.value() == "AUDIO") return TrackKind::Audio;
+    return parseError("recording import track kind is unknown");
+}
+
+Result<std::vector<Track>> importTracks(
+    const Json& value, const EditCommandCodec::AssetLoader& assetLoader) {
+    if (!value.is_array()) return parseError("tracks is not an array");
+    auto timeline = Timeline::create(
+        TimelineId::create("import-recording-codec").value(), "Import",
+        core::FrameRate::create(60, 1).value()).value();
+    for (const auto& item : value) {
+        if (auto exact = exactObject(
+                item, {"clips", "enabled", "kind", "locked", "name", "trackId"},
+                "recording import track");
+            !exact.hasValue()) {
+            return exact.error();
+        }
+        auto id = idField<TrackId>(item, "trackId");
+        auto kind = importTrackKind(item);
+        auto name = textField(item, "name");
+        auto enabled = boolField(item, "enabled");
+        auto locked = boolField(item, "locked");
+        if (!id.hasValue()) return id.error();
+        if (!kind.hasValue()) return kind.error();
+        if (!name.hasValue()) return name.error();
+        if (!enabled.hasValue()) return enabled.error();
+        if (!locked.hasValue()) return locked.error();
+        const auto persistedId = id.value();
+        auto track = Track::create(std::move(id).value(), kind.value(),
+                                   std::move(name).value(), enabled.value(), false);
+        if (!track.hasValue()) return parseError(track.error().message());
+        if (auto added = timeline.addTrack(std::move(track).value());
+            !added.hasValue()) {
+            return parseError(added.error().message());
+        }
+        const auto& clips = item.at("clips");
+        if (!clips.is_array()) return parseError("clips is not an array");
+        for (const auto& clipJson : clips) {
+            auto parsed = clip(clipJson, assetLoader);
+            if (!parsed.hasValue()) return parsed.error();
+            if (auto inserted = timeline.insertClip(
+                    persistedId, std::move(parsed).value());
+                !inserted.hasValue()) {
+                return parseError(inserted.error().message());
+            }
+        }
+        if (locked.value()) {
+            if (auto set = timeline.setTrackLocked(persistedId, true);
+                !set.hasValue()) {
+                return parseError(set.error().message());
+            }
+        }
+    }
+    return timeline.tracks();
+}
+
+Result<std::vector<TimelineMarker>> importMarkers(const Json& value) {
+    if (!value.is_array()) return parseError("markers is not an array");
+    std::vector<TimelineMarker> markers;
+    markers.reserve(value.size());
+    for (const auto& item : value) {
+        if (auto exact = exactObject(item, {"id", "label", "positionNs"},
+                                     "recording import marker");
+            !exact.hasValue()) {
+            return exact.error();
+        }
+        auto id = idField<MarkerId>(item, "id");
+        auto label = textField(item, "label");
+        auto position = integerField(item, "positionNs");
+        if (!id.hasValue()) return id.error();
+        if (!label.hasValue()) return label.error();
+        if (!position.hasValue()) return position.error();
+        auto marker = TimelineMarker::create(
+            std::move(id).value(), TimestampNs{DurationNs{position.value()}},
+            std::move(label).value());
+        if (!marker.hasValue()) return parseError(marker.error().message());
+        markers.push_back(std::move(marker).value());
+    }
+    return markers;
+}
+
 Result<std::vector<DeleteRangeCommand::PreviousTrack>> previousTracks(
     const Json& value, const EditCommandCodec::AssetLoader& assetLoader) {
     if (auto exact = exactObject(value, {"tracks"}, "delete undo");
@@ -413,6 +505,31 @@ Result<std::unique_ptr<domain::IEditCommand>> EditCommandCodec::decode(
     try {
         const auto payload = Json::parse(record.payload);
         const auto undo = Json::parse(record.undoPayload);
+        if (record.type == "IMPORT_RECORDING") {
+            if (auto exact = exactObject(
+                    payload, {"markers", "tracks", "version"},
+                    "recording import payload");
+                !exact.hasValue()) {
+                return exact.error();
+            }
+            if (auto exact = exactObject(undo, {}, "recording import undo");
+                !exact.hasValue()) {
+                return exact.error();
+            }
+            auto version = versionOne(payload);
+            if (!version.hasValue()) return version.error();
+            auto tracks = importTracks(payload.at("tracks"), assetLoader_);
+            auto markers = importMarkers(payload.at("markers"));
+            if (!tracks.hasValue()) return tracks.error();
+            if (!markers.hasValue()) return markers.error();
+            auto command = domain::ImportRecordingCommand::rehydrate(
+                record.commandId, std::move(tracks).value(),
+                std::move(markers).value(), applied);
+            if (!command.hasValue()) {
+                return parseError(command.error().message());
+            }
+            return command;
+        }
         if (record.type == "SPLIT_CLIP") {
             if (auto exact = exactObject(
                     payload, {"clipId", "rightClipId", "splitNs", "trackId"},

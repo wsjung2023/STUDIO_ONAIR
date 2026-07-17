@@ -8,6 +8,8 @@ cs_add_qtfree_library(cs_domain
         DeleteRangeCommand.cpp
         GeneratedClipCommands.h
         GeneratedClipCommands.cpp
+        ImportRecordingCommand.h
+        ImportRecordingCommand.cpp
         EditHistory.h
         EditHistory.cpp
         MediaAsset.h

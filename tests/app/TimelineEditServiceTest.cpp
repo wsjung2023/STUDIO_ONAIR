@@ -24,7 +24,21 @@
 #include <string>
 #include <utility>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
+
+std::uint64_t testProcessId() noexcept {
+#ifdef _WIN32
+    return static_cast<std::uint64_t>(::_getpid());
+#else
+    return static_cast<std::uint64_t>(::getpid());
+#endif
+}
 
 namespace fs = std::filesystem;
 
@@ -252,6 +266,7 @@ public:
     TempProject() {
         path_ = fs::temp_directory_path() /
                 ("creator-studio-timeline-service-" +
+                 std::to_string(testProcessId()) + "-" +
                  std::to_string(++nextId_) + ".sqlite3");
         fs::remove(path_);
         EXPECT_TRUE(SqliteProjectDatabase::create(path_, manifest()).hasValue());

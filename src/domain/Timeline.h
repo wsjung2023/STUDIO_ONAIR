@@ -12,6 +12,8 @@
 
 namespace creator::domain {
 
+class ImportRecordingCommand;
+
 enum class TrackKind { Video, Audio, Title, Caption };
 enum class ClipKind { Asset, Title, Caption };
 
@@ -143,9 +145,13 @@ public:
     [[nodiscard]] const std::string& name() const noexcept { return name_; }
     [[nodiscard]] core::FrameRate frameRate() const noexcept { return frameRate_; }
     [[nodiscard]] const std::vector<Track>& tracks() const noexcept { return tracks_; }
+    [[nodiscard]] const std::vector<TimelineMarker>& markers() const noexcept {
+        return markers_;
+    }
     [[nodiscard]] const Track* track(const TrackId& id) const noexcept;
     [[nodiscard]] const Clip* clip(
         const TrackId& trackId, const ClipId& clipId) const noexcept;
+    [[nodiscard]] const TimelineMarker* marker(const MarkerId& id) const noexcept;
 
     [[nodiscard]] core::Result<void> addTrack(Track track);
     [[nodiscard]] core::Result<Track> removeTrack(const TrackId& trackId);
@@ -158,10 +164,15 @@ public:
         const TrackId& trackId, const ClipId& clipId);
     [[nodiscard]] core::Result<void> replaceTrackClips(
         const TrackId& trackId, std::vector<Clip> clips);
+    [[nodiscard]] core::Result<void> addMarker(TimelineMarker marker);
+    [[nodiscard]] core::Result<TimelineMarker> removeMarker(
+        const MarkerId& markerId);
 
     friend bool operator==(const Timeline&, const Timeline&) = default;
 
 private:
+    friend class ImportRecordingCommand;
+
     Timeline(TimelineId id, std::string name, core::FrameRate frameRate)
         : id_(std::move(id)), name_(std::move(name)), frameRate_(frameRate) {}
 
@@ -177,6 +188,7 @@ private:
     std::string name_;
     core::FrameRate frameRate_;
     std::vector<Track> tracks_;
+    std::vector<TimelineMarker> markers_;
 };
 
 }  // namespace creator::domain

@@ -157,6 +157,55 @@ std::string serializeClip(const Clip& clip) {
            ",\"visual\":" + serializeVisualTransform(clip.visualTransform()) + "}";
 }
 
+std::string serializeTrack(const Track& track) {
+    const auto kind = track.kind() == TrackKind::Video
+                          ? "VIDEO"
+                          : (track.kind() == TrackKind::Audio
+                                 ? "AUDIO"
+                                 : (track.kind() == TrackKind::Title ? "TITLE"
+                                                                     : "CAPTION"));
+    std::string clips{"["};
+    for (std::size_t index = 0; index < track.clips().size(); ++index) {
+        if (index != 0) clips.push_back(',');
+        clips += serializeClip(track.clips()[index]);
+    }
+    clips.push_back(']');
+    return "{\"clips\":" + clips +
+           ",\"enabled\":" + (track.enabled() ? "true" : "false") +
+           ",\"kind\":" + serializeJsonString(kind) +
+           ",\"locked\":" + (track.locked() ? "true" : "false") +
+           ",\"name\":" + serializeJsonString(track.name()) +
+           ",\"trackId\":" + serializeJsonString(track.id().value()) + "}";
+}
+
+std::string serializeTimelineMarker(const TimelineMarker& marker) {
+    return "{\"id\":" + serializeJsonString(marker.id().value()) +
+           ",\"label\":" + serializeJsonString(marker.label()) +
+           ",\"positionNs\":" +
+           std::to_string(marker.position().time_since_epoch().count()) + "}";
+}
+
+std::string serializeTracks(const std::vector<Track>& tracks) {
+    std::string json{"["};
+    for (std::size_t index = 0; index < tracks.size(); ++index) {
+        if (index != 0) json.push_back(',');
+        json += serializeTrack(tracks[index]);
+    }
+    json.push_back(']');
+    return json;
+}
+
+std::string serializeTimelineMarkers(
+    const std::vector<TimelineMarker>& markers) {
+    std::string json{"["};
+    for (std::size_t index = 0; index < markers.size(); ++index) {
+        if (index != 0) json.push_back(',');
+        json += serializeTimelineMarker(markers[index]);
+    }
+    json.push_back(']');
+    return json;
+}
+
 std::string serializeTrackClips(const std::vector<TrackClips>& tracks) {
     std::string json{"{\"tracks\":["};
     for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex) {

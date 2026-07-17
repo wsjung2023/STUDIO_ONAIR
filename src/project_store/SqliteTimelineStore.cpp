@@ -33,12 +33,14 @@ using domain::CommandId;
 using domain::CueId;
 using domain::MediaAsset;
 using domain::MediaKind;
+using domain::MarkerId;
 using domain::ProjectId;
 using domain::RgbaColor;
 using domain::TextAlignment;
 using domain::TimeRange;
 using domain::Timeline;
 using domain::TimelineId;
+using domain::TimelineMarker;
 using domain::Track;
 using domain::TrackId;
 using domain::TrackKind;
@@ -513,6 +515,16 @@ Result<std::vector<MediaAsset>> SqliteTimelineStore::assets() {
 }
 
 Result<void> SqliteTimelineStore::writeSnapshot(const Timeline& timeline) {
+    auto deletedMarkers = connection_.prepare(
+        "DELETE FROM markers WHERE timeline_id=?1");
+    if (!deletedMarkers.hasValue()) return deletedMarkers.error();
+    auto deleteMarkerStatement = std::move(deletedMarkers).value();
+    if (auto r = deleteMarkerStatement.bindText(1, timeline.id().value());
+        !r.hasValue()) return r.error();
+    if (auto r = expectDone(deleteMarkerStatement,
+                            "replace timeline markers");
+        !r.hasValue()) return r.error();
+
     auto deleted = connection_.prepare("DELETE FROM tracks WHERE timeline_id=?1");
     if (!deleted.hasValue()) return deleted.error();
     auto deleteStatement = std::move(deleted).value();
@@ -634,6 +646,32 @@ Result<void> SqliteTimelineStore::writeSnapshot(const Timeline& timeline) {
                     if (auto r = expectDone(statement, "insert caption cue"); !r.hasValue()) return r.error();
                 }
             }
+        }
+    }
+
+    for (const auto& marker : timeline.markers()) {
+        auto inserted = connection_.prepare(
+            "INSERT INTO markers(marker_id,timeline_id,position_ns,label) "
+            "VALUES(?1,?2,?3,?4)");
+        if (!inserted.hasValue()) return inserted.error();
+        auto statement = std::move(inserted).value();
+        if (auto r = statement.bindText(1, marker.id().value()); !r.hasValue()) {
+            return r.error();
+        }
+        if (auto r = statement.bindText(2, timeline.id().value()); !r.hasValue()) {
+            return r.error();
+        }
+        if (auto r = statement.bindInt64(
+                3, marker.position().time_since_epoch().count());
+            !r.hasValue()) {
+            return r.error();
+        }
+        if (auto r = statement.bindText(4, marker.label()); !r.hasValue()) {
+            return r.error();
+        }
+        if (auto r = expectDone(statement, "insert timeline marker");
+            !r.hasValue()) {
+            return r.error();
         }
     }
     return core::ok();
@@ -829,6 +867,33 @@ Result<PersistedTimeline> SqliteTimelineStore::loadPrimaryTimeline() {
             if (auto set = timeline.setTrackLocked(persistedId, true); !set.hasValue()) {
                 return corrupt(set.error().message());
             }
+        }
+    }
+
+    auto selectedMarkers = connection_.prepare(
+        "SELECT marker_id,position_ns,label,typeof(position_ns) FROM markers "
+        "WHERE timeline_id=?1 ORDER BY position_ns,marker_id");
+    if (!selectedMarkers.hasValue()) return selectedMarkers.error();
+    auto markerStatement = std::move(selectedMarkers).value();
+    if (auto r = markerStatement.bindText(1, timeline.id().value());
+        !r.hasValue()) return r.error();
+    while (true) {
+        auto markerRow = markerStatement.step();
+        if (!markerRow.hasValue()) return markerRow.error();
+        if (markerRow.value() == SqliteStep::Done) break;
+        if (markerStatement.columnText(3) != "integer") {
+            return corrupt("marker position is not an integer");
+        }
+        auto markerId = MarkerId::create(markerStatement.columnText(0));
+        if (!markerId.hasValue()) return corrupt("marker id is empty");
+        auto marker = TimelineMarker::create(
+            std::move(markerId).value(),
+            TimestampNs{DurationNs{markerStatement.columnInt64(1)}},
+            markerStatement.columnText(2));
+        if (!marker.hasValue()) return corrupt(marker.error().message());
+        if (auto added = timeline.addMarker(std::move(marker).value());
+            !added.hasValue()) {
+            return corrupt(added.error().message());
         }
     }
 

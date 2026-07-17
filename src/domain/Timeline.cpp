@@ -217,6 +217,11 @@ const Clip* Timeline::clip(
     return found == target->clips().end() ? nullptr : &*found;
 }
 
+const TimelineMarker* Timeline::marker(const MarkerId& id) const noexcept {
+    const auto found = std::ranges::find(markers_, id, &TimelineMarker::id);
+    return found == markers_.end() ? nullptr : &*found;
+}
+
 Track* Timeline::mutableTrack(const TrackId& id) noexcept {
     const auto found = std::find_if(tracks_.begin(), tracks_.end(),
                                     [&id](const Track& candidate) {
@@ -332,6 +337,40 @@ core::Result<Track> Timeline::removeTrack(const TrackId& trackId) {
     }
     Track removed = std::move(*found);
     tracks_.erase(found);
+    return removed;
+}
+
+core::Result<void> Timeline::addMarker(TimelineMarker added) {
+    if (marker(added.id()) != nullptr) {
+        return AppError{ErrorCode::AlreadyExists, "marker id already exists"};
+    }
+    if (std::ranges::find(markers_, added.position(),
+                          &TimelineMarker::position) != markers_.end()) {
+        return AppError{ErrorCode::AlreadyExists,
+                        "marker position already exists"};
+    }
+    auto staged = markers_;
+    staged.push_back(std::move(added));
+    std::ranges::sort(staged, [](const TimelineMarker& first,
+                                const TimelineMarker& second) {
+        if (first.position() != second.position()) {
+            return first.position() < second.position();
+        }
+        return first.id() < second.id();
+    });
+    markers_ = std::move(staged);
+    return core::ok();
+}
+
+core::Result<TimelineMarker> Timeline::removeMarker(
+    const MarkerId& markerId) {
+    const auto found = std::ranges::find(markers_, markerId,
+                                         &TimelineMarker::id);
+    if (found == markers_.end()) {
+        return AppError{ErrorCode::NotFound, "timeline marker was not found"};
+    }
+    TimelineMarker removed = std::move(*found);
+    markers_.erase(found);
     return removed;
 }
 

@@ -29,11 +29,13 @@ using creator::domain::CaptionCue;
 using creator::domain::CueId;
 using creator::domain::MediaAsset;
 using creator::domain::MediaKind;
+using creator::domain::MarkerId;
 using creator::domain::RgbaColor;
 using creator::domain::TextAlignment;
 using creator::domain::TimeRange;
 using creator::domain::Timeline;
 using creator::domain::TimelineId;
+using creator::domain::TimelineMarker;
 using creator::domain::TitlePayload;
 using creator::domain::Track;
 using creator::domain::TrackId;
@@ -130,6 +132,44 @@ TEST(TimelineTest, AddsTrackAndKeepsClipOrder) {
     ASSERT_EQ(value.tracks().front().clips().size(), 2U);
     EXPECT_EQ(value.tracks().front().clips()[0].id(), makeClipId("earlier"));
     EXPECT_EQ(value.tracks().front().clips()[1].id(), makeClipId("later"));
+}
+
+TEST(TimelineTest, AddsSortsAndRemovesMarkersByTypedIdentity) {
+    auto value = timeline();
+    const auto later = TimelineMarker::create(
+        MarkerId::create("later").value(), at(20), "Later").value();
+    const auto earlier = TimelineMarker::create(
+        MarkerId::create("earlier").value(), at(10), "Earlier").value();
+
+    ASSERT_TRUE(value.addMarker(later).hasValue());
+    ASSERT_TRUE(value.addMarker(earlier).hasValue());
+    ASSERT_EQ(value.markers().size(), 2U);
+    EXPECT_EQ(value.markers()[0], earlier);
+    EXPECT_EQ(value.marker(later.id()), &value.markers()[1]);
+
+    const auto removed = value.removeMarker(earlier.id());
+    ASSERT_TRUE(removed.hasValue());
+    EXPECT_EQ(removed.value(), earlier);
+    EXPECT_EQ(value.marker(earlier.id()), nullptr);
+}
+
+TEST(TimelineTest, RejectsDuplicateMarkerIdentityAndPositionAtomically) {
+    auto value = timeline();
+    const auto original = TimelineMarker::create(
+        MarkerId::create("marker").value(), at(10), "Original").value();
+    ASSERT_TRUE(value.addMarker(original).hasValue());
+    const auto before = value;
+
+    EXPECT_FALSE(value.addMarker(TimelineMarker::create(
+                         MarkerId::create("marker").value(), at(11), "ID")
+                                     .value())
+                     .hasValue());
+    EXPECT_EQ(value, before);
+    EXPECT_FALSE(value.addMarker(TimelineMarker::create(
+                         MarkerId::create("other").value(), at(10), "Position")
+                                     .value())
+                     .hasValue());
+    EXPECT_EQ(value, before);
 }
 
 TEST(TimelineTest, AllowsTouchingClipsAndRejectsOverlapAtomically) {

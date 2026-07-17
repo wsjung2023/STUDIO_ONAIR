@@ -6,9 +6,32 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace creator::domain {
+
+[[nodiscard]] bool isValidUtf8(std::string_view value) noexcept;
+
+class TimelineMarker final {
+public:
+    [[nodiscard]] static core::Result<TimelineMarker> create(
+        MarkerId id, core::TimestampNs position, std::string label);
+
+    [[nodiscard]] const MarkerId& id() const noexcept { return id_; }
+    [[nodiscard]] core::TimestampNs position() const noexcept { return position_; }
+    [[nodiscard]] const std::string& label() const noexcept { return label_; }
+
+    friend bool operator==(const TimelineMarker&, const TimelineMarker&) = default;
+
+private:
+    TimelineMarker(MarkerId id, core::TimestampNs position, std::string label)
+        : id_(std::move(id)), position_(position), label_(std::move(label)) {}
+
+    MarkerId id_;
+    core::TimestampNs position_;
+    std::string label_;
+};
 
 class TimeRange final {
 public:

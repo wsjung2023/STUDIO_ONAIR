@@ -41,7 +41,21 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
+
+std::uint64_t testProcessId() noexcept {
+#ifdef _WIN32
+    return static_cast<std::uint64_t>(::_getpid());
+#else
+    return static_cast<std::uint64_t>(::getpid());
+#endif
+}
 
 using creator::app::EditorController;
 using creator::app::ProjectController;
@@ -266,6 +280,7 @@ public:
                                       bool lockVideo = false) {
         root_ = fs::temp_directory_path() /
                 ("creator-studio-controller-durable-" +
+                 std::to_string(testProcessId()) + "-" +
                  std::to_string(++nextId_));
         package_ = root_ / fs::path{L"편집-세션.cstudio"};
         std::error_code error;

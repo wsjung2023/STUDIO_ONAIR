@@ -22,10 +22,12 @@ using creator::domain::AudioEnvelope;
 using creator::domain::CaptionCue;
 using creator::domain::ClipId;
 using creator::domain::CueId;
+using creator::domain::MarkerId;
 using creator::domain::PipPreset;
 using creator::domain::RgbaColor;
 using creator::domain::TextAlignment;
 using creator::domain::TimeRange;
+using creator::domain::TimelineMarker;
 using creator::domain::TitlePayload;
 using creator::domain::VisualTransform;
 
@@ -74,6 +76,28 @@ TEST(TimeRangeTest, UsesHalfOpenOverlapSemantics) {
     EXPECT_FALSE(overlaps(touching, first));
     EXPECT_TRUE(overlaps(first, overlapping));
     EXPECT_TRUE(overlaps(overlapping, first));
+}
+
+TEST(TimelineMarkerTest, CreatesUnicodeAndEmptyLabelMarkers) {
+    const auto labelled = TimelineMarker::create(
+        MarkerId::create("marker-1").value(), at(42), "중요 구간");
+    const auto unlabelled = TimelineMarker::create(
+        MarkerId::create("marker-2").value(), at(43), "");
+
+    ASSERT_TRUE(labelled.hasValue());
+    EXPECT_EQ(labelled.value().position(), at(42));
+    EXPECT_EQ(labelled.value().label(), "중요 구간");
+    EXPECT_TRUE(unlabelled.hasValue());
+}
+
+TEST(TimelineMarkerTest, RejectsNegativePositionAndOverlongLabel) {
+    EXPECT_FALSE(TimelineMarker::create(
+                     MarkerId::create("negative").value(), at(-1), "")
+                     .hasValue());
+    EXPECT_FALSE(TimelineMarker::create(
+                     MarkerId::create("long").value(), at(0),
+                     std::string(201, 'x'))
+                     .hasValue());
 }
 
 TEST(VisualTransformTest, CreatesFiniteNormalizedTransform) {

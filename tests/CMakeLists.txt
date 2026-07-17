@@ -42,6 +42,7 @@ add_executable(cs_tests
     domain/MediaAssetTest.cpp
     domain/TimelineTest.cpp
     domain/EditCommandTest.cpp
+    domain/ImportRecordingCommandTest.cpp
     domain/GeneratedEditCommandTest.cpp
     domain/DeleteRangeCommandTest.cpp
     edit_engine/EditEngineTypesTest.cpp

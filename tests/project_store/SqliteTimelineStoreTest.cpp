@@ -6,6 +6,7 @@
 #include "domain/EditCommand.h"
 #include "domain/DeleteRangeCommand.h"
 #include "domain/Identifiers.h"
+#include "domain/ImportRecordingCommand.h"
 #include "domain/MediaAsset.h"
 #include "domain/ProjectManifest.h"
 #include "domain/SplitClipCommand.h"
@@ -47,6 +48,8 @@ using creator::domain::CommandId;
 using creator::domain::CueId;
 using creator::domain::DeleteRangeCommand;
 using creator::domain::EditCommandRecord;
+using creator::domain::ImportRecordingCommand;
+using creator::domain::MarkerId;
 using creator::domain::MediaAsset;
 using creator::domain::MediaKind;
 using creator::domain::ProjectId;
@@ -58,6 +61,7 @@ using creator::domain::TimeRange;
 using creator::domain::TextAlignment;
 using creator::domain::Timeline;
 using creator::domain::TimelineId;
+using creator::domain::TimelineMarker;
 using creator::domain::Track;
 using creator::domain::TrackId;
 using creator::domain::TrackKind;
@@ -157,6 +161,15 @@ Timeline populatedTimeline() {
                                     .value())
                                 .value())
                     .hasValue());
+    return timeline;
+}
+
+Timeline timelineWithMarkers() {
+    auto timeline = populatedTimeline();
+    EXPECT_TRUE(timeline.addMarker(TimelineMarker::create(
+        MarkerId::create("start").value(), at(0), "녹화 시작").value()).hasValue());
+    EXPECT_TRUE(timeline.addMarker(TimelineMarker::create(
+        MarkerId::create("chapter").value(), at(250), "챕터 1").value()).hasValue());
     return timeline;
 }
 
@@ -324,6 +337,147 @@ TEST_F(SqliteTimelineStoreTest, RoundTripsMultitrackSnapshotAcrossReopen) {
     ASSERT_TRUE(loaded.value().cleanCursor.has_value());
     EXPECT_EQ(*loaded.value().cleanCursor, 0U);
     EXPECT_TRUE(loaded.value().events.empty());
+}
+
+TEST_F(SqliteTimelineStoreTest, RoundTripsTimelineMarkersAcrossReopen) {
+    const auto expected = timelineWithMarkers();
+    {
+        auto timelineStore = store();
+        ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+        ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+        ASSERT_TRUE(timelineStore.createTimeline(expected).hasValue());
+    }
+
+    auto reopened = store();
+    const auto loaded = reopened.loadPrimaryTimeline();
+
+    ASSERT_TRUE(loaded.hasValue()) << loaded.error().message();
+    EXPECT_EQ(loaded.value().timeline, expected);
+    ASSERT_EQ(loaded.value().timeline.markers().size(), 2U);
+    EXPECT_EQ(loaded.value().timeline.markers()[1].label(), "챕터 1");
+}
+
+TEST_F(SqliteTimelineStoreTest, RestoresImportRecordingHistoryAcrossReopen) {
+    auto base = Timeline::create(TimelineId::create("main").value(), "Main",
+                                 FrameRate::create(60000, 1001).value())
+                    .value();
+    const auto imported = timelineWithMarkers();
+    auto created = ImportRecordingCommand::create(
+        CommandId::create("import-recording").value(), imported.tracks(),
+        imported.markers());
+    ASSERT_TRUE(created.hasValue());
+    auto command = std::move(created).value();
+    auto snapshot = base;
+    ASSERT_TRUE(command->execute(snapshot).hasValue());
+    const auto record = command->record();
+
+    {
+        auto timelineStore = store();
+        ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+        ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+        ASSERT_TRUE(timelineStore.createTimeline(base).hasValue());
+        ASSERT_TRUE(timelineStore.commitEdit(TimelineCommit{
+            .snapshot = snapshot,
+            .expectedRevision = 0,
+            .event = EditEventRecord{
+                .eventId = "import-recording-event",
+                .kind = EditEventKind::Apply,
+                .command = record,
+                .createdAt = utc("2026-07-17T00:00:01Z")},
+            .historyCount = 1,
+            .historyCursor = 1,
+            .cleanCursor = std::size_t{0}}).hasValue());
+    }
+
+    auto reopened = store();
+    auto session = reopened.loadEditSession(100);
+
+    ASSERT_TRUE(session.hasValue()) << session.error().message();
+    EXPECT_EQ(session.value().persisted.timeline, snapshot);
+    ASSERT_TRUE(session.value().history.undo(
+        session.value().persisted.timeline).hasValue());
+    EXPECT_EQ(session.value().persisted.timeline, base);
+    ASSERT_TRUE(session.value().history.redo(
+        session.value().persisted.timeline).hasValue());
+    EXPECT_EQ(session.value().persisted.timeline, snapshot);
+}
+
+TEST_F(SqliteTimelineStoreTest, RejectsCorruptImportRecordingUndoPayload) {
+    auto base = Timeline::create(TimelineId::create("main").value(), "Main",
+                                 FrameRate::create(60000, 1001).value())
+                    .value();
+    const auto imported = timelineWithMarkers();
+    auto created = ImportRecordingCommand::create(
+        CommandId::create("import-recording-corrupt").value(),
+        imported.tracks(), imported.markers());
+    ASSERT_TRUE(created.hasValue());
+    auto command = std::move(created).value();
+    auto snapshot = base;
+    ASSERT_TRUE(command->execute(snapshot).hasValue());
+
+    auto timelineStore = store();
+    ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.createTimeline(base).hasValue());
+    ASSERT_TRUE(timelineStore.commitEdit(TimelineCommit{
+        .snapshot = snapshot,
+        .expectedRevision = 0,
+        .event = EditEventRecord{
+            .eventId = "corrupt-import-event",
+            .kind = EditEventKind::Apply,
+            .command = command->record(),
+            .createdAt = utc("2026-07-17T00:00:01Z")},
+        .historyCount = 1,
+        .historyCursor = 1,
+        .cleanCursor = std::size_t{0}}).hasValue());
+    auto rawResult = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(rawResult.hasValue());
+    auto raw = std::move(rawResult).value();
+    ASSERT_TRUE(raw.execute(
+        "UPDATE edit_commands SET undo_payload_json="
+        "'{\"unexpected\":true}' WHERE event_id='corrupt-import-event';")
+                    .hasValue());
+
+    const auto history = timelineStore.loadEditHistory(100);
+
+    ASSERT_FALSE(history.hasValue());
+    EXPECT_EQ(history.error().code(), ErrorCode::ParseFailure);
+}
+
+TEST_F(SqliteTimelineStoreTest, RejectsConflictingPersistedMarkerPosition) {
+    auto timelineStore = store();
+    ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.createTimeline(timelineWithMarkers()).hasValue());
+    auto rawResult = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(rawResult.hasValue());
+    auto raw = std::move(rawResult).value();
+    ASSERT_TRUE(raw.execute(
+        "INSERT INTO markers(marker_id,timeline_id,position_ns,label) "
+        "VALUES('conflict','main',0,'conflict');").hasValue());
+
+    const auto loaded = timelineStore.loadPrimaryTimeline();
+
+    ASSERT_FALSE(loaded.hasValue());
+    EXPECT_EQ(loaded.error().code(), ErrorCode::IoFailure);
+}
+
+TEST_F(SqliteTimelineStoreTest, RejectsRealPersistedMarkerPosition) {
+    auto timelineStore = store();
+    ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.createTimeline(timelineWithMarkers()).hasValue());
+    auto rawResult = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(rawResult.hasValue());
+    auto raw = std::move(rawResult).value();
+    ASSERT_TRUE(raw.execute(
+        "UPDATE markers SET position_ns=1.5 WHERE marker_id='chapter';")
+                    .hasValue());
+
+    const auto loaded = timelineStore.loadPrimaryTimeline();
+
+    ASSERT_FALSE(loaded.hasValue());
+    EXPECT_EQ(loaded.error().code(), ErrorCode::IoFailure);
 }
 
 TEST_F(SqliteTimelineStoreTest, RoundTripsGeneratedUnicodeClipsAcrossReopen) {

@@ -79,6 +79,21 @@ std::optional<std::uint8_t> hexByte(char high, char low) noexcept {
 
 }  // namespace
 
+bool isValidUtf8(std::string_view value) noexcept {
+    return utf8CodePointCount(value).has_value();
+}
+
+core::Result<TimelineMarker> TimelineMarker::create(
+    MarkerId id, core::TimestampNs position, std::string label) {
+    const auto labelLength = utf8CodePointCount(label);
+    if (position.time_since_epoch() < core::DurationNs::zero() ||
+        !labelLength.has_value() || *labelLength > 200) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "timeline marker is outside valid bounds"};
+    }
+    return TimelineMarker{std::move(id), position, std::move(label)};
+}
+
 core::Result<TimeRange> TimeRange::create(core::TimestampNs start,
                                           core::DurationNs duration) {
     const auto startCount = start.time_since_epoch().count();

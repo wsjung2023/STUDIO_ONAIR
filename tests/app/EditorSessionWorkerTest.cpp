@@ -19,7 +19,21 @@
 #include <optional>
 #include <string>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
+
+std::uint64_t testProcessId() noexcept {
+#ifdef _WIN32
+    return static_cast<std::uint64_t>(::_getpid());
+#else
+    return static_cast<std::uint64_t>(::getpid());
+#endif
+}
 
 namespace fs = std::filesystem;
 
@@ -174,7 +188,8 @@ public:
     TempPackage() {
         root_ = fs::temp_directory_path() /
                 (fs::path{L"creator-studio-editor-영속-패키지-"} /
-                 std::to_wstring(++nextId_));
+                 (std::to_wstring(testProcessId()) + L"-" +
+                  std::to_wstring(++nextId_)));
         package_ = root_ / fs::path{L"프로젝트.cstudio"};
         std::error_code error;
         fs::remove_all(root_, error);
