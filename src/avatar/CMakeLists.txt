@@ -17,6 +17,8 @@ cs_add_qtfree_library(cs_avatar
         AvatarMotionSerializer.cpp
         AvatarMotionNdjsonSink.h
         AvatarMotionNdjsonSink.cpp
+        PrimaryFaceSelector.h
+        PrimaryFaceSelector.cpp
         openseeface/OpenSeeFaceParser.h
         openseeface/OpenSeeFaceParser.cpp
     DEPENDS

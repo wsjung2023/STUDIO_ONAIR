@@ -80,6 +80,7 @@ add_executable(cs_tests
     avatar/AvatarMotionNdjsonSinkTest.cpp
     avatar/FakeTrackingProviderTest.cpp
     avatar/PipelineTest.cpp
+    avatar/PrimaryFaceSelectorTest.cpp
     avatar/openseeface/OpenSeeFaceParserTest.cpp
     recorder/RecordingTrackTest.cpp
     recorder/DiskSpaceMonitorTest.cpp
