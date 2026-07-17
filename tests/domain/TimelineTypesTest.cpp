@@ -10,6 +10,7 @@
 #include <concepts>
 #include <cstdint>
 #include <limits>
+#include <string>
 
 namespace {
 
@@ -18,8 +19,14 @@ using creator::core::ErrorCode;
 using creator::core::TimestampNs;
 using creator::domain::AssetId;
 using creator::domain::AudioEnvelope;
+using creator::domain::CaptionCue;
 using creator::domain::ClipId;
+using creator::domain::CueId;
+using creator::domain::PipPreset;
+using creator::domain::RgbaColor;
+using creator::domain::TextAlignment;
 using creator::domain::TimeRange;
+using creator::domain::TitlePayload;
 using creator::domain::VisualTransform;
 
 TimestampNs at(std::int64_t nanoseconds) {
@@ -84,6 +91,109 @@ TEST(VisualTransformTest, CreatesFiniteNormalizedTransform) {
     EXPECT_DOUBLE_EQ(created.value().rotationDegrees(), 15.0);
     EXPECT_DOUBLE_EQ(created.value().opacity(), 0.75);
     EXPECT_EQ(created.value().zOrder(), 3);
+}
+
+TEST(PipPresetTest, CreatesAndRecognizesEveryCanonicalPreset) {
+    for (const auto preset : {PipPreset::FullFrame, PipPreset::TopLeft,
+                              PipPreset::TopRight, PipPreset::BottomLeft,
+                              PipPreset::BottomRight}) {
+        const auto created = creator::domain::visualTransformForPipPreset(
+            preset, 16.0 / 9.0, 16.0 / 9.0, 7);
+        ASSERT_TRUE(created.hasValue());
+        EXPECT_EQ(creator::domain::identifyPipPreset(
+                      created.value(), 16.0 / 9.0, 16.0 / 9.0),
+                  preset);
+        EXPECT_EQ(created.value().zOrder(), 7);
+    }
+}
+
+TEST(PipPresetTest, PreservesAspectAndUsesSafeMargins) {
+    const auto created = creator::domain::visualTransformForPipPreset(
+        PipPreset::BottomRight, 4.0 / 3.0, 16.0 / 9.0, 2);
+
+    ASSERT_TRUE(created.hasValue());
+    EXPECT_DOUBLE_EQ(created.value().width(), 0.30);
+    EXPECT_DOUBLE_EQ(created.value().height(), 0.40);
+    EXPECT_DOUBLE_EQ(created.value().x(), 0.66);
+    EXPECT_DOUBLE_EQ(created.value().y(), 0.56);
+}
+
+TEST(PipPresetTest, ManualChangeBecomesCustomAndBadAspectIsRejected) {
+    const auto manual = VisualTransform::create(
+        0.04, 0.04, 0.31, 0.30, 1.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 1.0, 1).value();
+
+    EXPECT_EQ(creator::domain::identifyPipPreset(
+                  manual, 16.0 / 9.0, 16.0 / 9.0),
+              PipPreset::Custom);
+    EXPECT_FALSE(creator::domain::visualTransformForPipPreset(
+                     PipPreset::TopLeft, 0.0, 16.0 / 9.0, 0).hasValue());
+    EXPECT_FALSE(creator::domain::visualTransformForPipPreset(
+                     PipPreset::Custom, 16.0 / 9.0, 16.0 / 9.0, 0).hasValue());
+}
+
+TEST(RgbaColorTest, ParsesAndSerializesOnlyCanonicalRgba) {
+    const auto color = RgbaColor::parse("#1a2b3cff");
+
+    ASSERT_TRUE(color.hasValue());
+    EXPECT_EQ(color.value().red(), 0x1a);
+    EXPECT_EQ(color.value().green(), 0x2b);
+    EXPECT_EQ(color.value().blue(), 0x3c);
+    EXPECT_EQ(color.value().alpha(), 0xff);
+    EXPECT_EQ(color.value().toString(), "#1a2b3cff");
+    EXPECT_FALSE(RgbaColor::parse("#1A2B3CFF").hasValue());
+    EXPECT_FALSE(RgbaColor::parse("#1a2b3c").hasValue());
+    EXPECT_FALSE(RgbaColor::parse("transparent").hasValue());
+}
+
+TEST(TitlePayloadTest, ValidatesUnicodeBoundsAndPlacement) {
+    const auto foreground = RgbaColor::parse("#ffffffff").value();
+    const auto background = RgbaColor::parse("#00000080").value();
+    const auto title = TitlePayload::create(
+        "크리에이터 Studio", "Malgun Gothic", 0.5, 0.9,
+        foreground, background, TextAlignment::Center);
+
+    ASSERT_TRUE(title.hasValue());
+    EXPECT_EQ(title.value().text(), "크리에이터 Studio");
+    EXPECT_FALSE(TitlePayload::create(
+                     "", "Malgun Gothic", 0.5, 0.9,
+                     foreground, background, TextAlignment::Center).hasValue());
+    EXPECT_FALSE(TitlePayload::create(
+                     std::string(513, 'a'), "Malgun Gothic", 0.5, 0.9,
+                     foreground, background, TextAlignment::Center).hasValue());
+    EXPECT_FALSE(TitlePayload::create(
+                     std::string{"\xC0\xAF", 2}, "Malgun Gothic", 0.5, 0.9,
+                     foreground, background, TextAlignment::Center).hasValue());
+    EXPECT_FALSE(TitlePayload::create(
+                     std::string{"\xE2\x82", 2}, "Malgun Gothic", 0.5, 0.9,
+                     foreground, background, TextAlignment::Center).hasValue());
+    EXPECT_FALSE(TitlePayload::create(
+                     "text", "", 0.5, 0.9,
+                     foreground, background, TextAlignment::Center).hasValue());
+    EXPECT_FALSE(TitlePayload::create(
+                     "text", "font", 1.1, 0.9,
+                     foreground, background, TextAlignment::Center).hasValue());
+    EXPECT_FALSE(TitlePayload::create(
+                     "text", "font", 0.5, 0.9, foreground, background,
+                     static_cast<TextAlignment>(99)).hasValue());
+}
+
+TEST(CaptionCueTest, ValidatesUnicodeAndCheckedPositiveRange) {
+    const auto cue = CaptionCue::create(
+        CueId::create("cue-1").value(), DurationNs{10}, DurationNs{20},
+        "안녕하세요");
+
+    ASSERT_TRUE(cue.hasValue());
+    EXPECT_EQ(cue.value().endOffset(), DurationNs{30});
+    EXPECT_FALSE(CaptionCue::create(
+                     CueId::create("cue-2").value(), DurationNs{-1},
+                     DurationNs{20}, "bad").hasValue());
+    EXPECT_FALSE(CaptionCue::create(
+                     CueId::create("cue-3").value(), DurationNs{0},
+                     DurationNs{0}, "bad").hasValue());
+    EXPECT_FALSE(CaptionCue::create(
+                     CueId::create("cue-4").value(), DurationNs{0},
+                     DurationNs{1}, std::string(2001, 'a')).hasValue());
 }
 
 TEST(VisualTransformTest, RejectsInvalidBoundsAndNonFiniteValues) {

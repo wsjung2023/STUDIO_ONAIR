@@ -21,6 +21,38 @@ bool compatible(TrackKind trackKind, const Clip& clip) noexcept {
     return trackKind == TrackKind::Video;
 }
 
+core::Result<std::vector<CaptionCue>> validatedCaptionCues(
+    std::vector<CaptionCue> cues, core::DurationNs clipDuration) {
+    if (cues.empty()) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "caption clip must contain at least one cue"};
+    }
+    std::sort(cues.begin(), cues.end(),
+              [](const CaptionCue& first, const CaptionCue& second) {
+                  if (first.startOffset() != second.startOffset()) {
+                      return first.startOffset() < second.startOffset();
+                  }
+                  return first.id() < second.id();
+              });
+    std::set<CueId> identities;
+    for (std::size_t index = 0; index < cues.size(); ++index) {
+        if (!identities.insert(cues[index].id()).second) {
+            return AppError{ErrorCode::AlreadyExists,
+                            "caption cue id already exists"};
+        }
+        if (cues[index].endOffset() > clipDuration) {
+            return AppError{ErrorCode::InvalidArgument,
+                            "caption cue exceeds its clip"};
+        }
+        if (index > 0 &&
+            cues[index - 1].endOffset() > cues[index].startOffset()) {
+            return AppError{ErrorCode::InvalidArgument,
+                            "caption cues must not overlap"};
+        }
+    }
+    return cues;
+}
+
 }  // namespace
 
 core::Result<Clip> Clip::createAsset(
@@ -42,13 +74,45 @@ core::Result<Clip> Clip::createAsset(
         return AppError{ErrorCode::InvalidArgument,
                         "clip has an audio envelope without an audio stream"};
     }
-    return Clip{std::move(id), asset.id(), asset.kind(), asset.duration(), sourceRange,
+    return Clip{std::move(id), ClipKind::Asset, asset.id(), asset.kind(),
+                asset.audio().has_value(), asset.duration(), sourceRange,
                 timelineRange, enabled, std::move(visualTransform),
-                std::move(audioEnvelope)};
+                std::move(audioEnvelope), std::nullopt, {}};
+}
+
+core::Result<Clip> Clip::createTitle(
+    ClipId id, TimeRange timelineRange, bool enabled, TitlePayload payload,
+    std::optional<VisualTransform> visualTransform) {
+    auto source = TimeRange::create(core::TimestampNs{}, timelineRange.duration());
+    if (!source.hasValue()) return source.error();
+    return Clip{std::move(id), ClipKind::Title, std::nullopt, MediaKind::Image,
+                false, timelineRange.duration(), source.value(), timelineRange,
+                enabled, std::move(visualTransform), std::nullopt,
+                std::move(payload), {}};
+}
+
+core::Result<Clip> Clip::createCaption(
+    ClipId id, TimeRange timelineRange, bool enabled,
+    std::vector<CaptionCue> cues,
+    std::optional<VisualTransform> visualTransform) {
+    auto validated = validatedCaptionCues(std::move(cues),
+                                          timelineRange.duration());
+    if (!validated.hasValue()) return validated.error();
+    auto source = TimeRange::create(core::TimestampNs{}, timelineRange.duration());
+    if (!source.hasValue()) return source.error();
+    return Clip{std::move(id), ClipKind::Caption, std::nullopt,
+                MediaKind::Image, false, timelineRange.duration(),
+                source.value(), timelineRange, enabled,
+                std::move(visualTransform), std::nullopt, std::nullopt,
+                std::move(validated).value()};
 }
 
 core::Result<Clip> Clip::withIdentityAndRanges(
     ClipId id, TimeRange sourceRange, TimeRange timelineRange) const {
+    if (kind_ != ClipKind::Asset || !assetId_.has_value()) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "generated clips cannot be resegmented as media"};
+    }
     if (sourceRange.end().time_since_epoch() > assetDuration_ ||
         sourceRange.duration() != timelineRange.duration()) {
         return AppError{ErrorCode::InvalidArgument,
@@ -60,8 +124,62 @@ core::Result<Clip> Clip::withIdentityAndRanges(
             audioEnvelope_->fadeOut(), timelineRange.duration());
         if (!validated.hasValue()) return validated.error();
     }
-    return Clip{std::move(id), *assetId_, mediaKind_, assetDuration_, sourceRange,
-                timelineRange, enabled_, visualTransform_, audioEnvelope_};
+    return Clip{std::move(id), kind_, assetId_, mediaKind_, hasAudio_,
+                assetDuration_, sourceRange, timelineRange, enabled_,
+                visualTransform_, audioEnvelope_, titlePayload_, captionCues_};
+}
+
+core::Result<Clip> Clip::withVisualTransform(
+    std::optional<VisualTransform> visualTransform) const {
+    if (mediaKind_ == MediaKind::Audio) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "audio clips cannot have a visual transform"};
+    }
+    return Clip{id_, kind_, assetId_, mediaKind_, hasAudio_, assetDuration_,
+                sourceRange_, timelineRange_, enabled_,
+                std::move(visualTransform), audioEnvelope_, titlePayload_,
+                captionCues_};
+}
+
+core::Result<Clip> Clip::withAudioEnvelope(
+    std::optional<AudioEnvelope> audioEnvelope) const {
+    if (audioEnvelope.has_value() && !hasAudio_) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "clip has no audio stream"};
+    }
+    if (audioEnvelope.has_value()) {
+        auto valid = AudioEnvelope::create(
+            audioEnvelope->gainDb(), audioEnvelope->fadeIn(),
+            audioEnvelope->fadeOut(), timelineRange_.duration());
+        if (!valid.hasValue()) return valid.error();
+    }
+    return Clip{id_, kind_, assetId_, mediaKind_, hasAudio_, assetDuration_,
+                sourceRange_, timelineRange_, enabled_, visualTransform_,
+                std::move(audioEnvelope), titlePayload_, captionCues_};
+}
+
+core::Result<Clip> Clip::withTitlePayload(TitlePayload payload) const {
+    if (kind_ != ClipKind::Title) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "only title clips have title payloads"};
+    }
+    return Clip{id_, kind_, assetId_, mediaKind_, hasAudio_, assetDuration_,
+                sourceRange_, timelineRange_, enabled_, visualTransform_,
+                audioEnvelope_, std::move(payload), captionCues_};
+}
+
+core::Result<Clip> Clip::withCaptionCues(
+    std::vector<CaptionCue> cues) const {
+    if (kind_ != ClipKind::Caption) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "only caption clips have caption cues"};
+    }
+    auto validated = validatedCaptionCues(std::move(cues),
+                                          timelineRange_.duration());
+    if (!validated.hasValue()) return validated.error();
+    return Clip{id_, kind_, assetId_, mediaKind_, hasAudio_, assetDuration_,
+                sourceRange_, timelineRange_, enabled_, visualTransform_,
+                audioEnvelope_, titlePayload_, std::move(validated).value()};
 }
 
 core::Result<Track> Track::create(
@@ -117,9 +235,38 @@ bool Timeline::containsClipId(const ClipId& id) const noexcept {
     return false;
 }
 
+bool Timeline::containsCueId(const CueId& id) const noexcept {
+    for (const auto& candidateTrack : tracks_) {
+        for (const auto& candidateClip : candidateTrack.clips()) {
+            const auto found = std::find_if(
+                candidateClip.captionCues().begin(),
+                candidateClip.captionCues().end(),
+                [&id](const CaptionCue& cue) { return cue.id() == id; });
+            if (found != candidateClip.captionCues().end()) return true;
+        }
+    }
+    return false;
+}
+
+bool Timeline::containsCueIdOutsideTrack(
+    const TrackId& trackId, const CueId& id) const noexcept {
+    for (const auto& candidateTrack : tracks_) {
+        if (candidateTrack.id() == trackId) continue;
+        for (const auto& candidateClip : candidateTrack.clips()) {
+            const auto found = std::find_if(
+                candidateClip.captionCues().begin(),
+                candidateClip.captionCues().end(),
+                [&id](const CaptionCue& cue) { return cue.id() == id; });
+            if (found != candidateClip.captionCues().end()) return true;
+        }
+    }
+    return false;
+}
+
 core::Result<void> Timeline::validateClips(
     TrackKind kind, const std::vector<Clip>& clips) {
     std::set<ClipId> identities;
+    std::set<CueId> cueIdentities;
     for (std::size_t index = 0; index < clips.size(); ++index) {
         if (!compatible(kind, clips[index])) {
             return AppError{ErrorCode::InvalidArgument,
@@ -127,6 +274,12 @@ core::Result<void> Timeline::validateClips(
         }
         if (!identities.insert(clips[index].id()).second) {
             return AppError{ErrorCode::AlreadyExists, "clip id already exists"};
+        }
+        for (const auto& cue : clips[index].captionCues()) {
+            if (!cueIdentities.insert(cue.id()).second) {
+                return AppError{ErrorCode::AlreadyExists,
+                                "caption cue id already exists"};
+            }
         }
         if (index > 0) {
             if (overlaps(clips[index - 1].timelineRange(),
@@ -157,6 +310,31 @@ core::Result<void> Timeline::addTrack(Track added) {
     return core::ok();
 }
 
+core::Result<Track> Timeline::removeTrack(const TrackId& trackId) {
+    const auto found = std::find_if(tracks_.begin(), tracks_.end(),
+                                    [&trackId](const Track& candidate) {
+                                        return candidate.id() == trackId;
+                                    });
+    if (found == tracks_.end()) {
+        return AppError{ErrorCode::NotFound, "timeline track was not found"};
+    }
+    if (found->locked()) {
+        return AppError{ErrorCode::InvalidState, "timeline track is locked"};
+    }
+    if (!found->clips().empty()) {
+        return AppError{ErrorCode::InvalidState,
+                        "timeline track must be empty before removal"};
+    }
+    if (found->kind() != TrackKind::Title &&
+        found->kind() != TrackKind::Caption) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "only generated title or caption tracks may be removed"};
+    }
+    Track removed = std::move(*found);
+    tracks_.erase(found);
+    return removed;
+}
+
 core::Result<void> Timeline::insertClip(const TrackId& trackId, Clip clip) {
     auto* target = mutableTrack(trackId);
     if (target == nullptr) {
@@ -167,6 +345,12 @@ core::Result<void> Timeline::insertClip(const TrackId& trackId, Clip clip) {
     }
     if (containsClipId(clip.id())) {
         return AppError{ErrorCode::AlreadyExists, "clip id already exists"};
+    }
+    for (const auto& cue : clip.captionCues()) {
+        if (containsCueId(cue.id())) {
+            return AppError{ErrorCode::AlreadyExists,
+                            "caption cue id already exists"};
+        }
     }
 
     auto staged = target->clips_;
@@ -196,6 +380,12 @@ core::Result<void> Timeline::replaceClip(
     if (replacement.id() != clipId) {
         return AppError{ErrorCode::InvalidArgument,
                         "replacement must preserve the clip identity"};
+    }
+    for (const auto& cue : replacement.captionCues()) {
+        if (containsCueIdOutsideTrack(trackId, cue.id())) {
+            return AppError{ErrorCode::AlreadyExists,
+                            "caption cue id already exists"};
+        }
     }
     auto staged = target->clips_;
     const auto found = std::find_if(staged.begin(), staged.end(),
@@ -257,6 +447,14 @@ core::Result<void> Timeline::replaceTrackClips(
     });
     if (auto valid = validateClips(target->kind(), clips); !valid.hasValue()) {
         return valid.error();
+    }
+    for (const auto& clip : clips) {
+        for (const auto& cue : clip.captionCues()) {
+            if (containsCueIdOutsideTrack(trackId, cue.id())) {
+                return AppError{ErrorCode::AlreadyExists,
+                                "caption cue id already exists"};
+            }
+        }
     }
     for (const auto& candidateTrack : tracks_) {
         if (candidateTrack.id() == trackId) continue;

@@ -22,6 +22,14 @@ public:
         TimeRange timelineRange, bool enabled,
         std::optional<VisualTransform> visualTransform,
         std::optional<AudioEnvelope> audioEnvelope);
+    [[nodiscard]] static core::Result<Clip> createTitle(
+        ClipId id, TimeRange timelineRange, bool enabled,
+        TitlePayload payload,
+        std::optional<VisualTransform> visualTransform);
+    [[nodiscard]] static core::Result<Clip> createCaption(
+        ClipId id, TimeRange timelineRange, bool enabled,
+        std::vector<CaptionCue> cues,
+        std::optional<VisualTransform> visualTransform);
 
     [[nodiscard]] const ClipId& id() const noexcept { return id_; }
     [[nodiscard]] ClipKind kind() const noexcept { return kind_; }
@@ -36,38 +44,62 @@ public:
     [[nodiscard]] const std::optional<AudioEnvelope>& audioEnvelope() const noexcept {
         return audioEnvelope_;
     }
+    [[nodiscard]] const std::optional<TitlePayload>& titlePayload() const noexcept {
+        return titlePayload_;
+    }
+    [[nodiscard]] const std::vector<CaptionCue>& captionCues() const noexcept {
+        return captionCues_;
+    }
+    [[nodiscard]] bool hasAudio() const noexcept { return hasAudio_; }
     [[nodiscard]] core::Result<Clip> withIdentityAndRanges(
         ClipId id, TimeRange sourceRange, TimeRange timelineRange) const;
+    [[nodiscard]] core::Result<Clip> withVisualTransform(
+        std::optional<VisualTransform> visualTransform) const;
+    [[nodiscard]] core::Result<Clip> withAudioEnvelope(
+        std::optional<AudioEnvelope> audioEnvelope) const;
+    [[nodiscard]] core::Result<Clip> withTitlePayload(
+        TitlePayload payload) const;
+    [[nodiscard]] core::Result<Clip> withCaptionCues(
+        std::vector<CaptionCue> cues) const;
 
     friend bool operator==(const Clip&, const Clip&) = default;
 
 private:
-    Clip(ClipId id, AssetId assetId, MediaKind mediaKind,
-         core::DurationNs assetDuration, TimeRange sourceRange,
+    Clip(ClipId id, ClipKind kind, std::optional<AssetId> assetId,
+         MediaKind mediaKind, bool hasAudio, core::DurationNs assetDuration,
+         TimeRange sourceRange,
          TimeRange timelineRange, bool enabled,
          std::optional<VisualTransform> visualTransform,
-         std::optional<AudioEnvelope> audioEnvelope)
+         std::optional<AudioEnvelope> audioEnvelope,
+         std::optional<TitlePayload> titlePayload,
+         std::vector<CaptionCue> captionCues)
         : id_(std::move(id)),
-          kind_(ClipKind::Asset),
+          kind_(kind),
           assetId_(std::move(assetId)),
           mediaKind_(mediaKind),
+          hasAudio_(hasAudio),
           assetDuration_(assetDuration),
           sourceRange_(sourceRange),
           timelineRange_(timelineRange),
           enabled_(enabled),
           visualTransform_(std::move(visualTransform)),
-          audioEnvelope_(std::move(audioEnvelope)) {}
+          audioEnvelope_(std::move(audioEnvelope)),
+          titlePayload_(std::move(titlePayload)),
+          captionCues_(std::move(captionCues)) {}
 
     ClipId id_;
     ClipKind kind_;
     std::optional<AssetId> assetId_;
     MediaKind mediaKind_;
+    bool hasAudio_;
     core::DurationNs assetDuration_;
     TimeRange sourceRange_;
     TimeRange timelineRange_;
     bool enabled_;
     std::optional<VisualTransform> visualTransform_;
     std::optional<AudioEnvelope> audioEnvelope_;
+    std::optional<TitlePayload> titlePayload_;
+    std::vector<CaptionCue> captionCues_;
 };
 
 class Track final {
@@ -116,6 +148,7 @@ public:
         const TrackId& trackId, const ClipId& clipId) const noexcept;
 
     [[nodiscard]] core::Result<void> addTrack(Track track);
+    [[nodiscard]] core::Result<Track> removeTrack(const TrackId& trackId);
     [[nodiscard]] core::Result<void> setTrackLocked(
         const TrackId& trackId, bool locked);
     [[nodiscard]] core::Result<void> insertClip(const TrackId& trackId, Clip clip);
@@ -134,6 +167,9 @@ private:
 
     [[nodiscard]] Track* mutableTrack(const TrackId& id) noexcept;
     [[nodiscard]] bool containsClipId(const ClipId& id) const noexcept;
+    [[nodiscard]] bool containsCueId(const CueId& id) const noexcept;
+    [[nodiscard]] bool containsCueIdOutsideTrack(
+        const TrackId& trackId, const CueId& id) const noexcept;
     [[nodiscard]] static core::Result<void> validateClips(
         TrackKind kind, const std::vector<Clip>& clips);
 

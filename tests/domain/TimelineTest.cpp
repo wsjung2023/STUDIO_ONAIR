@@ -25,11 +25,16 @@ using creator::domain::AudioAssetMetadata;
 using creator::domain::AudioEnvelope;
 using creator::domain::Clip;
 using creator::domain::ClipId;
+using creator::domain::CaptionCue;
+using creator::domain::CueId;
 using creator::domain::MediaAsset;
 using creator::domain::MediaKind;
+using creator::domain::RgbaColor;
+using creator::domain::TextAlignment;
 using creator::domain::TimeRange;
 using creator::domain::Timeline;
 using creator::domain::TimelineId;
+using creator::domain::TitlePayload;
 using creator::domain::Track;
 using creator::domain::TrackId;
 using creator::domain::TrackKind;
@@ -92,6 +97,22 @@ Timeline timeline() {
     return Timeline::create(TimelineId::create("main-timeline").value(), "Main",
                             FrameRate::create(60, 1).value())
         .value();
+}
+
+TitlePayload titlePayload(std::string text = "제목") {
+    return TitlePayload::create(
+               std::move(text), "Malgun Gothic", 0.5, 0.9,
+               RgbaColor::parse("#ffffffff").value(),
+               RgbaColor::parse("#00000080").value(),
+               TextAlignment::Center)
+        .value();
+}
+
+CaptionCue captionCue(std::string id, std::int64_t start,
+                      std::int64_t duration, std::string text) {
+    return CaptionCue::create(CueId::create(std::move(id)).value(),
+                              DurationNs{start}, DurationNs{duration},
+                              std::move(text)).value();
 }
 
 TEST(TimelineTest, AddsTrackAndKeepsClipOrder) {
@@ -219,6 +240,151 @@ TEST(TimelineTest, ReplacesAndRemovesClipByTypedIdentity) {
     ASSERT_TRUE(removed.hasValue());
     EXPECT_EQ(removed.value(), replacement);
     EXPECT_TRUE(value.track(trackId)->clips().empty());
+}
+
+TEST(TimelineTest, CreatesGeneratedClipsWithoutAssetIdentity) {
+    const auto range = TimeRange::create(at(50), DurationNs{30}).value();
+    const auto title = Clip::createTitle(
+        makeClipId("title"), range, true, titlePayload(), std::nullopt);
+    const auto caption = Clip::createCaption(
+        makeClipId("caption"), range, true,
+        {captionCue("cue-1", 0, 10, "첫 문장"),
+         captionCue("cue-2", 10, 20, "둘째 문장")},
+        std::nullopt);
+
+    ASSERT_TRUE(title.hasValue());
+    ASSERT_TRUE(caption.hasValue());
+    EXPECT_FALSE(title.value().assetId().has_value());
+    EXPECT_FALSE(caption.value().assetId().has_value());
+    EXPECT_EQ(title.value().sourceRange().start(), at(0));
+    EXPECT_EQ(title.value().sourceRange().duration(), DurationNs{30});
+    ASSERT_TRUE(title.value().titlePayload().has_value());
+    EXPECT_TRUE(caption.value().captionCues().size() == 2U);
+}
+
+TEST(TimelineTest, SortsCaptionCuesDeterministically) {
+    const auto caption = Clip::createCaption(
+        makeClipId("caption"),
+        TimeRange::create(at(0), DurationNs{30}).value(), true,
+        {captionCue("cue-b", 10, 10, "second"),
+         captionCue("cue-a", 0, 10, "first")},
+        std::nullopt);
+
+    ASSERT_TRUE(caption.hasValue());
+    ASSERT_EQ(caption.value().captionCues().size(), 2U);
+    EXPECT_EQ(caption.value().captionCues()[0].id(),
+              CueId::create("cue-a").value());
+    EXPECT_EQ(caption.value().captionCues()[1].id(),
+              CueId::create("cue-b").value());
+}
+
+TEST(TimelineTest, RejectsCaptionCueOutsideClipAndOverlap) {
+    const auto range = TimeRange::create(at(0), DurationNs{20}).value();
+
+    const auto outside = Clip::createCaption(
+        makeClipId("outside"), range, true,
+        {captionCue("cue-1", 10, 11, "outside")}, std::nullopt);
+    const auto overlap = Clip::createCaption(
+        makeClipId("overlap"), range, true,
+        {captionCue("cue-1", 0, 11, "one"),
+         captionCue("cue-2", 10, 10, "two")},
+        std::nullopt);
+
+    EXPECT_FALSE(outside.hasValue());
+    EXPECT_FALSE(overlap.hasValue());
+}
+
+TEST(TimelineTest, InsertsGeneratedClipsOnlyOnCompatibleTracks) {
+    auto value = timeline();
+    const auto titleTrack = makeTrackId("title-1");
+    const auto videoTrack = makeTrackId("video-1");
+    ASSERT_TRUE(value.addTrack(
+                         Track::create(titleTrack, TrackKind::Title,
+                                       "Titles", true, false).value()).hasValue());
+    ASSERT_TRUE(value.addTrack(
+                         Track::create(videoTrack, TrackKind::Video,
+                                       "Video", true, false).value()).hasValue());
+    const auto generated = Clip::createTitle(
+        makeClipId("title"),
+        TimeRange::create(at(0), DurationNs{30}).value(), true,
+        titlePayload(), std::nullopt).value();
+
+    ASSERT_TRUE(value.insertClip(titleTrack, generated).hasValue());
+    const auto wrong = value.insertClip(videoTrack, Clip::createTitle(
+        makeClipId("title-2"),
+        TimeRange::create(at(40), DurationNs{30}).value(), true,
+        titlePayload(), std::nullopt).value());
+    EXPECT_FALSE(wrong.hasValue());
+}
+
+TEST(TimelineTest, ReplacesGeneratedPayloadAndRejectsWrongKind) {
+    const auto range = TimeRange::create(at(0), DurationNs{30}).value();
+    const auto title = Clip::createTitle(
+        makeClipId("title"), range, true, titlePayload(), std::nullopt).value();
+
+    const auto edited = title.withTitlePayload(titlePayload("바뀐 제목"));
+    ASSERT_TRUE(edited.hasValue());
+    EXPECT_EQ(edited.value().titlePayload()->text(), "바뀐 제목");
+    EXPECT_FALSE(title.withCaptionCues(
+        {captionCue("cue-1", 0, 10, "wrong")}).hasValue());
+}
+
+TEST(TimelineTest, RemovesOnlyEmptyUnlockedTracks) {
+    auto value = timeline();
+    const auto emptyTrack = makeTrackId("title-1");
+    const auto populatedTrack = makeTrackId("title-2");
+    ASSERT_TRUE(value.addTrack(Track::create(
+        emptyTrack, TrackKind::Title, "Titles", true, false).value()).hasValue());
+    ASSERT_TRUE(value.addTrack(Track::create(
+        populatedTrack, TrackKind::Title, "Titles 2", true, false).value()).hasValue());
+    ASSERT_TRUE(value.insertClip(
+        populatedTrack,
+        Clip::createTitle(makeClipId("title"),
+                          TimeRange::create(at(0), DurationNs{30}).value(),
+                          true, titlePayload(), std::nullopt).value()).hasValue());
+
+    const auto removed = value.removeTrack(emptyTrack);
+    ASSERT_TRUE(removed.hasValue());
+    EXPECT_EQ(removed.value().id(), emptyTrack);
+    EXPECT_FALSE(value.removeTrack(populatedTrack).hasValue());
+    EXPECT_EQ(value.tracks().size(), 1U);
+}
+
+TEST(TimelineTest, RejectsDuplicateCueIdsAcrossCaptionClips) {
+    auto value = timeline();
+    const auto captionTrack = makeTrackId("caption-1");
+    ASSERT_TRUE(value.addTrack(Track::create(
+        captionTrack, TrackKind::Caption, "Captions", true, false).value()).hasValue());
+    ASSERT_TRUE(value.insertClip(
+        captionTrack,
+        Clip::createCaption(
+            makeClipId("caption-a"),
+            TimeRange::create(at(0), DurationNs{10}).value(), true,
+            {captionCue("shared-cue", 0, 10, "one")}, std::nullopt).value()).hasValue());
+
+    const auto duplicate = value.insertClip(
+        captionTrack,
+        Clip::createCaption(
+            makeClipId("caption-b"),
+            TimeRange::create(at(20), DurationNs{10}).value(), true,
+            {captionCue("shared-cue", 0, 10, "two")}, std::nullopt).value());
+
+    ASSERT_FALSE(duplicate.hasValue());
+    EXPECT_EQ(duplicate.error().code(), ErrorCode::AlreadyExists);
+    EXPECT_EQ(value.track(captionTrack)->clips().size(), 1U);
+}
+
+TEST(TimelineTest, RemoveTrackIsLimitedToGeneratedTrackKinds) {
+    auto value = timeline();
+    const auto videoTrack = makeTrackId("video-1");
+    ASSERT_TRUE(value.addTrack(Track::create(
+        videoTrack, TrackKind::Video, "Video", true, false).value()).hasValue());
+
+    const auto removed = value.removeTrack(videoTrack);
+
+    ASSERT_FALSE(removed.hasValue());
+    EXPECT_EQ(removed.error().code(), ErrorCode::InvalidArgument);
+    EXPECT_NE(value.track(videoTrack), nullptr);
 }
 
 }  // namespace
