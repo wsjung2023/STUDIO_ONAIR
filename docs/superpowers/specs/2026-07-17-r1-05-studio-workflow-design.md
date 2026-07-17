@@ -1,15 +1,15 @@
-# R1-06 Studio Scene, Source, and Recording Integration Design
+# R1-05 Studio Scene, Source, and Recording Integration Design
 
 ## Scope and product boundary
 
-R1-06 implements delivery item 6 of the approved R1 design without reducing the
+R1-05 implements delivery item 5 of the approved R1 design without reducing the
 product to a UI-only scene mockup. A user can persist project scenes, arrange
 screen and camera sources, switch scenes while recording, place recording
 markers, use configurable shortcuts, monitor a truthful recording HUD, and see a
 completed source-separated recording appear as editable timeline clips.
 
-R1-06 does not add export. Revision-frozen H.264 export is R1-07, and the final
-30-minute capture-edit-export gate is R1-08. R1-06 nevertheless performs physical
+R1-05 does not add export. Revision-frozen H.264 export is R1-06, and the final
+30-minute capture-edit-export gate is R1-07. R1-05 nevertheless performs physical
 recording-to-timeline acceptance so those later items do not inherit an untested
 import boundary.
 
@@ -264,7 +264,7 @@ order, keyboard activation, disabled-state explanation, and layout coverage at
 
 ## Commercial OSS boundary
 
-R1-06 adds no third-party library. It reuses Qt Quick/Gui, SQLite, the existing
+R1-05 adds no third-party library. It reuses Qt Quick/Gui, SQLite, the existing
 audited FFmpeg dynamic build for in-process probing, and existing capture/MLT
 boundaries. No external `ffprobe`/`melt`, GPL MLT module, GPL-enabled FFmpeg, web
 runtime, account service, or cloud dependency is introduced. Engineering license
@@ -301,4 +301,4 @@ reconciliation failures repeat without partial imports or locked files.
 
 The fresh Windows `/W4 /permissive- /utf-8 /WX` build, complete sequential CTest,
 shipping dependency/runtime audit, app responsiveness probe, placeholder scan,
-and independent review remain mandatory before R1-06 is marked complete.
+and independent review remain mandatory before R1-05 is marked complete.

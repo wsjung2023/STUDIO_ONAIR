@@ -101,15 +101,26 @@
   - MLT 7.40.0 core/avformat runtime-only staging and SHA-256 verification
   - real multitrack composite/audio-mix graph, seek, bounded async playback
   - Unicode package and physical tamper acceptance coverage
-- [x] R1-04 영속 split/trim/lift/ripple 편집, Undo/Redo·명시적 저장,
-  선택·범위 UI와 실제 `.cstudio` 재열기/실패 원자성 검증
-- [x] R1-05 영속 화면·카메라 transform, 오디오 gain/fade, 한글 제목·기본
-  자막과 실제 MLT preview, 재열기·실패 원자성·30분 그래프 물리 검증
-- [ ] Studio 장면/source 편집과 녹화 결과의 타임라인 연결
-- [ ] H.264 MP4 export와 30분 실제 촬영·편집·출력 R1 최종 물리 검증
+- [x] R1-04 화면 구성 편집
+  - 영속 split/trim/lift/ripple 편집, Undo/Redo·명시적 저장
+  - 화면·카메라 transform, 오디오 gain/fade, 한글 제목·기본 자막
+  - 실제 MLT preview, `.cstudio` 재열기·실패 원자성·30분 그래프 물리 검증
+- [x] R1-05 Studio 실사용 기능
+  - scene/source 패널, 장면 전환, 마커·단축키, 녹화 HUD
+  - source 분리 녹화 결과의 원자적 타임라인 연결·복구·정확한 재열기
+- [ ] R1-06 Export
+  - H.264 MP4, 1080p·4K, 하드웨어 인코더 탐지와 소프트웨어 폴백
+  - 진행률·취소·실패 복구
+- [ ] R1-07 전체 검증
+  - 30분 실제 촬영·편집·MP4 출력과 A/V 동기 검증
 
 위 체크는 R1을 축소한 것이 아니다. R1 완료 기준은 아래 Studio, Editor,
 Export 항목과 30분 실제 촬영·편집·출력 검증을 모두 만족할 때까지 유지한다.
+
+번호 기준은 위 R1-01~R1-07이 유일한 기준이다. 과거 구현 문서의
+`R1-05 effects/titles`와 `R1-06 Studio` 표기는 내부 작업을 별도 릴리스처럼
+번호 매긴 기록상의 오류이며, 각각 공식 R1-04와 R1-05 범위로 해석한다.
+R1-08 단계는 없다.
 
 ### Studio
 

@@ -1,4 +1,4 @@
-# R1-06 Studio Scene, Source, and Recording Integration Implementation Plan
+# R1-05 Studio Scene, Source, and Recording Integration Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -18,7 +18,7 @@ GoogleTest.
 
 ## Global Constraints
 
-- Do not reduce R1-06 to UI-only scene state; every accepted scene switch and
+- Do not reduce R1-05 to UI-only scene state; every accepted scene switch and
   marker must survive reopen and affect the imported timeline.
 - Preserve independent screen, camera, microphone, and system-audio recordings;
   do not add a second program-output encode.
@@ -846,7 +846,7 @@ Expected: all pass with zero QML warnings.
 
 Run `build/windows-debug/creator_studio.exe`, create/open a Unicode project, and
 verify Home→Studio→Editor navigation, scene/source controls, inspector validation,
-shortcut editor, and honest unsupported-capture labels. Save only new R1-06
+  shortcut editor, and honest unsupported-capture labels. Save only new R1-05
 evidence images under `docs/superpowers/reports/assets/`; never overwrite the
 three untracked root images.
 
@@ -871,7 +871,7 @@ git commit -m "feat(studio-ui): deliver scene workflow and recording hud"
   source recording reconciliation, failures, reopen, MLT pixels/PCM, UI
   responsiveness, parallel paths, and resource cleanup.
 
-- [ ] **Step 1: Implement the real multi-source workflow acceptance**
+- [x] **Step 1: Implement the real multi-source workflow acceptance**
 
 Use a real Unicode `.cstudio`, SQLite, `FfmpegLiveRecordingEngine` with
 deterministic fake live-capture bindings that encode real media segments, Studio
@@ -881,7 +881,7 @@ destroy all objects, reopen, compare exact rows/models/assets/tracks/split clips
 transforms/markers, request representative scene frames and mixed PCM, undo/redo
 the composite import, and prove a second reconcile is byte-equal no-op.
 
-- [ ] **Step 2: Implement repeated failure and cleanup acceptance**
+- [x] **Step 2: Implement repeated failure and cleanup acceptance**
 
 Repeat SQLite prepare/switch/marker/import failure, media probe failure,
 missing/replaced/reparse media, stale callback, and controller destruction. Assert
@@ -889,16 +889,16 @@ zero partial import, recoverable completed recording, successful retry where
 valid, and package removal after every process-local object dies. Use PID-qualified
 temp roots and per-discovered-test 60-second CTest deadlines.
 
-- [ ] **Step 3: Prove responsiveness and bounded scale**
+- [x] **Step 3: Prove responsiveness and bounded scale**
 
 Accelerate a 30-minute planner/store fixture with 120 contiguous 15-second
 segments, 60 scene switches, and 300 markers. Drive actual Studio and Editor
 worker paths, record probe/plan/
 transaction/graph/frame timings, maximum UI gap, branch/clip counts, handle count,
 and working-set delta. Require maximum UI gap below 250 ms and preserve the
-R1-05 graph/frame/memory budgets.
+the existing graph/frame/memory budgets.
 
-- [ ] **Step 4: Run focused acceptance five times in parallel-capable mode**
+- [x] **Step 4: Run focused acceptance five times in parallel-capable mode**
 
 Run source scan and `git diff --check`, then:
 
@@ -913,7 +913,7 @@ Run source scan and `git diff --check`, then:
 Expected: every discovered physical test passes all five repetitions with no
 skips/disabled tests, package collision, lock, or deadline overrun.
 
-- [ ] **Step 5: Run fresh `/WX` build, full CTest, app, and shipping audits**
+- [x] **Step 5: Run fresh `/WX` build, full CTest, app, and shipping audits**
 
 Configure a fresh `build/windows-r1-06-audit` against the stable
 `build/mlt/prefix` with tests and MLT enabled and warnings as errors. Build every
@@ -923,11 +923,11 @@ forbidden modules/processes, and MLT/FFmpeg manifests. Expected: zero compiler
 warnings, zero test failures/skips, no test/fake link input, no external
 `ffprobe`/`melt`, and only audited dynamic runtime files.
 
-- [ ] **Step 6: Independent review and closure**
+- [x] **Step 6: Independent review and closure**
 
 Use `superpowers:requesting-code-review`, fix every confirmed finding with a
 regression test, rerun focused plus complete gates, write exact evidence and
-platform/license limits, and mark only R1-06 complete.
+platform/license limits, and mark only R1-05 complete.
 
 - [ ] **Step 7: Commit and integrate**
 
@@ -940,4 +940,4 @@ git commit -m "docs(r1-06): record studio workflow verification"
 
 Use `superpowers:finishing-a-development-branch` to fast-forward into
 `feat/r1-usable-recorder-editor`, preserve user files, run the full integrated
-gate again, clean the owned worktree/branch, and continue directly to R1-07.
+gate again, clean the owned worktree/branch, and continue directly to R1-06.
