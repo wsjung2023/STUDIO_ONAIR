@@ -10,15 +10,24 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace creator::project_store {
 
+class IProjectDatabaseIdentityLease {
+public:
+    [[nodiscard]] virtual core::Result<void> verifyCurrentIdentity() const = 0;
+    virtual ~IProjectDatabaseIdentityLease() = default;
+};
+
 struct OpenProjectResult final {
     ProjectPackage package;
     std::vector<RecoveryCandidate> recoveryCandidates;
+    std::filesystem::path databasePath;
+    std::shared_ptr<const IProjectDatabaseIdentityLease> databaseIdentityLease;
 };
 
 class IProjectPackageStore {

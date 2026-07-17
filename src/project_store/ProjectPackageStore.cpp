@@ -21,6 +21,8 @@
 #define NOMINMAX
 #include <Windows.h>
 #else
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #ifdef __APPLE__
 #include <stdio.h>
@@ -38,7 +40,153 @@ using core::Result;
 
 struct ValidatedDatabase final {
     ProjectPackage package;
+    fs::path databasePath;
+    std::shared_ptr<const IProjectDatabaseIdentityLease> databaseIdentityLease;
     SqliteProjectDatabase database;
+};
+
+struct ValidatedPackagePaths final {
+    fs::path package;
+    fs::path database;
+};
+
+class ProjectDatabaseIdentityLease final
+    : public IProjectDatabaseIdentityLease {
+public:
+    [[nodiscard]] static Result<
+        std::shared_ptr<const IProjectDatabaseIdentityLease>> acquire(
+        std::filesystem::path path) {
+#ifdef _WIN32
+        HANDLE handle = CreateFileW(
+            path.c_str(), FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            return AppError{ErrorCode::IoFailure,
+                            "validated project database could not be locked"};
+        }
+        BY_HANDLE_FILE_INFORMATION identity{};
+        if (!GetFileInformationByHandle(handle, &identity) ||
+            (identity.dwFileAttributes &
+             (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0 ||
+            identity.nNumberOfLinks != 1) {
+            CloseHandle(handle);
+            return AppError{ErrorCode::InvalidArgument,
+                            "validated project database identity is unsafe"};
+        }
+        return std::shared_ptr<const IProjectDatabaseIdentityLease>{
+            new ProjectDatabaseIdentityLease{std::move(path), handle, identity}};
+#else
+        const int descriptor =
+            ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (descriptor < 0) {
+            return AppError{ErrorCode::IoFailure,
+                            "validated project database could not be locked"};
+        }
+        struct stat identity {};
+        if (fstat(descriptor, &identity) != 0 || !S_ISREG(identity.st_mode) ||
+            identity.st_nlink != 1) {
+            ::close(descriptor);
+            return AppError{ErrorCode::InvalidArgument,
+                            "validated project database identity is unsafe"};
+        }
+        return std::shared_ptr<const IProjectDatabaseIdentityLease>{
+            new ProjectDatabaseIdentityLease{std::move(path), descriptor,
+                                             identity}};
+#endif
+    }
+
+    ProjectDatabaseIdentityLease(const ProjectDatabaseIdentityLease&) = delete;
+    ProjectDatabaseIdentityLease& operator=(const ProjectDatabaseIdentityLease&) =
+        delete;
+    ~ProjectDatabaseIdentityLease() override {
+#ifdef _WIN32
+        if (handle_ != INVALID_HANDLE_VALUE) CloseHandle(handle_);
+#else
+        if (descriptor_ >= 0) ::close(descriptor_);
+#endif
+    }
+
+    [[nodiscard]] Result<void> verifyCurrentIdentity() const override {
+#ifdef _WIN32
+        BY_HANDLE_FILE_INFORMATION held{};
+        if (handle_ == INVALID_HANDLE_VALUE ||
+            !GetFileInformationByHandle(handle_, &held) ||
+            !sameIdentity(held, identity_)) {
+            return changed();
+        }
+        HANDLE current = CreateFileW(
+            path_.c_str(), FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (current == INVALID_HANDLE_VALUE) return changed();
+        BY_HANDLE_FILE_INFORMATION currentIdentity{};
+        const bool valid = GetFileInformationByHandle(current, &currentIdentity) &&
+                           sameIdentity(currentIdentity, identity_);
+        CloseHandle(current);
+        if (!valid) return changed();
+#else
+        struct stat held {};
+        if (descriptor_ < 0 || fstat(descriptor_, &held) != 0 ||
+            !sameIdentity(held)) {
+            return changed();
+        }
+        const int current =
+            ::open(path_.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (current < 0) return changed();
+        struct stat currentIdentity {};
+        const bool valid = fstat(current, &currentIdentity) == 0 &&
+                           sameIdentity(currentIdentity);
+        ::close(current);
+        if (!valid) return changed();
+#endif
+        return core::ok();
+    }
+
+private:
+#ifdef _WIN32
+    ProjectDatabaseIdentityLease(std::filesystem::path path, HANDLE handle,
+                                 BY_HANDLE_FILE_INFORMATION identity)
+        : path_(std::move(path)), handle_(handle), identity_(identity) {}
+
+    [[nodiscard]] static bool sameIdentity(
+        const BY_HANDLE_FILE_INFORMATION& first,
+        const BY_HANDLE_FILE_INFORMATION& second) noexcept {
+        return first.dwVolumeSerialNumber == second.dwVolumeSerialNumber &&
+               first.nFileIndexHigh == second.nFileIndexHigh &&
+               first.nFileIndexLow == second.nFileIndexLow &&
+               first.nNumberOfLinks == 1 &&
+               (first.dwFileAttributes &
+                (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0;
+    }
+#else
+    ProjectDatabaseIdentityLease(std::filesystem::path path, int descriptor,
+                                 const struct stat& identity)
+        : path_(std::move(path)),
+          descriptor_(descriptor),
+          device_(identity.st_dev),
+          inode_(identity.st_ino) {}
+
+    [[nodiscard]] bool sameIdentity(const struct stat& value) const noexcept {
+        return S_ISREG(value.st_mode) && value.st_nlink == 1 &&
+               value.st_dev == device_ && value.st_ino == inode_;
+    }
+#endif
+
+    [[nodiscard]] static AppError changed() {
+        return AppError{ErrorCode::IoFailure,
+                        "project database identity changed while open"};
+    }
+
+    std::filesystem::path path_;
+#ifdef _WIN32
+    HANDLE handle_{INVALID_HANDLE_VALUE};
+    BY_HANDLE_FILE_INFORMATION identity_{};
+#else
+    int descriptor_{-1};
+    dev_t device_{};
+    ino_t inode_{};
+#endif
 };
 
 AppError filesystemError(std::string_view operation, const std::error_code& error) {
@@ -92,8 +240,8 @@ bool isPathInside(const fs::path& parent, const fs::path& child) {
     return true;
 }
 
-Result<fs::path> validatedExistingDatabase(const fs::path& packagePath,
-                                           const fs::path& relativePath) {
+Result<ValidatedPackagePaths> validatedExistingDatabase(
+    const fs::path& packagePath, const fs::path& relativePath) {
     const fs::path candidate = packagePath / relativePath;
     std::error_code ec;
     const fs::file_status status = fs::symlink_status(candidate, ec);
@@ -136,7 +284,8 @@ Result<fs::path> validatedExistingDatabase(const fs::path& packagePath,
         return AppError{ErrorCode::InvalidArgument,
                         "project package database resolves outside the package"};
     }
-    return resolvedDatabase;
+    return ValidatedPackagePaths{.package = resolvedPackage,
+                                 .database = resolvedDatabase};
 }
 
 Result<ValidatedDatabase> openValidatedDatabase(const fs::path& packagePath) {
@@ -147,11 +296,25 @@ Result<ValidatedDatabase> openValidatedDatabase(const fs::path& packagePath) {
     if (!databasePath.hasValue()) return databasePath.error();
     auto existingDatabase = validatedExistingDatabase(packagePath, databasePath.value());
     if (!existingDatabase.hasValue()) return existingDatabase.error();
-    auto database = SqliteProjectDatabase::open(existingDatabase.value(),
-                                                loaded.value().projectId);
+    auto databaseIdentity = ProjectDatabaseIdentityLease::acquire(
+        existingDatabase.value().database);
+    if (!databaseIdentity.hasValue()) return databaseIdentity.error();
+    auto identityVerifier = [lease = databaseIdentity.value()] {
+        return lease->verifyCurrentIdentity();
+    };
+    auto database = SqliteProjectDatabase::open(existingDatabase.value().database,
+                                                loaded.value().projectId,
+                                                identityVerifier);
     if (!database.hasValue()) return database.error();
+    if (auto identity = databaseIdentity.value()->verifyCurrentIdentity();
+        !identity.hasValue()) {
+        return identity.error();
+    }
     return ValidatedDatabase{
-        .package = ProjectPackage{.path = packagePath, .manifest = loaded.value()},
+        .package = ProjectPackage{.path = existingDatabase.value().package,
+                                  .manifest = loaded.value()},
+        .databasePath = existingDatabase.value().database,
+        .databaseIdentityLease = std::move(databaseIdentity).value(),
         .database = std::move(database).value(),
     };
 }
@@ -474,10 +637,13 @@ Result<OpenProjectResult> ProjectPackageStore::open(const fs::path& packagePath)
     auto opened = openValidatedDatabase(packagePath);
     if (!opened.hasValue()) return opened.error();
     auto candidates = opened.value().database.scanRecovery(
-        packagePath, opened.value().package.manifest.name);
+        opened.value().package.path, opened.value().package.manifest.name);
     if (!candidates.hasValue()) return candidates.error();
     return OpenProjectResult{.package = std::move(opened.value().package),
-                             .recoveryCandidates = std::move(candidates).value()};
+                             .recoveryCandidates = std::move(candidates).value(),
+                             .databasePath = std::move(opened.value().databasePath),
+                             .databaseIdentityLease =
+                                 std::move(opened.value().databaseIdentityLease)};
 }
 
 Result<void> ProjectPackageStore::beginRecording(const fs::path& packagePath,

@@ -157,7 +157,13 @@ TEST_F(ProjectPackageStoreTest, CreatePublishesCompletePackageAtOnce) {
     const auto result = store_.create(packagePath_, "강의 프로젝트");
 
     ASSERT_TRUE(result.hasValue()) << result.error().message();
-    EXPECT_EQ(result.value().package.path, packagePath_);
+    EXPECT_EQ(result.value().package.path, fs::canonical(packagePath_));
+    EXPECT_EQ(result.value().databasePath,
+              fs::canonical(packagePath_ / "project.db"));
+    ASSERT_NE(result.value().databaseIdentityLease, nullptr);
+    const auto identity =
+        result.value().databaseIdentityLease->verifyCurrentIdentity();
+    EXPECT_TRUE(identity.hasValue()) << identity.error().message();
     EXPECT_EQ(result.value().package.manifest.name, "강의 프로젝트");
     EXPECT_TRUE(fs::exists(packagePath_ / "manifest.json"));
     EXPECT_TRUE(fs::exists(packagePath_ / "project.db"));

@@ -594,6 +594,35 @@ TEST_F(SqliteTimelineStoreTest, CommitsSnapshotEventAndCursorAtomically) {
     EXPECT_EQ(loaded.value().events[0], event());
 }
 
+TEST_F(SqliteTimelineStoreTest,
+       RejectsAtomicAssetsWithoutImportMetadataBeforeMutation) {
+    auto timelineStore = store();
+    const auto snapshot = Timeline::create(
+                              TimelineId::create("main").value(), "Main",
+                              FrameRate::create(60, 1).value())
+                              .value();
+    ASSERT_TRUE(timelineStore.createTimeline(snapshot).hasValue());
+
+    const auto result = timelineStore.commitEdit(
+        TimelineCommit{.snapshot = snapshot,
+                       .expectedRevision = 0,
+                       .event = event("asset-without-import"),
+                       .historyCount = 1,
+                       .historyCursor = 1,
+                       .cleanCursor = std::size_t{0},
+                       .assetsToInsert = {videoAsset()}});
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    const auto loaded = timelineStore.loadPrimaryTimeline();
+    const auto assets = timelineStore.assets();
+    ASSERT_TRUE(loaded.hasValue());
+    ASSERT_TRUE(assets.hasValue());
+    EXPECT_EQ(loaded.value().revision, 0);
+    EXPECT_TRUE(loaded.value().events.empty());
+    EXPECT_TRUE(assets.value().empty());
+}
+
 TEST_F(SqliteTimelineStoreTest, StaleRevisionLeavesStoredStateUnchanged) {
     auto timelineStore = store();
     ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());

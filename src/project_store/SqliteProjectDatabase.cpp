@@ -352,14 +352,20 @@ Result<SqliteProjectDatabase> SqliteProjectDatabase::create(
 }
 
 Result<SqliteProjectDatabase> SqliteProjectDatabase::open(
-    const std::filesystem::path& databasePath, const ProjectId& expectedProjectId) {
-    auto opened = SqliteConnection::open(databasePath);
+    const std::filesystem::path& databasePath,
+    const ProjectId& expectedProjectId,
+    SqliteConnection::IdentityVerifier identityVerifier) {
+    auto opened = SqliteConnection::open(databasePath, identityVerifier);
     if (!opened.hasValue()) {
         return opened.error();
     }
     auto connection = std::move(opened).value();
     if (auto migrated = MigrationRunner::apply(connection); !migrated.hasValue()) {
         return migrated.error();
+    }
+    if (identityVerifier) {
+        auto identity = identityVerifier();
+        if (!identity.hasValue()) return identity.error();
     }
     auto prepared = connection.prepare("SELECT project_id FROM projects");
     if (!prepared.hasValue()) {
@@ -608,6 +614,91 @@ Result<RecordingSessionRecord> SqliteProjectDatabase::session(const SessionId& s
         .finishedAt = finishedAt,
         .failureReason = failureReason,
     };
+}
+
+Result<std::vector<domain::SegmentInfo>> SqliteProjectDatabase::segments(
+    const SessionId& sessionId) {
+    auto current = session(sessionId);
+    if (!current.hasValue()) return current.error();
+    auto prepared = connection_.prepare(
+        "SELECT source_id,segment_index,start_ns,duration_ns,status,relative_path,"
+        "typeof(segment_index),typeof(start_ns),typeof(duration_ns) "
+        "FROM segments WHERE session_id=?1 "
+        "ORDER BY source_id,segment_index");
+    if (!prepared.hasValue()) return prepared.error();
+    auto statement = std::move(prepared).value();
+    if (auto bound = statement.bindText(1, sessionId.value());
+        !bound.hasValue()) {
+        return bound.error();
+    }
+    std::vector<domain::SegmentInfo> result;
+    while (true) {
+        auto row = statement.step();
+        if (!row.hasValue()) return row.error();
+        if (row.value() == SqliteStep::Done) break;
+        const bool integerStorage =
+            statement.columnText(6) == "integer" &&
+            statement.columnText(7) == "integer" &&
+            (statement.columnIsNull(3) ||
+             statement.columnText(8) == "integer");
+        if (!integerStorage) {
+            return AppError{ErrorCode::IoFailure,
+                            "sqlite segment numeric storage is invalid"};
+        }
+        auto sourceId = SourceId::create(statement.columnText(0));
+        const auto index = statement.columnInt64(1);
+        const auto start = statement.columnInt64(2);
+        const auto duration = statement.columnIsNull(3)
+                                  ? std::optional<std::int64_t>{}
+                                  : std::optional<std::int64_t>{
+                                        statement.columnInt64(3)};
+        const auto statusText = statement.columnText(4);
+        domain::SegmentStatus status;
+        if (statusText == "READY") {
+            status = domain::SegmentStatus::Ready;
+        } else if (statusText == "FAILED") {
+            status = domain::SegmentStatus::Failed;
+        } else if (statusText == "WRITING") {
+            status = domain::SegmentStatus::Writing;
+        } else {
+            return AppError{ErrorCode::IoFailure,
+                            "sqlite segment status is invalid"};
+        }
+        if (!sourceId.hasValue() || index < 0 || start < 0 ||
+            (status == domain::SegmentStatus::Ready && !duration.has_value()) ||
+            (duration.has_value() && *duration < 0) ||
+            status == domain::SegmentStatus::Writing) {
+            return AppError{ErrorCode::IoFailure,
+                            "sqlite segment metadata is invalid"};
+        }
+        result.push_back(domain::SegmentInfo{
+            .index = static_cast<std::uint64_t>(index),
+            .sourceId = std::move(sourceId).value(),
+            .startTime = TimestampNs{core::DurationNs{start}},
+            .duration = duration.has_value() ? core::DurationNs{*duration}
+                                             : core::DurationNs::zero(),
+            .status = status,
+            .relativePath = statement.columnText(5)});
+    }
+    for (std::size_t index = 0; index < result.size(); ++index) {
+        if (result[index].duration > core::DurationNs::zero()) continue;
+        std::optional<TimestampNs> nextStart;
+        for (std::size_t candidate = 0; candidate < result.size(); ++candidate) {
+            if (result[candidate].sourceId == result[index].sourceId &&
+                result[candidate].startTime > result[index].startTime) {
+                if (!nextStart.has_value() || result[candidate].startTime < *nextStart) {
+                    nextStart = result[candidate].startTime;
+                }
+            }
+        }
+        const auto end = nextStart.has_value() ? nextStart : current.value().stoppedAt;
+        if (!end.has_value() || *end <= result[index].startTime) {
+            return AppError{ErrorCode::IoFailure,
+                            "failed segment gap cannot be reconstructed"};
+        }
+        result[index].duration = *end - result[index].startTime;
+    }
+    return result;
 }
 
 Result<void> SqliteProjectDatabase::beginSegment(const SessionId& sessionId,

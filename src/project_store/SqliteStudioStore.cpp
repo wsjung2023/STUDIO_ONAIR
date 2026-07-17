@@ -141,12 +141,18 @@ Result<std::optional<VisualTransform>> readTransform(SqliteStatement& statement)
 
 Result<SqliteStudioStore> SqliteStudioStore::open(
     const std::filesystem::path& databasePath,
-    const domain::ProjectId& expectedProjectId) {
-    auto opened = internal::SqliteConnection::open(databasePath);
+    const domain::ProjectId& expectedProjectId,
+    internal::SqliteConnection::IdentityVerifier identityVerifier) {
+    auto opened =
+        internal::SqliteConnection::open(databasePath, identityVerifier);
     if (!opened.hasValue()) return opened.error();
     auto connection = std::move(opened).value();
     if (auto migrated = MigrationRunner::apply(connection); !migrated.hasValue()) {
         return migrated.error();
+    }
+    if (identityVerifier) {
+        auto identity = identityVerifier();
+        if (!identity.hasValue()) return identity.error();
     }
     auto prepared = connection.prepare(
         "SELECT project_id FROM projects WHERE project_id=?1");

@@ -13,7 +13,8 @@ class SqliteStudioStore final : public IStudioStore {
 public:
     [[nodiscard]] static core::Result<SqliteStudioStore> open(
         const std::filesystem::path& databasePath,
-        const domain::ProjectId& expectedProjectId);
+        const domain::ProjectId& expectedProjectId,
+        internal::SqliteConnection::IdentityVerifier identityVerifier = {});
 
     SqliteStudioStore(SqliteStudioStore&&) noexcept = default;
     SqliteStudioStore& operator=(SqliteStudioStore&&) noexcept = default;

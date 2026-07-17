@@ -7,9 +7,11 @@
 #include "domain/Identifiers.h"
 #include "domain/MediaAsset.h"
 #include "domain/Timeline.h"
+#include "project_store/IStudioStore.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -46,6 +48,9 @@ struct TimelineCommit final {
     std::size_t historyCount;
     std::size_t historyCursor;
     std::optional<std::size_t> cleanCursor;
+    std::vector<domain::MediaAsset> assetsToInsert;
+    std::optional<RecordingImportRecord> importRecord;
+    std::function<core::Result<void>()> resourceValidation;
 };
 
 struct PersistedEditSession final {

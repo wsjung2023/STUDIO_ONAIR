@@ -23,7 +23,8 @@ public:
         const domain::ProjectManifest& manifest);
     [[nodiscard]] static core::Result<SqliteProjectDatabase> open(
         const std::filesystem::path& databasePath,
-        const domain::ProjectId& expectedProjectId);
+        const domain::ProjectId& expectedProjectId,
+        internal::SqliteConnection::IdentityVerifier identityVerifier = {});
 
     SqliteProjectDatabase(SqliteProjectDatabase&&) noexcept = default;
     SqliteProjectDatabase& operator=(SqliteProjectDatabase&&) noexcept = default;
@@ -40,6 +41,8 @@ public:
         const domain::SessionId& sessionId, std::string_view reason,
         const core::Utc& finishedAt);
     [[nodiscard]] core::Result<RecordingSessionRecord> session(
+        const domain::SessionId& sessionId);
+    [[nodiscard]] core::Result<std::vector<domain::SegmentInfo>> segments(
         const domain::SessionId& sessionId);
     [[nodiscard]] core::Result<void> beginSegment(
         const domain::SessionId& sessionId, const domain::SegmentInfo& segment);

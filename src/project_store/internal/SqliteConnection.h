@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
 
@@ -42,8 +43,11 @@ private:
 
 class SqliteConnection final {
 public:
+    using IdentityVerifier = std::function<core::Result<void>()>;
+
     [[nodiscard]] static core::Result<SqliteConnection> open(
-        const std::filesystem::path& databasePath);
+        const std::filesystem::path& databasePath,
+        IdentityVerifier identityVerifier = {});
     SqliteConnection(SqliteConnection&& other) noexcept;
     SqliteConnection& operator=(SqliteConnection&& other) noexcept;
     ~SqliteConnection();

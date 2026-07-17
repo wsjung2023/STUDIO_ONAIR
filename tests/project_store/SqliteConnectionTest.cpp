@@ -75,6 +75,34 @@ TEST_F(SqliteConnectionTest, OpensDatabaseBelowNonAsciiPath) {
     EXPECT_EQ(connection.scalarText("PRAGMA quick_check").value(), "ok");
 }
 
+TEST_F(SqliteConnectionTest,
+       VerifiedOpenNeverRecreatesDatabaseRemovedAfterInitialVerification) {
+    {
+        auto created = SqliteConnection::open(databasePath_);
+        ASSERT_TRUE(created.hasValue()) << created.error().message();
+    }
+
+    std::size_t verificationCount = 0;
+    const auto opened = SqliteConnection::open(
+        databasePath_, [&]() -> creator::core::Result<void> {
+            ++verificationCount;
+            if (verificationCount == 1) {
+                std::error_code ec;
+                fs::remove(databasePath_, ec);
+                if (ec) {
+                    return creator::core::AppError{
+                        ErrorCode::IoFailure,
+                        "test database could not be removed"};
+                }
+            }
+            return creator::core::ok();
+        });
+
+    EXPECT_FALSE(opened.hasValue());
+    EXPECT_EQ(verificationCount, 1U);
+    EXPECT_FALSE(fs::exists(databasePath_));
+}
+
 TEST_F(SqliteConnectionTest, PreparedStatementBindsReadsAndResets) {
     auto opened = SqliteConnection::open(databasePath_);
     ASSERT_TRUE(opened.hasValue()) << opened.error().message();

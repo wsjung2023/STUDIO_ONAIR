@@ -180,6 +180,83 @@ TEST_F(SegmentPersistenceTest, CompleteRecordingStoresReadySegmentsAtomically) {
               std::chrono::duration_cast<std::chrono::nanoseconds>(ready.duration).count());
 }
 
+TEST_F(SegmentPersistenceTest,
+       LoadsFailedSegmentGapsFromNextSourceSegmentAndSessionStop) {
+    auto database = activeDatabase();
+    const auto failedFirst = segment(SegmentStatus::Writing, 0);
+    const auto readyMiddle = segment(SegmentStatus::Ready, 1);
+    const auto failedLast = segment(SegmentStatus::Writing, 2);
+    ASSERT_TRUE(database.beginSegment(sessionId_, failedFirst).hasValue());
+    ASSERT_TRUE(database
+                    .markSegmentFailed(sessionId_, failedFirst.sourceId,
+                                       failedFirst.index)
+                    .hasValue());
+    ASSERT_TRUE(database.beginSegment(sessionId_, failedLast).hasValue());
+    ASSERT_TRUE(database
+                    .markSegmentFailed(sessionId_, failedLast.sourceId,
+                                       failedLast.index)
+                    .hasValue());
+    ASSERT_TRUE(database
+                    .completeRecording(
+                        sessionId_, TimestampNs{} + std::chrono::seconds{6},
+                        {readyMiddle}, utc("2026-07-16T10:00:06Z"))
+                    .hasValue());
+
+    const auto loaded = database.segments(sessionId_);
+
+    ASSERT_TRUE(loaded.hasValue()) << loaded.error().message();
+    ASSERT_EQ(loaded.value().size(), 3U);
+    EXPECT_EQ(loaded.value()[0].status, SegmentStatus::Failed);
+    EXPECT_EQ(loaded.value()[0].duration, std::chrono::seconds{2});
+    EXPECT_EQ(loaded.value()[1], readyMiddle);
+    EXPECT_EQ(loaded.value()[2].status, SegmentStatus::Failed);
+    EXPECT_EQ(loaded.value()[2].duration, std::chrono::seconds{2});
+}
+
+TEST_F(SegmentPersistenceTest,
+       ReconstructsLegacyZeroDurationReadySegmentFromSessionStop) {
+    auto database = activeDatabase();
+    auto legacyReady = segment(SegmentStatus::Ready, 0);
+    legacyReady.duration = std::chrono::seconds{0};
+    ASSERT_TRUE(database
+                    .completeRecording(
+                        sessionId_, TimestampNs{} + std::chrono::seconds{2},
+                        {legacyReady}, utc("2026-07-16T10:00:02Z"))
+                    .hasValue());
+
+    const auto loaded = database.segments(sessionId_);
+
+    ASSERT_TRUE(loaded.hasValue()) << loaded.error().message();
+    ASSERT_EQ(loaded.value().size(), 1U);
+    EXPECT_EQ(loaded.value().front().status, SegmentStatus::Ready);
+    EXPECT_EQ(loaded.value().front().duration, std::chrono::seconds{2});
+}
+
+TEST_F(SegmentPersistenceTest, RejectsRealStorageForIntegerSegmentFields) {
+    auto database = activeDatabase();
+    const auto ready = segment(SegmentStatus::Ready);
+    ASSERT_TRUE(database
+                    .completeRecording(
+                        sessionId_, TimestampNs{} + std::chrono::seconds{2},
+                        {ready}, utc("2026-07-16T10:00:02Z"))
+                    .hasValue());
+    auto rawResult = SqliteConnection::open(directory_ / "project.db");
+    ASSERT_TRUE(rawResult.hasValue());
+    auto raw = std::move(rawResult).value();
+
+    for (const std::string column :
+         {"segment_index", "start_ns", "duration_ns"}) {
+        SCOPED_TRACE(column);
+        ASSERT_TRUE(raw.execute("UPDATE segments SET " + column + "=1.5")
+                        .hasValue());
+        const auto loaded = database.segments(sessionId_);
+        ASSERT_FALSE(loaded.hasValue());
+        EXPECT_EQ(loaded.error().code(), ErrorCode::IoFailure);
+        ASSERT_TRUE(raw.execute("UPDATE segments SET " + column + "=1")
+                        .hasValue());
+    }
+}
+
 TEST_F(SegmentPersistenceTest, CompleteRecordingRollsBackAllSegmentsOnConflict) {
     auto database = activeDatabase();
     const auto failed = segment(SegmentStatus::Writing, 0);

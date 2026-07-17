@@ -7,12 +7,15 @@
 #include "domain/ProjectManifest.h"
 #include "domain/DeleteRangeCommand.h"
 #include "domain/GeneratedClipCommands.h"
+#include "domain/ImportRecordingCommand.h"
 #include "domain/SetAudioEnvelopeCommand.h"
 #include "domain/SetVisualTransformCommand.h"
 #include "domain/SplitClipCommand.h"
 #include "domain/TrimClipCommand.h"
 #include "project_store/SqliteProjectDatabase.h"
+#include "project_store/SqliteStudioStore.h"
 #include "project_store/SqliteTimelineStore.h"
+#include "project_store/internal/SqliteConnection.h"
 
 #include <gtest/gtest.h>
 
@@ -61,8 +64,11 @@ using creator::domain::CueId;
 using creator::domain::DeleteRangeCommand;
 using creator::domain::MediaAsset;
 using creator::domain::MediaKind;
+using creator::domain::ImportRecordingCommand;
+using creator::domain::MarkerId;
 using creator::domain::ProjectId;
 using creator::domain::ProjectManifest;
+using creator::domain::SessionId;
 using creator::domain::RgbaColor;
 using creator::domain::SetAudioEnvelopeCommand;
 using creator::domain::SetVisualTransformCommand;
@@ -74,13 +80,16 @@ using creator::domain::TimelineId;
 using creator::domain::Track;
 using creator::domain::TrackId;
 using creator::domain::TrackKind;
+using creator::domain::TimelineMarker;
 using creator::domain::TitlePayload;
 using creator::domain::TrimClipCommand;
 using creator::domain::TrimEdge;
 using creator::domain::VideoAssetMetadata;
 using creator::domain::VisualTransform;
 using creator::project_store::SqliteProjectDatabase;
+using creator::project_store::SqliteStudioStore;
 using creator::project_store::SqliteTimelineStore;
+using creator::project_store::internal::SqliteConnection;
 
 Utc fixedUtc() {
     return Utc::parseRfc3339("2026-07-17T12:00:00Z").value();
@@ -138,6 +147,27 @@ MediaAsset microphoneAsset() {
                "audio/microphone.mka", DurationNs{1'000}, std::nullopt,
                AudioAssetMetadata{.sampleRate = 48'000, .channels = 2}, 8'000,
                "microphone-fingerprint", AssetAvailability::Available)
+        .value();
+}
+
+MediaAsset baselineVideoAsset() {
+    return MediaAsset::create(
+               AssetId::create("baseline-video-asset").value(), MediaKind::Video,
+               "media/baseline-video.mkv", DurationNs{800},
+               VideoAssetMetadata{.width = 1280,
+                                  .height = 720,
+                                  .frameRate = FrameRate::create(60, 1).value()},
+               std::nullopt, 12'000, "baseline-video-fingerprint",
+               AssetAvailability::Available)
+        .value();
+}
+
+MediaAsset baselineAudioAsset() {
+    return MediaAsset::create(
+               AssetId::create("baseline-audio-asset").value(), MediaKind::Audio,
+               "audio/baseline-audio.mka", DurationNs{800}, std::nullopt,
+               AudioAssetMetadata{.sampleRate = 48'000, .channels = 2}, 4'000,
+               "baseline-audio-fingerprint", AssetAvailability::Available)
         .value();
 }
 
@@ -218,6 +248,56 @@ Timeline recordingTimeline() {
                                 microphoneEnvelope)
                                 .value())
                     .hasValue());
+    return timeline;
+}
+
+Timeline rollbackBaselineTimeline() {
+    auto timeline = Timeline::create(TimelineId::create("main").value(),
+                                     "Baseline",
+                                     FrameRate::create(60, 1).value())
+                        .value();
+    const auto videoTrack = TrackId::create("baseline-video-track").value();
+    const auto audioTrack = TrackId::create("baseline-audio-track").value();
+    EXPECT_TRUE(timeline
+                    .addTrack(Track::create(videoTrack, TrackKind::Video,
+                                            "Baseline Video", true, false)
+                                  .value())
+                    .hasValue());
+    EXPECT_TRUE(timeline
+                    .addTrack(Track::create(audioTrack, TrackKind::Audio,
+                                            "Baseline Audio", true, false)
+                                  .value())
+                    .hasValue());
+    const auto full = TimeRange::create(at(0), DurationNs{800}).value();
+    const auto transform = VisualTransform::create(
+        0.1, 0.1, 0.8, 0.8, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0)
+                               .value();
+    const auto envelope =
+        AudioEnvelope::create(-1.0, DurationNs{10}, DurationNs{20},
+                              full.duration())
+            .value();
+    EXPECT_TRUE(timeline
+                    .insertClip(
+                        videoTrack,
+                        Clip::createAsset(
+                            ClipId::create("baseline-video-clip").value(),
+                            baselineVideoAsset(), full, full, true, transform,
+                            std::nullopt)
+                            .value())
+                    .hasValue());
+    EXPECT_TRUE(timeline
+                    .insertClip(
+                        audioTrack,
+                        Clip::createAsset(
+                            ClipId::create("baseline-audio-clip").value(),
+                            baselineAudioAsset(), full, full, true, std::nullopt,
+                            envelope)
+                            .value())
+                    .hasValue());
+    auto marker = TimelineMarker::create(
+        MarkerId::create("baseline-marker").value(), at(200), "Baseline");
+    EXPECT_TRUE(marker.hasValue());
+    EXPECT_TRUE(timeline.addMarker(std::move(marker).value()).hasValue());
     return timeline;
 }
 
@@ -333,6 +413,165 @@ TEST(TimelineEditServiceTest, ExposesDurableHistoryCapabilities) {
     EXPECT_FALSE(service.canUndo());
     EXPECT_TRUE(service.canRedo());
     EXPECT_EQ(service.historyCursor(), 0U);
+}
+
+TEST(TimelineEditServiceTest, ImportsAssetsTimelineAndIdempotencyRowAtomically) {
+    TempProject project;
+    const auto sessionId = SessionId::create("recording-import-session").value();
+    auto databaseResult = SqliteProjectDatabase::open(project.path(), projectId());
+    ASSERT_TRUE(databaseResult.hasValue());
+    auto database = std::move(databaseResult).value();
+    ASSERT_TRUE(database.beginRecording(sessionId, at(0), fixedUtc()).hasValue());
+    ASSERT_TRUE(database.completeRecording(sessionId, at(1'000), {}, fixedUtc())
+                    .hasValue());
+    auto storeResult = SqliteTimelineStore::open(project.path(), projectId());
+    ASSERT_TRUE(storeResult.hasValue());
+    auto store = std::move(storeResult).value();
+    auto empty = Timeline::create(TimelineId::create("main").value(), "Main",
+                                  FrameRate::create(60, 1).value())
+                     .value();
+    ASSERT_TRUE(store.createTimeline(empty).hasValue());
+    SequentialIds ids;
+    auto serviceResult = TimelineEditService::open(
+        store, 100, [&ids] { return ids(); }, [] { return fixedUtc(); });
+    ASSERT_TRUE(serviceResult.hasValue()) << serviceResult.error().message();
+    auto service = std::move(serviceResult).value();
+    auto command = ImportRecordingCommand::create(
+        CommandId::create("import-recording").value(),
+        recordingTimeline().tracks(), {});
+    ASSERT_TRUE(command.hasValue()) << command.error().message();
+    const creator::project_store::RecordingImportRecord record{
+        .sessionId = sessionId,
+        .timelineId = TimelineId::create("main").value(),
+        .base = at(0),
+        .importedRevision = 1,
+        .importedAt = fixedUtc()};
+
+    const auto imported = service.executeRecordingImport(
+        std::move(command).value(),
+        {videoAsset(), cameraAsset(), microphoneAsset()}, record,
+        [] { return creator::core::ok(); });
+
+    ASSERT_TRUE(imported.hasValue()) << imported.error().message();
+    EXPECT_EQ(service.revision(), 1);
+    EXPECT_EQ(service.snapshot().tracks(), recordingTimeline().tracks());
+    ASSERT_EQ(store.assets().value().size(), 3U);
+    auto studioResult = SqliteStudioStore::open(project.path(), projectId());
+    ASSERT_TRUE(studioResult.hasValue());
+    auto studio = std::move(studioResult).value();
+    ASSERT_TRUE(studio.recordingImport(sessionId).value().has_value());
+    EXPECT_EQ(*studio.recordingImport(sessionId).value(), record);
+
+    ASSERT_TRUE(service.undo().hasValue());
+    EXPECT_TRUE(service.snapshot().tracks().empty());
+    EXPECT_EQ(store.assets().value().size(), 3U);
+    EXPECT_TRUE(studio.recordingImport(sessionId).value().has_value());
+    ASSERT_TRUE(service.redo().hasValue());
+    EXPECT_EQ(service.snapshot().tracks(), recordingTimeline().tracks());
+}
+
+TEST(TimelineEditServiceTest, RollsBackEveryRecordingImportStatementBoundary) {
+    const std::vector<std::pair<std::string, std::string>> boundaries{
+        {"media_assets", "INSERT"},
+        {"markers", "DELETE"},
+        {"tracks", "DELETE"},
+        {"clips", "DELETE"},
+        {"clip_visual_transforms", "DELETE"},
+        {"clip_audio_envelopes", "DELETE"},
+        {"tracks", "INSERT"},
+        {"clips", "INSERT"},
+        {"clip_visual_transforms", "INSERT"},
+        {"clip_audio_envelopes", "INSERT"},
+        {"markers", "INSERT"},
+        {"edit_commands", "INSERT"},
+        {"timelines", "UPDATE"},
+        {"edit_checkpoints", "UPDATE"},
+        {"recording_imports", "INSERT"}};
+    for (const auto& [table, operation] : boundaries) {
+        SCOPED_TRACE(table + " " + operation);
+        TempProject project;
+        const auto sessionId =
+            SessionId::create("rollback-" + table).value();
+        auto databaseResult =
+            SqliteProjectDatabase::open(project.path(), projectId());
+        ASSERT_TRUE(databaseResult.hasValue());
+        auto database = std::move(databaseResult).value();
+        ASSERT_TRUE(
+            database.beginRecording(sessionId, at(0), fixedUtc()).hasValue());
+        ASSERT_TRUE(database.completeRecording(sessionId, at(1'000), {},
+                                               fixedUtc())
+                        .hasValue());
+        auto storeResult = SqliteTimelineStore::open(project.path(), projectId());
+        ASSERT_TRUE(storeResult.hasValue());
+        auto store = std::move(storeResult).value();
+        ASSERT_TRUE(store.putAsset(baselineVideoAsset()).hasValue());
+        ASSERT_TRUE(store.putAsset(baselineAudioAsset()).hasValue());
+        const auto baseline = rollbackBaselineTimeline();
+        ASSERT_TRUE(store.createTimeline(baseline).hasValue());
+        const auto beforePersisted = store.loadPrimaryTimeline();
+        const auto beforeAssets = store.assets();
+        ASSERT_TRUE(beforePersisted.hasValue());
+        ASSERT_TRUE(beforeAssets.hasValue());
+        SequentialIds ids;
+        auto serviceResult = TimelineEditService::open(
+            store, 100, [&ids] { return ids(); }, [] { return fixedUtc(); });
+        ASSERT_TRUE(serviceResult.hasValue());
+        auto service = std::move(serviceResult).value();
+        auto rawResult = SqliteConnection::open(project.path());
+        ASSERT_TRUE(rawResult.hasValue());
+        auto raw = std::move(rawResult).value();
+        ASSERT_TRUE(raw.execute(
+                           "CREATE TRIGGER fail_import BEFORE " + operation +
+                           " ON " + table +
+                           " BEGIN SELECT RAISE(ABORT,'injected'); END;")
+                        .hasValue());
+        const auto marker = TimelineMarker::create(
+            MarkerId::create("recording-marker").value(), at(500), "Marker");
+        ASSERT_TRUE(marker.hasValue());
+        auto command = ImportRecordingCommand::create(
+            CommandId::create("import-" + table).value(),
+            recordingTimeline().tracks(), {marker.value()});
+        ASSERT_TRUE(command.hasValue());
+        const creator::project_store::RecordingImportRecord record{
+            .sessionId = sessionId,
+            .timelineId = TimelineId::create("main").value(),
+            .base = at(0),
+            .importedRevision = 1,
+            .importedAt = fixedUtc()};
+
+        const auto failed = service.executeRecordingImport(
+            std::move(command).value(),
+            {videoAsset(), cameraAsset(), microphoneAsset()}, record,
+            [] { return creator::core::ok(); });
+
+        ASSERT_FALSE(failed.hasValue());
+        EXPECT_EQ(service.revision(), 0);
+        EXPECT_EQ(service.snapshot(), baseline);
+        ASSERT_TRUE(store.assets().hasValue());
+        EXPECT_EQ(store.assets().value(), beforeAssets.value());
+        auto persisted = store.loadPrimaryTimeline();
+        ASSERT_TRUE(persisted.hasValue());
+        EXPECT_EQ(persisted.value(), beforePersisted.value());
+        auto studioResult = SqliteStudioStore::open(project.path(), projectId());
+        ASSERT_TRUE(studioResult.hasValue());
+        auto studio = std::move(studioResult).value();
+        ASSERT_TRUE(studio.recordingImport(sessionId).hasValue());
+        EXPECT_FALSE(studio.recordingImport(sessionId).value().has_value());
+
+        ASSERT_TRUE(raw.execute("DROP TRIGGER fail_import;").hasValue());
+        auto retry = ImportRecordingCommand::create(
+            CommandId::create("retry-" + table).value(),
+            recordingTimeline().tracks(), {marker.value()});
+        ASSERT_TRUE(retry.hasValue());
+        const auto retried = service.executeRecordingImport(
+            std::move(retry).value(),
+            {videoAsset(), cameraAsset(), microphoneAsset()}, record,
+            [] { return creator::core::ok(); });
+        ASSERT_TRUE(retried.hasValue()) << retried.error().message();
+        EXPECT_EQ(service.revision(), 1);
+        EXPECT_EQ(store.assets().value().size(), beforeAssets.value().size() + 3U);
+        EXPECT_TRUE(studio.recordingImport(sessionId).value().has_value());
+    }
 }
 
 TEST(TimelineEditServiceTest, ReopensEveryEffectAndGeneratedCommandExactly) {

@@ -6,10 +6,17 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 
 namespace creator::media {
+
+class IMediaIdentityLease {
+public:
+    [[nodiscard]] virtual core::Result<void> verifyCurrentIdentity() const = 0;
+    virtual ~IMediaIdentityLease() = default;
+};
 
 struct MediaProbeResult final {
     core::DurationNs duration;
@@ -19,9 +26,17 @@ struct MediaProbeResult final {
     std::string codecName;
     std::uint64_t byteSize;
     std::string sha256;
+    std::shared_ptr<const IMediaIdentityLease> identityLease;
 
-    friend bool operator==(const MediaProbeResult&,
-                           const MediaProbeResult&) = default;
+    friend bool operator==(const MediaProbeResult& first,
+                           const MediaProbeResult& second) {
+        return first.duration == second.duration && first.video == second.video &&
+               first.audio == second.audio &&
+               first.formatName == second.formatName &&
+               first.codecName == second.codecName &&
+               first.byteSize == second.byteSize &&
+               first.sha256 == second.sha256;
+    }
 };
 
 class IMediaProbe {

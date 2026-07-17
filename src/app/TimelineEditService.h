@@ -4,6 +4,7 @@
 #include "core/Utc.h"
 #include "domain/EditCommand.h"
 #include "domain/EditHistory.h"
+#include "domain/ImportRecordingCommand.h"
 #include "domain/Timeline.h"
 #include "domain/TimelineRevision.h"
 #include "project_store/ITimelineStore.h"
@@ -14,6 +15,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace creator::app {
 
@@ -33,6 +35,11 @@ public:
 
     [[nodiscard]] core::Result<void> execute(
         std::unique_ptr<domain::IEditCommand> command);
+    [[nodiscard]] core::Result<void> executeRecordingImport(
+        std::unique_ptr<domain::ImportRecordingCommand> command,
+        std::vector<domain::MediaAsset> assets,
+        project_store::RecordingImportRecord record,
+        std::function<core::Result<void>()> resourceValidation);
     [[nodiscard]] core::Result<void> undo();
     [[nodiscard]] core::Result<void> redo();
     [[nodiscard]] core::Result<void> markExplicitSave();
@@ -65,7 +72,11 @@ private:
     [[nodiscard]] core::Result<void> persist(
         domain::Timeline stagedTimeline, domain::EditHistory stagedHistory,
         project_store::EditEventKind kind,
-        domain::EditCommandRecord command);
+        domain::EditCommandRecord command,
+        std::vector<domain::MediaAsset> assets = {},
+        std::optional<project_store::RecordingImportRecord> importRecord =
+            std::nullopt,
+        std::function<core::Result<void>()> resourceValidation = {});
 
     project_store::ITimelineStore* store_;
     domain::Timeline timeline_;

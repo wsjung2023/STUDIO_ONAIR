@@ -123,6 +123,7 @@ gtest_discover_tests(cs_tests)
 # Qt on the include path.
 add_executable(cs_app_tests
     app/RecordingImportPlannerTest.cpp
+    app/RecordingTimelineReconcilerTest.cpp
     app/EditorModelsTest.cpp
     app/EditorControllerTest.cpp
     app/EditorSessionWorkerTest.cpp

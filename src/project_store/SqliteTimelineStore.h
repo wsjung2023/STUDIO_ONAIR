@@ -14,7 +14,8 @@ class SqliteTimelineStore final : public ITimelineStore {
 public:
     [[nodiscard]] static core::Result<SqliteTimelineStore> open(
         const std::filesystem::path& databasePath,
-        const domain::ProjectId& expectedProjectId);
+        const domain::ProjectId& expectedProjectId,
+        internal::SqliteConnection::IdentityVerifier identityVerifier = {});
 
     SqliteTimelineStore(SqliteTimelineStore&&) noexcept = default;
     SqliteTimelineStore& operator=(SqliteTimelineStore&&) noexcept = default;
@@ -46,6 +47,8 @@ private:
 
     [[nodiscard]] core::Result<void> writeSnapshot(
         const domain::Timeline& timeline);
+    [[nodiscard]] core::Result<void> insertAsset(
+        const domain::MediaAsset& asset);
     [[nodiscard]] core::Result<domain::EditHistory> decodeHistory(
         const PersistedTimeline& persisted, std::size_t limit);
 

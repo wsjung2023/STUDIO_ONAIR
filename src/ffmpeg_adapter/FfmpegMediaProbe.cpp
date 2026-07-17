@@ -196,7 +196,7 @@ Result<ValidatedMediaPath> validatedMediaPath(
 }
 
 #ifdef _WIN32
-class LockedMediaPath final {
+class LockedMediaPath final : public media::IMediaIdentityLease {
 public:
     LockedMediaPath() = default;
     LockedMediaPath(const LockedMediaPath&) = delete;
@@ -213,6 +213,24 @@ public:
     void add(HANDLE handle) { handles_.push_back(handle); }
     void setByteSize(std::uint64_t byteSize) noexcept { byteSize_ = byteSize; }
     [[nodiscard]] std::uint64_t byteSize() const noexcept { return byteSize_; }
+    [[nodiscard]] Result<void> verifyCurrentIdentity() const override {
+        if (handles_.empty()) {
+            return ioFailure("media identity lease is not active");
+        }
+        BY_HANDLE_FILE_INFORMATION information{};
+        if (!GetFileInformationByHandle(handles_.back(), &information) ||
+            (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ||
+            information.nNumberOfLinks != 1) {
+            return ioFailure("media identity changed before commit");
+        }
+        const ULARGE_INTEGER size{
+            .LowPart = information.nFileSizeLow,
+            .HighPart = information.nFileSizeHigh};
+        if (size.QuadPart != byteSize_) {
+            return ioFailure("media identity changed before commit");
+        }
+        return core::ok();
+    }
 
 private:
     std::vector<HANDLE> handles_;
@@ -348,28 +366,106 @@ Result<std::string> hashPosixDescriptor(int descriptor,
     return hash.finish();
 }
 
-class LockedMediaPath final {
+class LockedMediaPath final : public media::IMediaIdentityLease {
 public:
-    LockedMediaPath(std::FILE* snapshot, std::uint64_t byteSize) noexcept
-        : snapshot_(snapshot), byteSize_(byteSize) {}
+    struct ChangeStamp final {
+        std::int64_t modifiedSeconds;
+        long modifiedNanoseconds;
+        std::int64_t changedSeconds;
+        long changedNanoseconds;
+
+        friend bool operator==(const ChangeStamp&, const ChangeStamp&) = default;
+    };
+
+    [[nodiscard]] static ChangeStamp changeStamp(
+        const struct stat& value) noexcept {
+#ifdef __APPLE__
+        return ChangeStamp{.modifiedSeconds = value.st_mtimespec.tv_sec,
+                           .modifiedNanoseconds = value.st_mtimespec.tv_nsec,
+                           .changedSeconds = value.st_ctimespec.tv_sec,
+                           .changedNanoseconds = value.st_ctimespec.tv_nsec};
+#else
+        return ChangeStamp{.modifiedSeconds = value.st_mtim.tv_sec,
+                           .modifiedNanoseconds = value.st_mtim.tv_nsec,
+                           .changedSeconds = value.st_ctim.tv_sec,
+                           .changedNanoseconds = value.st_ctim.tv_nsec};
+#endif
+    }
+
+    LockedMediaPath(int sourceDescriptor, std::FILE* snapshot,
+                    std::uint64_t byteSize, std::filesystem::path root,
+                    std::filesystem::path relative, dev_t device, ino_t inode,
+                    ChangeStamp changeStamp) noexcept
+        : sourceDescriptor_(sourceDescriptor),
+          snapshot_(snapshot),
+          byteSize_(byteSize),
+          root_(std::move(root)),
+          relative_(std::move(relative)),
+          device_(device),
+          inode_(inode),
+          changeStamp_(changeStamp) {}
     LockedMediaPath(const LockedMediaPath&) = delete;
     LockedMediaPath& operator=(const LockedMediaPath&) = delete;
     LockedMediaPath(LockedMediaPath&& other) noexcept
-        : snapshot_(std::exchange(other.snapshot_, nullptr)),
-          byteSize_(other.byteSize_) {}
+        : sourceDescriptor_(std::exchange(other.sourceDescriptor_, -1)),
+          snapshot_(std::exchange(other.snapshot_, nullptr)),
+          byteSize_(other.byteSize_),
+          root_(std::move(other.root_)),
+          relative_(std::move(other.relative_)),
+          device_(other.device_),
+          inode_(other.inode_),
+          changeStamp_(other.changeStamp_) {}
     LockedMediaPath& operator=(LockedMediaPath&&) = delete;
     ~LockedMediaPath() {
         if (snapshot_ != nullptr) std::fclose(snapshot_);
+        if (sourceDescriptor_ >= 0) close(sourceDescriptor_);
     }
 
     [[nodiscard]] int descriptor() const noexcept {
         return fileno(snapshot_);
     }
     [[nodiscard]] std::uint64_t byteSize() const noexcept { return byteSize_; }
+    [[nodiscard]] Result<void> verifyCurrentIdentity() const override {
+        struct stat held {};
+        if (sourceDescriptor_ < 0 || fstat(sourceDescriptor_, &held) != 0 ||
+            !S_ISREG(held.st_mode) || held.st_nlink != 1 ||
+            held.st_dev != device_ || held.st_ino != inode_ ||
+            held.st_size <= 0 ||
+            static_cast<std::uint64_t>(held.st_size) != byteSize_ ||
+            changeStamp(held) != changeStamp_) {
+            return ioFailure("media identity changed before commit");
+        }
+        auto currentPath = validatedMediaPath(root_, relative_);
+        if (!currentPath.hasValue()) {
+            return ioFailure("media path changed before commit");
+        }
+        const int current = open(currentPath.value().file.c_str(),
+                                 O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (current < 0) {
+            return ioFailure("media path changed before commit");
+        }
+        struct stat currentIdentity {};
+        const bool matches = fstat(current, &currentIdentity) == 0 &&
+                             S_ISREG(currentIdentity.st_mode) &&
+                             currentIdentity.st_nlink == 1 &&
+                             currentIdentity.st_dev == device_ &&
+                             currentIdentity.st_ino == inode_;
+        close(current);
+        if (!matches) {
+            return ioFailure("media path changed before commit");
+        }
+        return core::ok();
+    }
 
 private:
+    int sourceDescriptor_{-1};
     std::FILE* snapshot_{nullptr};
     std::uint64_t byteSize_{0};
+    std::filesystem::path root_;
+    std::filesystem::path relative_;
+    dev_t device_{};
+    ino_t inode_{};
+    ChangeStamp changeStamp_{};
 };
 
 AppError posixOpenFailure(std::string action) {
@@ -469,20 +565,32 @@ Result<LockedMediaPath> lockMediaPath(const ValidatedMediaPath& path,
         }
 
         auto sourceHash = hashPosixDescriptor(opened, byteSize);
+        const auto snapshotHash = copiedHash.finish();
         struct stat finalInformation {};
         const bool identityValid =
             fstat(opened, &finalInformation) == 0 &&
             S_ISREG(finalInformation.st_mode) && finalInformation.st_nlink == 1 &&
-            finalInformation.st_size == information.st_size;
+            finalInformation.st_size == information.st_size &&
+            finalInformation.st_dev == information.st_dev &&
+            finalInformation.st_ino == information.st_ino &&
+            LockedMediaPath::changeStamp(finalInformation) ==
+                LockedMediaPath::changeStamp(information);
         auto finalContainment = verifyDescriptorInsideRoot(opened, path.root);
-        close(opened);
         if (!sourceHash.hasValue() || !identityValid ||
             !finalContainment.hasValue() ||
-            sourceHash.value() != copiedHash.finish()) {
+            sourceHash.value() != snapshotHash) {
             std::fclose(snapshot);
+            close(opened);
             return ioFailure("media file changed while snapshotting");
         }
-        return LockedMediaPath{snapshot, byteSize};
+        return LockedMediaPath{opened,
+                               snapshot,
+                               byteSize,
+                               path.root,
+                               relative,
+                               finalInformation.st_dev,
+                               finalInformation.st_ino,
+                               LockedMediaPath::changeStamp(finalInformation)};
     }
     close(directory);
     return invalid("media path is empty");
@@ -713,6 +821,8 @@ Result<media::MediaProbeResult> FfmpegMediaProbe::probe(
         return parseFailure("media codec or format identity is missing");
     }
 
+    auto identityLease = std::shared_ptr<const media::IMediaIdentityLease>{
+        std::make_shared<LockedMediaPath>(std::move(locked).value())};
     return media::MediaProbeResult{
         .duration = duration.value(),
         .video = std::move(video),
@@ -720,7 +830,8 @@ Result<media::MediaProbeResult> FfmpegMediaProbe::probe(
         .formatName = context->iformat->name,
         .codecName = codec,
         .byteSize = static_cast<std::uint64_t>(size),
-        .sha256 = std::move(hash).value()};
+        .sha256 = std::move(hash).value(),
+        .identityLease = std::move(identityLease)};
 }
 
 }  // namespace creator::ffmpeg_adapter

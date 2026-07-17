@@ -2,6 +2,7 @@
 
 #include "core/AppError.h"
 
+#include <limits>
 #include <utility>
 
 namespace creator::app {
@@ -39,6 +40,37 @@ core::Result<void> TimelineEditService::execute(
     }
     return persist(std::move(stagedTimeline), std::move(stagedHistory),
                    project_store::EditEventKind::Apply, std::move(*record));
+}
+
+core::Result<void> TimelineEditService::executeRecordingImport(
+    std::unique_ptr<domain::ImportRecordingCommand> command,
+    std::vector<domain::MediaAsset> assets,
+    project_store::RecordingImportRecord record,
+    std::function<core::Result<void>()> resourceValidation) {
+    if (command == nullptr || record.timelineId != timeline_.id() ||
+        !resourceValidation ||
+        record.base.time_since_epoch() < core::DurationNs::zero() ||
+        revision_.value() == std::numeric_limits<std::int64_t>::max() ||
+        record.importedRevision != revision_.value() + 1) {
+        return core::AppError{
+            core::ErrorCode::InvalidArgument,
+            "recording import commit metadata is invalid"};
+    }
+    domain::Timeline stagedTimeline = timeline_;
+    domain::EditHistory stagedHistory = history_;
+    if (auto result = stagedHistory.execute(stagedTimeline, std::move(command));
+        !result.hasValue()) {
+        return result.error();
+    }
+    auto commandRecord = stagedHistory.undoRecord();
+    if (!commandRecord.has_value()) {
+        return core::AppError{core::ErrorCode::InvalidState,
+                              "recording import is absent from edit history"};
+    }
+    return persist(std::move(stagedTimeline), std::move(stagedHistory),
+                   project_store::EditEventKind::Apply,
+                   std::move(*commandRecord), std::move(assets),
+                   std::move(record), std::move(resourceValidation));
 }
 
 core::Result<void> TimelineEditService::undo() {
@@ -83,7 +115,10 @@ core::Result<void> TimelineEditService::markExplicitSave() {
 
 core::Result<void> TimelineEditService::persist(
     domain::Timeline stagedTimeline, domain::EditHistory stagedHistory,
-    project_store::EditEventKind kind, domain::EditCommandRecord command) {
+    project_store::EditEventKind kind, domain::EditCommandRecord command,
+    std::vector<domain::MediaAsset> assets,
+    std::optional<project_store::RecordingImportRecord> importRecord,
+    std::function<core::Result<void>()> resourceValidation) {
     const std::string eventId = eventIdFactory_();
     if (eventId.empty()) {
         return core::AppError{core::ErrorCode::InvalidArgument,
@@ -99,7 +134,10 @@ core::Result<void> TimelineEditService::persist(
             .createdAt = clock_()},
         .historyCount = stagedHistory.size(),
         .historyCursor = stagedHistory.cursor(),
-        .cleanCursor = stagedHistory.cleanCursor()};
+        .cleanCursor = stagedHistory.cleanCursor(),
+        .assetsToInsert = std::move(assets),
+        .importRecord = std::move(importRecord),
+        .resourceValidation = std::move(resourceValidation)};
     if (auto committed = store_->commitEdit(commit); !committed.hasValue()) {
         return committed.error();
     }

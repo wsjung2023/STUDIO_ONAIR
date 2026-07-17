@@ -366,12 +366,17 @@ Result<void> bindNullableInt64(SqliteStatement& statement, int index,
 
 Result<SqliteTimelineStore> SqliteTimelineStore::open(
     const std::filesystem::path& databasePath,
-    const ProjectId& expectedProjectId) {
-    auto opened = SqliteConnection::open(databasePath);
+    const ProjectId& expectedProjectId,
+    SqliteConnection::IdentityVerifier identityVerifier) {
+    auto opened = SqliteConnection::open(databasePath, identityVerifier);
     if (!opened.hasValue()) return opened.error();
     auto connection = std::move(opened).value();
     if (auto migrated = MigrationRunner::apply(connection); !migrated.hasValue()) {
         return migrated.error();
+    }
+    if (identityVerifier) {
+        auto identity = identityVerifier();
+        if (!identity.hasValue()) return identity.error();
     }
     auto prepared = connection.prepare("SELECT project_id FROM projects");
     if (!prepared.hasValue()) return prepared.error();
@@ -391,11 +396,18 @@ Result<SqliteTimelineStore> SqliteTimelineStore::open(
 }
 
 Result<void> SqliteTimelineStore::putAsset(const MediaAsset& mediaAsset) {
-    auto fileSize = unsignedToSqlInteger(mediaAsset.fileSize(), "asset file size");
-    if (!fileSize.hasValue()) return fileSize.error();
     auto begun = SqliteTransaction::beginImmediate(connection_);
     if (!begun.hasValue()) return begun.error();
     auto transaction = std::move(begun).value();
+    if (auto inserted = insertAsset(mediaAsset); !inserted.hasValue()) {
+        return inserted.error();
+    }
+    return transaction.commit();
+}
+
+Result<void> SqliteTimelineStore::insertAsset(const MediaAsset& mediaAsset) {
+    auto fileSize = unsignedToSqlInteger(mediaAsset.fileSize(), "asset file size");
+    if (!fileSize.hasValue()) return fileSize.error();
 
     auto prepared = connection_.prepare(
         "INSERT OR IGNORE INTO media_assets(asset_id,project_id,kind,relative_path,duration_ns,"
@@ -437,7 +449,7 @@ Result<void> SqliteTimelineStore::putAsset(const MediaAsset& mediaAsset) {
     if (connection_.changes() == 0) {
         auto existing = asset(mediaAsset.id());
         if (existing.hasValue()) {
-            if (existing.value() == mediaAsset) return transaction.commit();
+            if (existing.value() == mediaAsset) return core::ok();
             return AppError{
                 ErrorCode::AlreadyExists,
                 "media asset identity already has different metadata"};
@@ -467,7 +479,7 @@ Result<void> SqliteTimelineStore::putAsset(const MediaAsset& mediaAsset) {
         }
         return corrupt("media asset insert was ignored without an identity owner");
     }
-    return transaction.commit();
+    return core::ok();
 }
 
 Result<MediaAsset> SqliteTimelineStore::asset(const AssetId& assetId) {
@@ -1105,6 +1117,18 @@ Result<void> SqliteTimelineStore::commitEdit(const TimelineCommit& commit) {
         commit.event.command.payload.empty() || commit.event.command.undoPayload.empty()) {
         return AppError{ErrorCode::InvalidArgument, "timeline commit metadata is invalid"};
     }
+    if (commit.importRecord.has_value()) {
+        const auto& record = *commit.importRecord;
+        if (record.timelineId != commit.snapshot.id() ||
+            record.base.time_since_epoch() < DurationNs::zero() ||
+            record.importedRevision != commit.expectedRevision + 1) {
+            return AppError{ErrorCode::InvalidArgument,
+                            "recording import commit metadata is invalid"};
+        }
+    } else if (!commit.assetsToInsert.empty()) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "atomic asset insertion requires a recording import"};
+    }
     auto historyCount = unsignedToSqlInteger(commit.historyCount, "history count");
     auto historyCursor = unsignedToSqlInteger(commit.historyCursor, "history cursor");
     if (!historyCount.hasValue()) return historyCount.error();
@@ -1119,6 +1143,10 @@ Result<void> SqliteTimelineStore::commitEdit(const TimelineCommit& commit) {
     auto begun = SqliteTransaction::beginImmediate(connection_);
     if (!begun.hasValue()) return begun.error();
     auto transaction = std::move(begun).value();
+    if (commit.resourceValidation) {
+        auto valid = commit.resourceValidation();
+        if (!valid.hasValue()) return valid.error();
+    }
     auto selected = connection_.prepare(
         "SELECT revision FROM timelines WHERE timeline_id=?1 AND project_id=?2");
     if (!selected.hasValue()) return selected.error();
@@ -1137,6 +1165,55 @@ Result<void> SqliteTimelineStore::commitEdit(const TimelineCommit& commit) {
     auto end = selectedStatement.step();
     if (!end.hasValue()) return end.error();
     if (end.value() != SqliteStep::Done) return corrupt("duplicate timeline identity");
+
+    if (commit.importRecord.has_value()) {
+        const auto& record = *commit.importRecord;
+        auto existingImport = connection_.prepare(
+            "SELECT timeline_id FROM recording_imports WHERE session_id=?1");
+        if (!existingImport.hasValue()) return existingImport.error();
+        auto existingStatement = std::move(existingImport).value();
+        if (auto r = existingStatement.bindText(1, record.sessionId.value());
+            !r.hasValue()) {
+            return r.error();
+        }
+        auto existingRow = existingStatement.step();
+        if (!existingRow.hasValue()) return existingRow.error();
+        if (existingRow.value() == SqliteStep::Row) {
+            return AppError{ErrorCode::AlreadyExists,
+                            "recording session is already imported"};
+        }
+
+        auto importable = connection_.prepare(
+            "SELECT state FROM recording_sessions "
+            "WHERE session_id=?1 AND project_id=?2");
+        if (!importable.hasValue()) return importable.error();
+        auto importableStatement = std::move(importable).value();
+        if (auto r = importableStatement.bindText(1, record.sessionId.value());
+            !r.hasValue()) {
+            return r.error();
+        }
+        if (auto r = importableStatement.bindText(2, projectId_.value());
+            !r.hasValue()) {
+            return r.error();
+        }
+        auto importableRow = importableStatement.step();
+        if (!importableRow.hasValue()) return importableRow.error();
+        if (importableRow.value() != SqliteStep::Row) {
+            return AppError{ErrorCode::NotFound,
+                            "recording session to import was not found"};
+        }
+        const auto state = importableStatement.columnText(0);
+        if (state != "COMPLETED" && state != "RECOVERED") {
+            return AppError{ErrorCode::InvalidState,
+                            "recording session is not importable"};
+        }
+    }
+
+    for (const auto& asset : commit.assetsToInsert) {
+        if (auto inserted = insertAsset(asset); !inserted.hasValue()) {
+            return inserted.error();
+        }
+    }
 
     if (auto written = writeSnapshot(commit.snapshot); !written.hasValue()) {
         return written.error();
@@ -1182,6 +1259,44 @@ Result<void> SqliteTimelineStore::commitEdit(const TimelineCommit& commit) {
     if (auto r = bindNullableInt64(checkpoint, 4, cleanCursor); !r.hasValue()) return r.error();
     if (auto r = checkpoint.bindText(5, commit.snapshot.id().value()); !r.hasValue()) return r.error();
     if (auto r = expectDone(checkpoint, "update edit checkpoint"); !r.hasValue()) return r.error();
+
+    if (commit.importRecord.has_value()) {
+        const auto& record = *commit.importRecord;
+        auto insertedImport = connection_.prepare(
+            "INSERT INTO recording_imports(session_id,timeline_id,base_ns,"
+            "imported_revision,imported_at_utc) VALUES(?1,?2,?3,?4,?5)");
+        if (!insertedImport.hasValue()) return insertedImport.error();
+        auto importStatement = std::move(insertedImport).value();
+        if (auto r = importStatement.bindText(1, record.sessionId.value());
+            !r.hasValue()) {
+            return r.error();
+        }
+        if (auto r = importStatement.bindText(2, record.timelineId.value());
+            !r.hasValue()) {
+            return r.error();
+        }
+        if (auto r = importStatement.bindInt64(
+                3, record.base.time_since_epoch().count());
+            !r.hasValue()) {
+            return r.error();
+        }
+        if (auto r = importStatement.bindInt64(4, record.importedRevision);
+            !r.hasValue()) {
+            return r.error();
+        }
+        if (auto r = importStatement.bindText(5, record.importedAt.toRfc3339());
+            !r.hasValue()) {
+            return r.error();
+        }
+        if (auto r = expectDone(importStatement, "insert recording import");
+            !r.hasValue()) {
+            return r.error();
+        }
+    }
+    if (commit.resourceValidation) {
+        auto valid = commit.resourceValidation();
+        if (!valid.hasValue()) return valid.error();
+    }
     return transaction.commit();
 }
 

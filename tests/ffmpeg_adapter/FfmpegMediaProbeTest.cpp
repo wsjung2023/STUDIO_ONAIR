@@ -355,36 +355,23 @@ TEST_F(FfmpegMediaProbeTest, LocksOneFileIdentityAcrossMetadataSizeAndHash) {
     const auto expectedSize = fs::file_size(path);
     const auto expectedHash = independentSha256(path);
     FfmpegMediaProbe probe;
-    auto result = std::async(std::launch::async, [&] {
-        return probe.probe(root_, "media/locked.mkv");
-    });
+    const auto probed = probe.probe(root_, "media/locked.mkv");
 
-    bool observedLock = false;
-    for (int attempt = 0; attempt < 1'000; ++attempt) {
-        HANDLE writer = CreateFileW(
-            path.c_str(), GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (writer == INVALID_HANDLE_VALUE &&
-            GetLastError() == ERROR_SHARING_VIOLATION) {
-            observedLock = true;
-            break;
-        }
-        if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
-        if (result.wait_for(std::chrono::milliseconds{0}) ==
-            std::future_status::ready) {
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds{1});
-    }
-    ASSERT_TRUE(observedLock);
-    EXPECT_FALSE(MoveFileExW(replacement.c_str(), path.c_str(),
-                             MOVEFILE_REPLACE_EXISTING));
-
-    const auto probed = result.get();
     ASSERT_TRUE(probed.hasValue()) << probed.error().message();
     EXPECT_EQ(probed.value().byteSize, expectedSize);
     EXPECT_EQ(probed.value().sha256, expectedHash);
+    ASSERT_TRUE(probed.value().identityLease);
+    EXPECT_TRUE(
+        probed.value().identityLease->verifyCurrentIdentity().hasValue());
+    HANDLE writer = CreateFileW(
+        path.c_str(), GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    EXPECT_EQ(writer, INVALID_HANDLE_VALUE);
+    EXPECT_EQ(GetLastError(), ERROR_SHARING_VIOLATION);
+    if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
+    EXPECT_FALSE(MoveFileExW(replacement.c_str(), path.c_str(),
+                             MOVEFILE_REPLACE_EXISTING));
     EXPECT_TRUE(fs::exists(replacement));
 }
 #endif

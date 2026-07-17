@@ -122,15 +122,19 @@ Result<void> SqliteStatement::reset() {
     return checkSqlite(database_, "clear statement bindings", sqlite3_clear_bindings(statement_));
 }
 
-Result<SqliteConnection> SqliteConnection::open(const std::filesystem::path& databasePath) {
+Result<SqliteConnection> SqliteConnection::open(
+    const std::filesystem::path& databasePath,
+    IdentityVerifier identityVerifier) {
+    if (identityVerifier) {
+        auto identity = identityVerifier();
+        if (!identity.hasValue()) return identity.error();
+    }
     sqlite3* database = nullptr;
-#ifdef _WIN32
-    const int openCode = sqlite3_open16(databasePath.c_str(), &database);
-#else
     const auto utf8 = databasePath.u8string();
-    const int openCode =
-        sqlite3_open(reinterpret_cast<const char*>(utf8.c_str()), &database);
-#endif
+    const int flags = SQLITE_OPEN_READWRITE |
+                      (identityVerifier ? 0 : SQLITE_OPEN_CREATE);
+    const int openCode = sqlite3_open_v2(
+        reinterpret_cast<const char*>(utf8.c_str()), &database, flags, nullptr);
     if (openCode != SQLITE_OK) {
         AppError error = sqliteError(database, "open database", openCode);
         if (database != nullptr) {
@@ -140,6 +144,10 @@ Result<SqliteConnection> SqliteConnection::open(const std::filesystem::path& dat
     }
 
     SqliteConnection connection{database};
+    if (identityVerifier) {
+        auto identity = identityVerifier();
+        if (!identity.hasValue()) return identity.error();
+    }
     if (const int timeoutCode = sqlite3_busy_timeout(database, 2000); timeoutCode != SQLITE_OK) {
         return sqliteError(database, "set busy timeout", timeoutCode);
     }
@@ -164,6 +172,10 @@ Result<SqliteConnection> SqliteConnection::open(const std::filesystem::path& dat
     }
     if (quickCheck.value() != "ok") {
         return AppError{ErrorCode::IoFailure, "sqlite quick_check reported corruption"};
+    }
+    if (identityVerifier) {
+        auto identity = identityVerifier();
+        if (!identity.hasValue()) return identity.error();
     }
     return connection;
 }
