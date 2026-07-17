@@ -456,7 +456,7 @@ Expected: 100 percent pass, zero failures/skips. Launch `build/windows-mlt-audit
 
 Use `superpowers:requesting-code-review`; because new delegation is disabled for this run, perform a fresh-diff self-review against the approved design. For every confirmed issue, add a failing regression test, fix it, and rerun focused plus full gates.
 
-- [ ] **Step 8: Record evidence and integrate**
+- [x] **Step 8: Record evidence and integrate**
 
 Write exact commands/counts/timings/platform limits/license boundary to the verification report. Mark only R1-05 complete in the roadmap. Commit documentation, then use `superpowers:finishing-a-development-branch` to merge `feat/r1-05-effects-titles-captions` into `feat/r1-usable-recorder-editor`, preserving user-owned untracked files. Re-run the complete sequential audited gate on the parent branch.
 

@@ -66,6 +66,12 @@ real times per repetition were 6.59, 6.87, 7.14, 6.79, and 7.27 seconds, with
 - Application launch: `creator_studio`, `Responding=True`, alive at the probe
   point and then stopped by the verification harness.
 
+After fast-forward integration into `feat/r1-usable-recorder-editor`, a separate
+fresh parent-worktree audit built all **271/271** steps under `/WX`, then passed
+**579/579** sequential tests in 110.99 seconds. The integrated application again
+reported `Responding=True`; its delay imports remained only `mlt++-7.dll` and
+`mlt-7.dll`, with zero forbidden staged runtime files.
+
 Qt 6.8.3 generates an unreachable-code warning in native AOT C++ for the
 intentionally dynamic `EditorPage` controller boundary. `QT_QML_SKIP_CACHEGEN`
 is restricted to `qml/EditorPage.qml`; all other shipping QML pages retain their
