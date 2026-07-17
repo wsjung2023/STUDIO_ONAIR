@@ -267,10 +267,26 @@ Item {
                         elide: Text.ElideMiddle
                     }
                     Label {
+                        objectName: "editorSelectedClipBoundsLabel"
+                        Layout.fillWidth: true
+                        visible: root.hasSelection
+                        text: root.hasSelection
+                              ? qsTr("Clip %1 s → %2 s (%3 s)")
+                                .arg((root.controller.selectedClipStartNs /
+                                      1000000000).toFixed(2))
+                                .arg((root.controller.selectedClipEndNs /
+                                      1000000000).toFixed(2))
+                                .arg(((root.controller.selectedClipEndNs
+                                       - root.controller.selectedClipStartNs) /
+                                      1000000000).toFixed(2))
+                              : ""
+                        wrapMode: Text.Wrap
+                    }
+                    Label {
                         objectName: "editorMarkedRangeLabel"
                         Layout.fillWidth: true
                         text: root.controller.hasMarkedRange
-                              ? qsTr("Range %1 s ??%2 s (%3 s)")
+                              ? qsTr("Range %1 s → %2 s (%3 s)")
                                 .arg((root.controller.rangeInNs / 1000000000).toFixed(2))
                                 .arg((root.controller.rangeOutNs / 1000000000).toFixed(2))
                                 .arg(((root.controller.rangeOutNs

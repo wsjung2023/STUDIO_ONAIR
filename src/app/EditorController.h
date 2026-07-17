@@ -45,6 +45,8 @@ class EditorController final : public QObject {
     Q_PROPERTY(bool sessionBusy READ sessionBusy NOTIFY sessionBusyChanged)
     Q_PROPERTY(QString selectedTrackId READ selectedTrackId NOTIFY selectionChanged)
     Q_PROPERTY(QString selectedClipId READ selectedClipId NOTIFY selectionChanged)
+    Q_PROPERTY(qlonglong selectedClipStartNs READ selectedClipStartNs NOTIFY selectionChanged)
+    Q_PROPERTY(qlonglong selectedClipEndNs READ selectedClipEndNs NOTIFY selectionChanged)
     Q_PROPERTY(qlonglong rangeInNs READ rangeInNs NOTIFY markedRangeChanged)
     Q_PROPERTY(qlonglong rangeOutNs READ rangeOutNs NOTIFY markedRangeChanged)
     Q_PROPERTY(bool hasMarkedRange READ hasMarkedRange NOTIFY markedRangeChanged)
@@ -79,6 +81,8 @@ public:
     [[nodiscard]] bool sessionBusy() const noexcept { return sessionBusy_; }
     [[nodiscard]] QString selectedTrackId() const { return selectedTrackId_; }
     [[nodiscard]] QString selectedClipId() const { return selectedClipId_; }
+    [[nodiscard]] qlonglong selectedClipStartNs() const noexcept;
+    [[nodiscard]] qlonglong selectedClipEndNs() const noexcept;
     [[nodiscard]] qlonglong rangeInNs() const noexcept {
         return rangeIn_.has_value()
                    ? rangeIn_->time_since_epoch().count()
@@ -177,6 +181,7 @@ private:
     void setPreviewStale(bool value);
     void setPlaying(bool value);
     void setStatus(QString value);
+    [[nodiscard]] const domain::Clip* selectedClip() const noexcept;
 
     QThread workerThread_;
     EditorEngineWorker* worker_{};

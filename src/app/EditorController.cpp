@@ -82,6 +82,33 @@ qlonglong EditorController::timelineDurationNs() const noexcept {
     return end.time_since_epoch().count();
 }
 
+const domain::Clip* EditorController::selectedClip() const noexcept {
+    if (!snapshot_.has_value() || selectedTrackId_.isEmpty() ||
+        selectedClipId_.isEmpty()) {
+        return nullptr;
+    }
+    auto trackId = domain::TrackId::create(
+        selectedTrackId_.toUtf8().toStdString());
+    auto clipId = domain::ClipId::create(
+        selectedClipId_.toUtf8().toStdString());
+    if (!trackId.hasValue() || !clipId.hasValue()) return nullptr;
+    return snapshot_->timeline.clip(trackId.value(), clipId.value());
+}
+
+qlonglong EditorController::selectedClipStartNs() const noexcept {
+    const auto* clip = selectedClip();
+    return clip == nullptr
+               ? -1
+               : clip->timelineRange().start().time_since_epoch().count();
+}
+
+qlonglong EditorController::selectedClipEndNs() const noexcept {
+    const auto* clip = selectedClip();
+    return clip == nullptr
+               ? -1
+               : clip->timelineRange().end().time_since_epoch().count();
+}
+
 void EditorController::openSession(
     std::vector<domain::MediaAsset> assets,
     edit_engine::TimelineSnapshot snapshot) {
@@ -194,7 +221,10 @@ void EditorController::markRangeIn() {
         return;
     }
     core::TimestampNs in = playhead_;
-    if (rangeOut_.has_value() && in > *rangeOut_) {
+    if (hasMarkedRange() && in > *rangeOut_) {
+        rangeIn_ = in;
+        rangeOut_.reset();
+    } else if (rangeOut_.has_value() && in > *rangeOut_) {
         rangeIn_ = *rangeOut_;
         rangeOut_ = in;
     } else {
@@ -224,9 +254,25 @@ void EditorController::openProject(QUrl projectUrl) {
         return;
     }
     ++sessionGeneration_;
+    ++generation_;
     activeSessionCommand_.reset();
     durableSessionReady_ = false;
     setPlaying(false);
+    if (!selectedTrackId_.isEmpty() || !selectedClipId_.isEmpty()) {
+        selectedTrackId_.clear();
+        selectedClipId_.clear();
+        emit selectionChanged();
+    }
+    if (rangeIn_.has_value() || rangeOut_.has_value()) {
+        rangeIn_.reset();
+        rangeOut_.reset();
+        emit markedRangeChanged();
+    }
+    if (!previewImage_.isNull()) {
+        previewImage_ = {};
+        emit previewImageChanged();
+    }
+    setPreviewStale(true);
     setSessionBusy(true);
     setStatus({});
     const auto path = pathFromQString(projectUrl.toLocalFile());
@@ -404,6 +450,8 @@ void EditorController::handleSessionEdited(quint64 generation,
 }
 
 void EditorController::publishSessionState(const EditorSessionState& state) {
+    const bool revisionChanged =
+        !snapshot_.has_value() || snapshot_->revision != state.snapshot.revision;
     mediaBinModel_.setAssets(state.assets);
     timelineTrackModel_.setTimeline(state.snapshot.timeline);
     snapshot_ = state.snapshot;
@@ -425,6 +473,8 @@ void EditorController::publishSessionState(const EditorSessionState& state) {
                 nullptr) {
             selectedTrackId_.clear();
             selectedClipId_.clear();
+            emit selectionChanged();
+        } else if (revisionChanged) {
             emit selectionChanged();
         }
     }

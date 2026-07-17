@@ -278,6 +278,8 @@ class FakeEditorController final : public QObject {
     Q_PROPERTY(bool sessionBusy READ sessionBusy CONSTANT)
     Q_PROPERTY(QString selectedTrackId READ selectedTrackId NOTIFY editStateChanged)
     Q_PROPERTY(QString selectedClipId READ selectedClipId NOTIFY editStateChanged)
+    Q_PROPERTY(qlonglong selectedClipStartNs READ selectedClipStartNs NOTIFY editStateChanged)
+    Q_PROPERTY(qlonglong selectedClipEndNs READ selectedClipEndNs NOTIFY editStateChanged)
     Q_PROPERTY(qlonglong rangeInNs READ rangeInNs CONSTANT)
     Q_PROPERTY(qlonglong rangeOutNs READ rangeOutNs CONSTANT)
     Q_PROPERTY(bool hasMarkedRange READ hasMarkedRange CONSTANT)
@@ -351,6 +353,12 @@ public:
     [[nodiscard]] bool sessionBusy() const noexcept { return false; }
     [[nodiscard]] QString selectedTrackId() const { return selectedTrackId_; }
     [[nodiscard]] QString selectedClipId() const { return selectedClipId_; }
+    [[nodiscard]] qlonglong selectedClipStartNs() const noexcept {
+        return selectedClipId_.isEmpty() ? -1 : 1'000'000'000;
+    }
+    [[nodiscard]] qlonglong selectedClipEndNs() const noexcept {
+        return selectedClipId_.isEmpty() ? -1 : 3'000'000'000;
+    }
     [[nodiscard]] qlonglong rangeInNs() const noexcept { return 1'100'000'000; }
     [[nodiscard]] qlonglong rangeOutNs() const noexcept { return 1'900'000'000; }
     [[nodiscard]] bool hasMarkedRange() const noexcept { return true; }
@@ -596,6 +604,20 @@ TEST(QmlSmokeTest, EditorPageProvidesDurableEditControls) {
               nullptr);
     ASSERT_NE(object->findChild<QObject*>(QStringLiteral("editorSelectionLabel")),
               nullptr);
+    auto* bounds = object->findChild<QObject*>(
+        QStringLiteral("editorSelectedClipBoundsLabel"));
+    ASSERT_NE(bounds, nullptr);
+    EXPECT_TRUE(bounds->property("text").toString().contains(
+        QStringLiteral("1.00 s")));
+    EXPECT_TRUE(bounds->property("text").toString().contains(
+        QStringLiteral("3.00 s")));
+    auto* range = object->findChild<QObject*>(
+        QStringLiteral("editorMarkedRangeLabel"));
+    ASSERT_NE(range, nullptr);
+    EXPECT_TRUE(range->property("text").toString().contains(
+        QString::fromUtf8("→")));
+    EXPECT_FALSE(range->property("text").toString().contains(
+        QStringLiteral("??")));
 }
 
 TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {

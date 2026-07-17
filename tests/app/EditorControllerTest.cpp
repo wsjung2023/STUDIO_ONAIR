@@ -217,6 +217,8 @@ TEST(EditorControllerDurableTest, PublishesSelectionAndNormalizesMarkedRange) {
                           QStringLiteral("timed-clip"));
     EXPECT_EQ(controller.selectedTrackId(), QStringLiteral("v1"));
     EXPECT_EQ(controller.selectedClipId(), QStringLiteral("timed-clip"));
+    EXPECT_EQ(controller.selectedClipStartNs(), 0);
+    EXPECT_EQ(controller.selectedClipEndNs(), 1'000);
 
     controller.seek(800);
     ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
@@ -232,6 +234,65 @@ TEST(EditorControllerDurableTest, PublishesSelectionAndNormalizesMarkedRange) {
     EXPECT_FALSE(controller.canUndo());
     EXPECT_FALSE(controller.canRedo());
     EXPECT_FALSE(controller.sessionBusy());
+}
+
+TEST(EditorControllerDurableTest,
+     StartingProjectOpenClearsTransientSelectionRangeAndPreview) {
+    DurableControllerPackage package;
+    auto engine = std::make_unique<FakeEditEngine>();
+    EditorController controller{std::move(engine)};
+    controller.openSession({asset()}, snapshotWithVideo(1, DurationNs{1'000}));
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.busy() && controller.hasPreviewFrame();
+    }));
+    controller.selectClip(QStringLiteral("v1"),
+                          QStringLiteral("timed-clip"));
+    controller.seek(200);
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    controller.markRangeIn();
+    controller.seek(800);
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    controller.markRangeOut();
+    ASSERT_TRUE(controller.hasMarkedRange());
+
+    controller.openProject(package.url());
+
+    EXPECT_TRUE(controller.selectedTrackId().isEmpty());
+    EXPECT_TRUE(controller.selectedClipId().isEmpty());
+    EXPECT_FALSE(controller.hasMarkedRange());
+    EXPECT_FALSE(controller.hasPreviewFrame());
+    EXPECT_TRUE(controller.previewStale());
+}
+
+TEST(EditorControllerDurableTest,
+     StartingNewRangePastExistingOutDropsTheStaleOutMarker) {
+    auto engine = std::make_unique<FakeEditEngine>();
+    EditorController controller{std::move(engine)};
+    controller.openSession({asset()}, snapshotWithVideo(1, DurationNs{2'000}));
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+
+    controller.seek(200);
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    controller.markRangeIn();
+    controller.seek(800);
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    controller.markRangeOut();
+    ASSERT_TRUE(controller.hasMarkedRange());
+
+    controller.seek(1'200);
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    controller.markRangeIn();
+
+    EXPECT_EQ(controller.rangeInNs(), 1'200);
+    EXPECT_EQ(controller.rangeOutNs(), -1);
+    EXPECT_FALSE(controller.hasMarkedRange());
+
+    controller.seek(1'600);
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    controller.markRangeOut();
+    EXPECT_EQ(controller.rangeInNs(), 1'200);
+    EXPECT_EQ(controller.rangeOutNs(), 1'600);
+    EXPECT_TRUE(controller.hasMarkedRange());
 }
 
 TEST(EditorControllerDurableTest,
@@ -340,6 +401,7 @@ TEST(EditorControllerDurableTest,
     }));
     controller.selectClip(QStringLiteral("v1"),
                           QStringLiteral("timed-clip"));
+    QSignalSpy selectionSpy{&controller, &EditorController::selectionChanged};
 
     const auto seekAndWait = [&](qlonglong position) {
         controller.seek(position);
@@ -355,9 +417,13 @@ TEST(EditorControllerDurableTest,
     seekAndWait(100);
     controller.trimSelectedStart();
     ASSERT_TRUE(waitRevision(1));
+    EXPECT_EQ(controller.selectedClipStartNs(), 100);
+    EXPECT_EQ(selectionSpy.count(), 1);
     seekAndWait(900);
     controller.trimSelectedEnd();
     ASSERT_TRUE(waitRevision(2));
+    EXPECT_EQ(controller.selectedClipEndNs(), 900);
+    EXPECT_EQ(selectionSpy.count(), 2);
 
     seekAndWait(300);
     controller.markRangeIn();

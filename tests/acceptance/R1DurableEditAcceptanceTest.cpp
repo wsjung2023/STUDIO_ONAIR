@@ -287,6 +287,8 @@ TEST(R1DurableEditAcceptanceTest, ReopensExactCommittedWorkflowAndHistory) {
         controller.markRangeIn();
         seekAndWait(controller, 5'500'000'000);
         controller.markRangeOut();
+        ASSERT_EQ(controller.rangeInNs(), 4'500'000'000);
+        ASSERT_EQ(controller.rangeOutNs(), 5'500'000'000);
         controller.deleteMarkedRange(true);
         waitRevision(controller, 6);
         controller.save();
