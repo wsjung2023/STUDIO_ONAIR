@@ -136,12 +136,19 @@ private:
     media::VideoFrame frame_;
 };
 
+enum class RenderFallbackPolicy { HardwareThenSoftware, SoftwareOnly };
+
 class RenderPreset final {
 public:
     [[nodiscard]] static core::Result<RenderPreset> create(
-        std::uint32_t width, std::uint32_t height, core::FrameRate frameRate,
-        std::uint32_t videoBitrate, std::uint32_t audioBitrate);
+        std::string id, std::uint32_t width, std::uint32_t height,
+        core::FrameRate frameRate, std::uint32_t videoBitrate,
+        std::uint32_t audioBitrate, RenderFallbackPolicy fallbackPolicy);
 
+    [[nodiscard]] static core::Result<RenderPreset> h2641080p30();
+    [[nodiscard]] static core::Result<RenderPreset> h2642160p30();
+
+    [[nodiscard]] const std::string& id() const noexcept { return id_; }
     [[nodiscard]] std::uint32_t width() const noexcept { return width_; }
     [[nodiscard]] std::uint32_t height() const noexcept { return height_; }
     [[nodiscard]] core::FrameRate frameRate() const noexcept { return frameRate_; }
@@ -151,30 +158,44 @@ public:
     [[nodiscard]] std::uint32_t audioBitrate() const noexcept {
         return audioBitrate_;
     }
+    [[nodiscard]] RenderFallbackPolicy fallbackPolicy() const noexcept {
+        return fallbackPolicy_;
+    }
 
 private:
-    RenderPreset(std::uint32_t width, std::uint32_t height,
+    RenderPreset(std::string id, std::uint32_t width, std::uint32_t height,
                  core::FrameRate frameRate, std::uint32_t videoBitrate,
-                 std::uint32_t audioBitrate)
-        : width_(width),
+                 std::uint32_t audioBitrate,
+                 RenderFallbackPolicy fallbackPolicy)
+        : id_(std::move(id)),
+          width_(width),
           height_(height),
           frameRate_(frameRate),
           videoBitrate_(videoBitrate),
-          audioBitrate_(audioBitrate) {}
+          audioBitrate_(audioBitrate),
+          fallbackPolicy_(fallbackPolicy) {}
 
+    std::string id_;
     std::uint32_t width_;
     std::uint32_t height_;
     core::FrameRate frameRate_;
     std::uint32_t videoBitrate_;
     std::uint32_t audioBitrate_;
+    RenderFallbackPolicy fallbackPolicy_;
 };
+
+enum class RenderOverwritePolicy { FailIfExists, ReplaceExisting };
 
 class RenderRequest final {
 public:
     [[nodiscard]] static core::Result<RenderRequest> create(
-        TimelineSnapshot snapshot, std::filesystem::path destination,
-        RenderPreset preset);
+        domain::ProjectId projectId, TimelineSnapshot snapshot,
+        std::filesystem::path destination, RenderPreset preset,
+        RenderOverwritePolicy overwritePolicy);
 
+    [[nodiscard]] const domain::ProjectId& projectId() const noexcept {
+        return projectId_;
+    }
     [[nodiscard]] const TimelineSnapshot& snapshot() const noexcept {
         return snapshot_;
     }
@@ -182,20 +203,36 @@ public:
         return destination_;
     }
     [[nodiscard]] const RenderPreset& preset() const noexcept { return preset_; }
+    [[nodiscard]] RenderOverwritePolicy overwritePolicy() const noexcept {
+        return overwritePolicy_;
+    }
 
 private:
-    RenderRequest(TimelineSnapshot snapshot, std::filesystem::path destination,
-                  RenderPreset preset)
-        : snapshot_(std::move(snapshot)),
+    RenderRequest(domain::ProjectId projectId, TimelineSnapshot snapshot,
+                  std::filesystem::path destination, RenderPreset preset,
+                  RenderOverwritePolicy overwritePolicy)
+        : projectId_(std::move(projectId)),
+          snapshot_(std::move(snapshot)),
           destination_(std::move(destination)),
-          preset_(preset) {}
+          preset_(std::move(preset)),
+          overwritePolicy_(overwritePolicy) {}
 
+    domain::ProjectId projectId_;
     TimelineSnapshot snapshot_;
     std::filesystem::path destination_;
     RenderPreset preset_;
+    RenderOverwritePolicy overwritePolicy_;
 };
 
-enum class RenderJobState { Pending, Running, Completed, Failed, Cancelled };
+enum class RenderJobState {
+    Pending,
+    Running,
+    Publishing,
+    Cancelling,
+    Completed,
+    Failed,
+    Cancelled
+};
 
 class RenderProgress final {
 public:
@@ -212,6 +249,9 @@ public:
         return totalDuration_;
     }
 
+    friend bool operator==(const RenderProgress&,
+                           const RenderProgress&) = default;
+
 private:
     RenderProgress(RenderJobState state, double fraction,
                    core::TimestampNs renderedThrough,
@@ -226,5 +266,8 @@ private:
     core::TimestampNs renderedThrough_;
     core::DurationNs totalDuration_;
 };
+
+[[nodiscard]] core::Result<void> validateRenderProgressTransition(
+    const RenderProgress& previous, const RenderProgress& next);
 
 }  // namespace creator::edit_engine

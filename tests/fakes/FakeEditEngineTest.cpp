@@ -2,6 +2,7 @@
 
 #include "core/AppError.h"
 #include "core/Timebase.h"
+#include "core/Uuid.h"
 #include "domain/Identifiers.h"
 #include "domain/Timeline.h"
 #include "domain/TimelineRevision.h"
@@ -23,8 +24,19 @@ using creator::core::TimestampNs;
 using creator::domain::Timeline;
 using creator::domain::TimelineId;
 using creator::domain::TimelineRevision;
+using creator::domain::Clip;
+using creator::domain::ClipId;
+using creator::domain::ProjectId;
+using creator::domain::RgbaColor;
+using creator::domain::TextAlignment;
+using creator::domain::TimeRange;
+using creator::domain::TitlePayload;
+using creator::domain::Track;
 using creator::domain::TrackId;
+using creator::domain::TrackKind;
+using creator::edit_engine::RenderFallbackPolicy;
 using creator::edit_engine::RenderJobState;
+using creator::edit_engine::RenderOverwritePolicy;
 using creator::edit_engine::RenderPreset;
 using creator::edit_engine::RenderRequest;
 using creator::edit_engine::TimelineChangeSet;
@@ -41,11 +53,43 @@ TimelineSnapshot snapshot(std::int64_t revision, std::string name = "Main") {
                             TimelineRevision::create(revision).value()};
 }
 
+TimelineSnapshot renderableSnapshot(std::int64_t revision) {
+    auto value = snapshot(revision);
+    const auto trackId = TrackId::create("title-track").value();
+    EXPECT_TRUE(value.timeline
+                    .addTrack(Track::create(trackId, TrackKind::Title, "Title",
+                                            true, false)
+                                  .value())
+                    .hasValue());
+    const auto range =
+        TimeRange::create(TimestampNs{DurationNs{0}}, DurationNs{1'000}).value();
+    const auto payload = TitlePayload::create(
+        "Export", "Creator Sans", 0.5, 0.5,
+        RgbaColor::parse("#ffffffff").value(),
+        RgbaColor::parse("#00000000").value(), TextAlignment::Center)
+                             .value();
+    EXPECT_TRUE(value.timeline
+                    .insertClip(trackId,
+                                Clip::createTitle(
+                                    ClipId::create("title-clip").value(), range,
+                                    true, payload, std::nullopt)
+                                    .value())
+                    .hasValue());
+    return value;
+}
+
+std::filesystem::path renderDestination() {
+    return std::filesystem::temp_directory_path() /
+           ("creator-studio-fake-render-" + creator::core::generateUuidV4() +
+            ".mp4");
+}
+
 TEST(FakeEditEngineTest, RejectsOperationsBeforeLoad) {
     FakeEditEngine engine;
     auto preset = RenderPreset::create(
-                      1920, 1080, FrameRate::create(60, 1).value(), 8'000'000,
-                      192'000)
+                      "fake-h264", 1920, 1080,
+                      FrameRate::create(30, 1).value(), 8'000'000, 192'000,
+                      RenderFallbackPolicy::HardwareThenSoftware)
                       .value();
 
     EXPECT_FALSE(engine.play().hasValue());
@@ -53,9 +97,9 @@ TEST(FakeEditEngineTest, RejectsOperationsBeforeLoad) {
     EXPECT_FALSE(engine.seek(TimestampNs{DurationNs{10}}).hasValue());
     EXPECT_FALSE(engine.requestFrame(TimestampNs{DurationNs{10}}).hasValue());
     EXPECT_FALSE(engine.render(RenderRequest::create(
-                                   snapshot(1),
-                                   std::filesystem::path{"D:/Exports/test.mp4"},
-                                   preset)
+                                   ProjectId::create("project-1").value(),
+                                   renderableSnapshot(1), renderDestination(),
+                                   preset, RenderOverwritePolicy::FailIfExists)
                                    .value())
                      .hasValue());
 }
@@ -120,14 +164,17 @@ TEST(FakeEditEngineTest, InjectsOneShotFailureWithoutMutatingState) {
 
 TEST(FakeEditEngineTest, ReturnsCancellableRenderJob) {
     FakeEditEngine engine;
-    ASSERT_TRUE(engine.load(snapshot(5)).hasValue());
+    const auto loaded = renderableSnapshot(5);
+    ASSERT_TRUE(engine.load(loaded).hasValue());
     auto preset = RenderPreset::create(
-                      1920, 1080, FrameRate::create(60, 1).value(), 8'000'000,
-                      192'000)
+                      "fake-h264", 1920, 1080,
+                      FrameRate::create(30, 1).value(), 8'000'000, 192'000,
+                      RenderFallbackPolicy::HardwareThenSoftware)
                       .value();
     auto request = RenderRequest::create(
-                       snapshot(5), std::filesystem::path{"D:/Exports/test.mp4"},
-                       preset)
+                       ProjectId::create("project-1").value(), loaded,
+                       renderDestination(), preset,
+                       RenderOverwritePolicy::FailIfExists)
                        .value();
 
     auto jobResult = engine.render(request);

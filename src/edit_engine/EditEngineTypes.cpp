@@ -3,8 +3,15 @@
 #include "core/AppError.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <system_error>
 #include <string_view>
+
+#if defined(_WIN32)
+#define NOMINMAX
+#include <Windows.h>
+#endif
 
 namespace creator::edit_engine {
 namespace {
@@ -21,6 +28,79 @@ bool containsParentTraversal(const std::filesystem::path& path) {
     return std::any_of(path.begin(), path.end(), [](const auto& component) {
         return component == "..";
     });
+}
+
+bool isPresetId(std::string_view id) {
+    if (id.empty() || id.size() > 64) return false;
+    return std::all_of(id.begin(), id.end(), [](unsigned char value) {
+        return std::islower(value) != 0 || std::isdigit(value) != 0 ||
+               value == '-';
+    });
+}
+
+bool isMp4Extension(const std::filesystem::path& path) {
+    auto extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char value) {
+                       return static_cast<char>(std::tolower(value));
+                   });
+    return extension == ".mp4";
+}
+
+bool isDevicePath(const std::filesystem::path& path) {
+#if defined(_WIN32)
+    const auto& native = path.native();
+    return native.starts_with(L"\\\\?\\") || native.starts_with(L"\\\\.\\");
+#else
+    static_cast<void>(path);
+    return false;
+#endif
+}
+
+bool isReparsePoint(const std::filesystem::path& path) {
+#if defined(_WIN32)
+    const auto attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES &&
+           (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+#else
+    std::error_code error;
+    return std::filesystem::is_symlink(
+        std::filesystem::symlink_status(path, error));
+#endif
+}
+
+bool isTerminal(RenderJobState state) noexcept {
+    return state == RenderJobState::Completed ||
+           state == RenderJobState::Failed ||
+           state == RenderJobState::Cancelled;
+}
+
+bool isAllowedStateTransition(RenderJobState previous,
+                              RenderJobState next) noexcept {
+    if (previous == next) return !isTerminal(previous);
+    switch (previous) {
+        case RenderJobState::Pending:
+            return next == RenderJobState::Running ||
+                   next == RenderJobState::Cancelling ||
+                   next == RenderJobState::Failed;
+        case RenderJobState::Running:
+            return next == RenderJobState::Publishing ||
+                   next == RenderJobState::Cancelling ||
+                   next == RenderJobState::Failed;
+        case RenderJobState::Publishing:
+            return next == RenderJobState::Completed ||
+                   next == RenderJobState::Cancelled ||
+                   next == RenderJobState::Failed;
+        case RenderJobState::Cancelling:
+            return next == RenderJobState::Cancelled ||
+                   next == RenderJobState::Completed ||
+                   next == RenderJobState::Failed;
+        case RenderJobState::Completed:
+        case RenderJobState::Failed:
+        case RenderJobState::Cancelled:
+            return false;
+    }
+    return false;
 }
 
 bool isGeneratedCachePath(const std::filesystem::path& path) {
@@ -161,28 +241,70 @@ Result<PreviewFrame> PreviewFrame::create(
 }
 
 Result<RenderPreset> RenderPreset::create(
-    std::uint32_t width, std::uint32_t height, core::FrameRate frameRate,
-    std::uint32_t videoBitrate, std::uint32_t audioBitrate) {
+    std::string id, std::uint32_t width, std::uint32_t height,
+    core::FrameRate frameRate, std::uint32_t videoBitrate,
+    std::uint32_t audioBitrate, RenderFallbackPolicy fallbackPolicy) {
     constexpr std::uint32_t kMaximumDimension = 16'384;
-    if (width == 0 || height == 0 || width > kMaximumDimension ||
+    if (!isPresetId(id) || width == 0 || height == 0 ||
+        width > kMaximumDimension ||
         height > kMaximumDimension || videoBitrate == 0 || audioBitrate == 0) {
-        return invalid("render preset dimensions and bitrates must be bounded");
+        return invalid("render preset id, dimensions, and bitrates must be valid");
     }
-    return RenderPreset{width, height, frameRate, videoBitrate, audioBitrate};
+    return RenderPreset{std::move(id), width, height, frameRate, videoBitrate,
+                        audioBitrate, fallbackPolicy};
+}
+
+Result<RenderPreset> RenderPreset::h2641080p30() {
+    auto frameRate = core::FrameRate::create(30, 1);
+    if (!frameRate.hasValue()) return frameRate.error();
+    return create("h264-1080p30", 1920, 1080, frameRate.value(), 12'000'000,
+                  192'000, RenderFallbackPolicy::HardwareThenSoftware);
+}
+
+Result<RenderPreset> RenderPreset::h2642160p30() {
+    auto frameRate = core::FrameRate::create(30, 1);
+    if (!frameRate.hasValue()) return frameRate.error();
+    return create("h264-2160p30", 3840, 2160, frameRate.value(), 45'000'000,
+                  256'000, RenderFallbackPolicy::HardwareThenSoftware);
 }
 
 Result<RenderRequest> RenderRequest::create(
-    TimelineSnapshot snapshot, std::filesystem::path destination,
-    RenderPreset preset) {
-    if (destination.empty() || destination.filename().empty() ||
-        containsParentTraversal(destination)) {
-        return invalid("render destination is empty or contains traversal");
+    domain::ProjectId projectId, TimelineSnapshot snapshot,
+    std::filesystem::path destination, RenderPreset preset,
+    RenderOverwritePolicy overwritePolicy) {
+    if (destination.empty() || !destination.is_absolute() ||
+        destination.filename().empty() || containsParentTraversal(destination) ||
+        !isMp4Extension(destination) || isDevicePath(destination)) {
+        return invalid("render destination must be an absolute safe MP4 path");
+    }
+    std::error_code error;
+    const auto parent = destination.parent_path();
+    if (!std::filesystem::is_directory(parent, error) || error ||
+        isReparsePoint(parent)) {
+        return invalid("render destination parent must be an existing regular directory");
+    }
+    const bool destinationExists = std::filesystem::exists(destination, error);
+    if (error) return invalid("render destination could not be inspected");
+    if (destinationExists) {
+        if (overwritePolicy == RenderOverwritePolicy::FailIfExists ||
+            !std::filesystem::is_regular_file(destination, error) || error ||
+            isReparsePoint(destination)) {
+            return invalid("render destination already exists or is unsafe");
+        }
     }
     if (auto validated = validateTimelineSnapshot(snapshot);
         !validated.hasValue()) {
         return validated.error();
     }
-    return RenderRequest{std::move(snapshot), std::move(destination), preset};
+    const bool hasClip = std::any_of(
+        snapshot.timeline.tracks().begin(), snapshot.timeline.tracks().end(),
+        [](const domain::Track& track) { return !track.clips().empty(); });
+    if (!hasClip) {
+        return invalid("render timeline must not be empty");
+    }
+    return RenderRequest{std::move(projectId), std::move(snapshot),
+                         std::move(destination), std::move(preset),
+                         overwritePolicy};
 }
 
 Result<RenderProgress> RenderProgress::create(
@@ -196,12 +318,35 @@ Result<RenderProgress> RenderProgress::create(
     }
     if ((state == RenderJobState::Pending &&
          (fraction != 0.0 || rendered != 0)) ||
-        (state == RenderJobState::Running && fraction >= 1.0) ||
+        ((state == RenderJobState::Running ||
+          state == RenderJobState::Cancelling ||
+          state == RenderJobState::Failed ||
+          state == RenderJobState::Cancelled) &&
+         fraction >= 1.0) ||
+        (state == RenderJobState::Publishing &&
+         (fraction >= 1.0 || rendered != total)) ||
         (state == RenderJobState::Completed &&
          (fraction != 1.0 || rendered != total))) {
         return invalid("render progress contradicts its state");
     }
     return RenderProgress{state, fraction, renderedThrough, totalDuration};
+}
+
+Result<void> validateRenderProgressTransition(const RenderProgress& previous,
+                                              const RenderProgress& next) {
+    if (isTerminal(previous.state())) {
+        if (previous == next) return core::ok();
+        return invalid("terminal render progress is immutable");
+    }
+    if (!isAllowedStateTransition(previous.state(), next.state())) {
+        return invalid("render progress state transition is not allowed");
+    }
+    if (previous.totalDuration() != next.totalDuration() ||
+        next.fraction() < previous.fraction() ||
+        next.renderedThrough() < previous.renderedThrough()) {
+        return invalid("render progress must not regress");
+    }
+    return core::ok();
 }
 
 }  // namespace creator::edit_engine

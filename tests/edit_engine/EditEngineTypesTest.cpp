@@ -2,6 +2,7 @@
 #include "edit_engine/UnavailableEditEngine.h"
 
 #include "core/Timebase.h"
+#include "core/Uuid.h"
 #include "domain/Identifiers.h"
 #include "domain/Timeline.h"
 #include "domain/TimelineRevision.h"
@@ -22,6 +23,7 @@ using creator::core::TimestampNs;
 using creator::domain::Timeline;
 using creator::domain::TimelineId;
 using creator::domain::TimelineRevision;
+using creator::domain::ProjectId;
 using creator::domain::Clip;
 using creator::domain::ClipId;
 using creator::domain::RgbaColor;
@@ -34,12 +36,15 @@ using creator::domain::TrackKind;
 using creator::edit_engine::GeneratedOverlayDescriptor;
 using creator::edit_engine::PreviewFrame;
 using creator::edit_engine::RenderJobState;
+using creator::edit_engine::RenderFallbackPolicy;
+using creator::edit_engine::RenderOverwritePolicy;
 using creator::edit_engine::RenderPreset;
 using creator::edit_engine::RenderProgress;
 using creator::edit_engine::RenderRequest;
 using creator::edit_engine::TimelineChangeSet;
 using creator::edit_engine::TimelineSnapshot;
 using creator::edit_engine::UnavailableEditEngine;
+using creator::edit_engine::validateRenderProgressTransition;
 using creator::media::PixelFormat;
 using creator::media::VideoFrame;
 
@@ -232,36 +237,123 @@ TEST(EditEngineTypesTest, RejectsPreviewTimestampMismatchAndInvalidSurface) {
 
 TEST(EditEngineTypesTest, ValidatesRenderPresetRequestAndProgress) {
     auto preset = RenderPreset::create(
-        1920, 1080, FrameRate::create(60, 1).value(), 12'000'000, 192'000);
+        "h264-1080p30", 1920, 1080, FrameRate::create(30, 1).value(),
+        12'000'000, 192'000, RenderFallbackPolicy::HardwareThenSoftware);
     ASSERT_TRUE(preset.hasValue()) << preset.error().message();
+    EXPECT_EQ(preset.value().id(), "h264-1080p30");
+    EXPECT_EQ(preset.value().fallbackPolicy(),
+              RenderFallbackPolicy::HardwareThenSoftware);
+
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("creator-studio-render-contract-" +
+                       creator::core::generateUuidV4());
+    ASSERT_TRUE(std::filesystem::create_directories(root));
     auto request = RenderRequest::create(
-        snapshot(7), std::filesystem::path{"D:/Exports/tutorial.mp4"},
-        preset.value());
+        ProjectId::create("project-1").value(), generatedSnapshot(),
+        root / "tutorial.mp4", preset.value(),
+        RenderOverwritePolicy::FailIfExists);
     ASSERT_TRUE(request.hasValue()) << request.error().message();
+    EXPECT_EQ(request.value().projectId().value(), "project-1");
+    EXPECT_EQ(request.value().snapshot().revision.value(), 1);
+    EXPECT_EQ(request.value().overwritePolicy(),
+              RenderOverwritePolicy::FailIfExists);
     auto progress = RenderProgress::create(
         RenderJobState::Running, 0.5, TimestampNs{DurationNs{500}},
         DurationNs{1000});
     ASSERT_TRUE(progress.hasValue()) << progress.error().message();
     EXPECT_DOUBLE_EQ(progress.value().fraction(), 0.5);
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
 }
 
 TEST(EditEngineTypesTest, RejectsUnsafeRenderValuesAndImpossibleProgress) {
     auto invalidPreset = RenderPreset::create(
-        0, 1080, FrameRate::create(60, 1).value(), 12'000'000, 192'000);
+        "", 0, 1080, FrameRate::create(60, 1).value(), 12'000'000,
+        192'000, RenderFallbackPolicy::HardwareThenSoftware);
     ASSERT_FALSE(invalidPreset.hasValue());
     auto preset = RenderPreset::create(
-        1920, 1080, FrameRate::create(60, 1).value(), 12'000'000, 192'000)
+        "h264-1080p30", 1920, 1080, FrameRate::create(30, 1).value(),
+        12'000'000, 192'000, RenderFallbackPolicy::HardwareThenSoftware)
                       .value();
-    auto emptyDestination = RenderRequest::create(snapshot(), {}, preset);
+    const auto projectId = ProjectId::create("project-1").value();
+    auto emptyDestination = RenderRequest::create(
+        projectId, snapshot(), {}, preset, RenderOverwritePolicy::FailIfExists);
     auto traversalName = RenderRequest::create(
-        snapshot(), std::filesystem::path{"D:/Exports/../tutorial.mp4"}, preset);
+        projectId, snapshot(),
+        std::filesystem::path{"D:/Exports/../tutorial.mp4"}, preset,
+        RenderOverwritePolicy::FailIfExists);
+    auto relativeName = RenderRequest::create(
+        projectId, snapshot(), std::filesystem::path{"tutorial.mp4"}, preset,
+        RenderOverwritePolicy::FailIfExists);
+    auto wrongExtension = RenderRequest::create(
+        projectId, snapshot(), std::filesystem::path{"D:/Exports/tutorial.mov"},
+        preset, RenderOverwritePolicy::FailIfExists);
+    const auto root = std::filesystem::temp_directory_path();
+    auto emptyTimeline = RenderRequest::create(
+        projectId, snapshot(), root / "empty.mp4", preset,
+        RenderOverwritePolicy::FailIfExists);
     auto impossible = RenderProgress::create(
         RenderJobState::Completed, 0.5, TimestampNs{DurationNs{500}},
         DurationNs{1000});
 
     EXPECT_FALSE(emptyDestination.hasValue());
     EXPECT_FALSE(traversalName.hasValue());
+    EXPECT_FALSE(relativeName.hasValue());
+    EXPECT_FALSE(wrongExtension.hasValue());
+    EXPECT_FALSE(emptyTimeline.hasValue());
     EXPECT_FALSE(impossible.hasValue());
+}
+
+TEST(EditEngineTypesTest, ExposesExactProductionH264Presets) {
+    auto fullHd = RenderPreset::h2641080p30();
+    auto ultraHd = RenderPreset::h2642160p30();
+
+    ASSERT_TRUE(fullHd.hasValue()) << fullHd.error().message();
+    ASSERT_TRUE(ultraHd.hasValue()) << ultraHd.error().message();
+    EXPECT_EQ(fullHd.value().id(), "h264-1080p30");
+    EXPECT_EQ(fullHd.value().width(), 1920U);
+    EXPECT_EQ(fullHd.value().height(), 1080U);
+    EXPECT_EQ(fullHd.value().frameRate(), FrameRate::create(30, 1).value());
+    EXPECT_EQ(fullHd.value().videoBitrate(), 12'000'000U);
+    EXPECT_EQ(fullHd.value().audioBitrate(), 192'000U);
+    EXPECT_EQ(ultraHd.value().id(), "h264-2160p30");
+    EXPECT_EQ(ultraHd.value().width(), 3840U);
+    EXPECT_EQ(ultraHd.value().height(), 2160U);
+    EXPECT_EQ(ultraHd.value().videoBitrate(), 45'000'000U);
+    EXPECT_EQ(ultraHd.value().audioBitrate(), 256'000U);
+}
+
+TEST(EditEngineTypesTest, ValidatesMonotonicRenderProgressStateMachine) {
+    const auto pending = RenderProgress::create(
+        RenderJobState::Pending, 0.0, TimestampNs{DurationNs{0}},
+        DurationNs{1000})
+                             .value();
+    const auto running = RenderProgress::create(
+        RenderJobState::Running, 0.5, TimestampNs{DurationNs{500}},
+        DurationNs{1000})
+                             .value();
+    const auto publishing = RenderProgress::create(
+        RenderJobState::Publishing, 0.999, TimestampNs{DurationNs{1000}},
+        DurationNs{1000})
+                                .value();
+    const auto completed = RenderProgress::create(
+        RenderJobState::Completed, 1.0, TimestampNs{DurationNs{1000}},
+        DurationNs{1000})
+                               .value();
+    const auto regressed = RenderProgress::create(
+        RenderJobState::Running, 0.4, TimestampNs{DurationNs{400}},
+        DurationNs{1000})
+                               .value();
+
+    EXPECT_TRUE(validateRenderProgressTransition(pending, running).hasValue());
+    EXPECT_TRUE(
+        validateRenderProgressTransition(running, publishing).hasValue());
+    EXPECT_TRUE(
+        validateRenderProgressTransition(publishing, completed).hasValue());
+    EXPECT_FALSE(
+        validateRenderProgressTransition(running, regressed).hasValue());
+    EXPECT_FALSE(
+        validateRenderProgressTransition(completed, publishing).hasValue());
 }
 
 }  // namespace
