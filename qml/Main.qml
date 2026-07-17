@@ -16,6 +16,27 @@ ApplicationWindow {
     readonly property var stackPages: ["Home", "Studio", "Editor", "Recovery"]
     property string currentPage: "Home"
 
+    Action {
+        id: studioRecordAction
+        objectName: "studioRecordAction"
+        text: studioController.recording ? qsTr("Stop") : qsTr("Record")
+        enabled: window.currentPage === "Studio"
+                 && projectController.hasOpenProject
+                 && !studioController.busy
+                 && (studioController.recordingAvailable
+                     || studioController.recording)
+        onTriggered: studioController.recording
+                     ? studioController.stopRecording()
+                     : studioController.startRecording()
+    }
+
+    Shortcut {
+        objectName: "studioRecordShortcut"
+        sequence: shortcutSettingsController.recordShortcut
+        enabled: studioRecordAction.enabled
+        onActivated: studioRecordAction.trigger()
+    }
+
     Component.onCompleted: {
         screenCaptureController.initialize()
         deviceCaptureController.initialize()
@@ -73,16 +94,10 @@ ApplicationWindow {
             }
 
             Button {
+                objectName: "studioRecordButton"
+                action: studioRecordAction
                 visible: window.currentPage === "Studio"
-                text: studioController.recording ? qsTr("Stop") : qsTr("Record")
                 highlighted: studioController.recording
-                enabled: projectController.hasOpenProject
-                         && !studioController.busy
-                         && (studioController.recordingAvailable
-                             || studioController.recording)
-                onClicked: studioController.recording
-                           ? studioController.stopRecording()
-                           : studioController.startRecording()
             }
         }
     }

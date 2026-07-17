@@ -64,6 +64,8 @@ add_library(cs_app STATIC
     StudioWorkflowWorker.cpp
     StudioWorkflowController.h
     StudioWorkflowController.cpp
+    ShortcutSettingsController.h
+    ShortcutSettingsController.cpp
     TimelineTrackModel.h
     TimelineTrackModel.cpp
     EditorEngineWorker.h

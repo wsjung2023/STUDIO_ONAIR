@@ -48,6 +48,11 @@ QHash<int, QByteArray> StudioSceneModel::roleNames() const {
             {SourceCountRole, "sourceCount"}};
 }
 
+QString StudioSceneModel::sceneIdAt(int row) const {
+    if (row < 0 || static_cast<std::size_t>(row) >= scenes_.size()) return {};
+    return QString::fromStdString(scenes_[static_cast<std::size_t>(row)].id().value());
+}
+
 void StudioSceneModel::setScenes(
     std::vector<domain::StudioScene> scenes,
     std::optional<domain::SceneId> activeSceneId,

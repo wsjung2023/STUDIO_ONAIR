@@ -12,6 +12,8 @@
 namespace creator::app {
 
 class StudioSceneModel final : public QAbstractListModel {
+    Q_OBJECT
+
 public:
     enum Role {
         SceneIdRole = Qt::UserRole + 1,
@@ -29,6 +31,7 @@ public:
     [[nodiscard]] QVariant data(const QModelIndex& index,
                                 int role = Qt::DisplayRole) const override;
     [[nodiscard]] QHash<int, QByteArray> roleNames() const override;
+    Q_INVOKABLE QString sceneIdAt(int row) const;
 
     void setScenes(std::vector<domain::StudioScene> scenes,
                    std::optional<domain::SceneId> activeSceneId,

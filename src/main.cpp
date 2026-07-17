@@ -7,6 +7,7 @@
 #include "app/LiveRecordingEngineFactory.h"
 #include "app/ScreenCaptureController.h"
 #include "app/ScreenPreviewItem.h"
+#include "app/ShortcutSettingsController.h"
 #include "app/CameraPreviewItem.h"
 #include "app/StudioRecordingBinding.h"
 #include "app/StudioWorkflowController.h"
@@ -143,6 +144,7 @@ int main(int argc, char* argv[]) {
         },
         std::move(recordingReconciler),
         [] { return creator::core::generateUuidV4(); }, &app};
+    creator::app::ShortcutSettingsController shortcutSettingsController{&app};
 #if defined(CS_APP_ENABLE_MLT)
     const auto mltRuntimeRoot = stagedMltRuntimeRoot();
     std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
@@ -167,6 +169,9 @@ int main(int argc, char* argv[]) {
     engine.rootContext()->setContextProperty(
         QStringLiteral("studioWorkflowController"),
         &studioWorkflowController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("shortcutSettingsController"),
+        &shortcutSettingsController);
     engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
                                              &projectController);
     engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),

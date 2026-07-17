@@ -28,7 +28,10 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <memory>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -45,7 +48,7 @@ QQuickItem* findVisualItem(QQuickItem* root, const QString& objectName) {
 class FakeProjectController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy CONSTANT)
-    Q_PROPERTY(bool hasOpenProject READ hasOpenProject CONSTANT)
+    Q_PROPERTY(bool hasOpenProject READ hasOpenProject NOTIFY projectStateChanged)
     Q_PROPERTY(QString projectName READ projectName CONSTANT)
     Q_PROPERTY(QUrl projectUrl READ projectUrl CONSTANT)
     Q_PROPERTY(QVariantList recentProjects READ recentProjects CONSTANT)
@@ -56,7 +59,7 @@ public:
     using QObject::QObject;
 
     [[nodiscard]] bool busy() const noexcept { return false; }
-    [[nodiscard]] bool hasOpenProject() const noexcept { return false; }
+    [[nodiscard]] bool hasOpenProject() const noexcept { return hasOpenProject_; }
     [[nodiscard]] QString projectName() const { return {}; }
     [[nodiscard]] QUrl projectUrl() const { return {}; }
     [[nodiscard]] QVariantList recentProjects() const { return {}; }
@@ -76,17 +79,26 @@ public:
     Q_INVOKABLE void leaveRecoveryForLater() {}
     Q_INVOKABLE void createProject(const QUrl&, const QString&) {}
     Q_INVOKABLE void openProject(const QUrl&) {}
+    void setHasOpenProject(bool open) {
+        if (hasOpenProject_ == open) return;
+        hasOpenProject_ = open;
+        emit projectStateChanged();
+    }
 
 signals:
     void projectOpened();
     void recoveryRequired();
     void recoveryDeferred();
+    void projectStateChanged();
+
+private:
+    bool hasOpenProject_{false};
 };
 
 class FakeStudioController final : public QObject {
     Q_OBJECT
-    Q_PROPERTY(bool busy READ busy CONSTANT)
-    Q_PROPERTY(bool recording READ recording CONSTANT)
+    Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
+    Q_PROPERTY(bool recording READ recording NOTIFY stateChanged)
     Q_PROPERTY(bool recordingAvailable READ recordingAvailable CONSTANT)
     Q_PROPERTY(int segmentCount READ segmentCount CONSTANT)
     Q_PROPERTY(int trackCount READ trackCount CONSTANT)
@@ -100,11 +112,12 @@ class FakeStudioController final : public QObject {
     Q_PROPERTY(QString encoderName READ encoderName CONSTANT)
     Q_PROPERTY(QString takeDuration READ takeDuration CONSTANT)
     Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
+    Q_PROPERTY(qlonglong recordingPositionNs READ recordingPositionNs CONSTANT)
 
 public:
     using QObject::QObject;
-    [[nodiscard]] bool busy() const noexcept { return false; }
-    [[nodiscard]] bool recording() const noexcept { return false; }
+    [[nodiscard]] bool busy() const noexcept { return busy_; }
+    [[nodiscard]] bool recording() const noexcept { return recording_; }
     [[nodiscard]] bool recordingAvailable() const noexcept { return true; }
     [[nodiscard]] int segmentCount() const noexcept { return 0; }
     [[nodiscard]] int trackCount() const noexcept { return 2; }
@@ -120,8 +133,157 @@ public:
     [[nodiscard]] QString encoderName() const { return QStringLiteral("mpeg4, aac"); }
     [[nodiscard]] QString takeDuration() const { return QStringLiteral("00:00:00"); }
     [[nodiscard]] QString statusMessage() const { return {}; }
-    Q_INVOKABLE void startRecording() {}
-    Q_INVOKABLE void stopRecording() {}
+    [[nodiscard]] qlonglong recordingPositionNs() const noexcept { return 777; }
+    Q_INVOKABLE void startRecording() {
+        ++startCalls_;
+        setRecording(true);
+    }
+    Q_INVOKABLE void stopRecording() {
+        ++stopCalls_;
+        setRecording(false);
+    }
+    void setBusy(bool busy) {
+        if (busy_ == busy) return;
+        busy_ = busy;
+        emit stateChanged();
+    }
+    void setRecording(bool recording) {
+        if (recording_ == recording) return;
+        recording_ = recording;
+        emit stateChanged();
+    }
+    [[nodiscard]] int startCalls() const noexcept { return startCalls_; }
+    [[nodiscard]] int stopCalls() const noexcept { return stopCalls_; }
+
+signals:
+    void stateChanged();
+
+private:
+    bool busy_{false};
+    bool recording_{false};
+    int startCalls_{0};
+    int stopCalls_{0};
+};
+
+class FakeShortcutSettingsController final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(QString recordShortcut READ recordShortcut CONSTANT)
+    Q_PROPERTY(QString markerShortcut READ markerShortcut CONSTANT)
+    Q_PROPERTY(QString previousSceneShortcut READ previousSceneShortcut CONSTANT)
+    Q_PROPERTY(QString nextSceneShortcut READ nextSceneShortcut CONSTANT)
+    Q_PROPERTY(QString scene1Shortcut READ scene1Shortcut CONSTANT)
+    Q_PROPERTY(QString scene2Shortcut READ scene2Shortcut CONSTANT)
+    Q_PROPERTY(QString scene3Shortcut READ scene3Shortcut CONSTANT)
+    Q_PROPERTY(QString scene4Shortcut READ scene4Shortcut CONSTANT)
+    Q_PROPERTY(QString scene5Shortcut READ scene5Shortcut CONSTANT)
+    Q_PROPERTY(QString scene6Shortcut READ scene6Shortcut CONSTANT)
+    Q_PROPERTY(QString scene7Shortcut READ scene7Shortcut CONSTANT)
+    Q_PROPERTY(QString scene8Shortcut READ scene8Shortcut CONSTANT)
+    Q_PROPERTY(QString scene9Shortcut READ scene9Shortcut CONSTANT)
+
+public:
+    using QObject::QObject;
+    [[nodiscard]] QString recordShortcut() const { return QStringLiteral("Ctrl+Shift+R"); }
+    [[nodiscard]] QString markerShortcut() const { return QStringLiteral("M"); }
+    [[nodiscard]] QString previousSceneShortcut() const { return QStringLiteral("Ctrl+PgUp"); }
+    [[nodiscard]] QString nextSceneShortcut() const { return QStringLiteral("Ctrl+PgDown"); }
+    [[nodiscard]] QString scene1Shortcut() const { return QStringLiteral("Ctrl+1"); }
+    [[nodiscard]] QString scene2Shortcut() const { return QStringLiteral("Ctrl+2"); }
+    [[nodiscard]] QString scene3Shortcut() const { return QStringLiteral("Ctrl+3"); }
+    [[nodiscard]] QString scene4Shortcut() const { return QStringLiteral("Ctrl+4"); }
+    [[nodiscard]] QString scene5Shortcut() const { return QStringLiteral("Ctrl+5"); }
+    [[nodiscard]] QString scene6Shortcut() const { return QStringLiteral("Ctrl+6"); }
+    [[nodiscard]] QString scene7Shortcut() const { return QStringLiteral("Ctrl+7"); }
+    [[nodiscard]] QString scene8Shortcut() const { return QStringLiteral("Ctrl+8"); }
+    [[nodiscard]] QString scene9Shortcut() const { return QStringLiteral("Ctrl+9"); }
+};
+
+class FakeStudioSceneModel final : public QAbstractListModel {
+    Q_OBJECT
+
+public:
+    explicit FakeStudioSceneModel(QObject* parent = nullptr)
+        : QAbstractListModel(parent) {
+        for (int index = 1; index <= 9; ++index) {
+            sceneIds_.push_back(QStringLiteral("scene-%1").arg(index));
+        }
+    }
+
+    [[nodiscard]] int rowCount(
+        const QModelIndex& parent = QModelIndex()) const override {
+        return parent.isValid() ? 0 : static_cast<int>(sceneIds_.size());
+    }
+    [[nodiscard]] QVariant data(const QModelIndex&, int) const override {
+        return {};
+    }
+    Q_INVOKABLE QString sceneIdAt(int row) const {
+        if (row < 0 || row >= static_cast<int>(sceneIds_.size())) return {};
+        return sceneIds_[static_cast<std::size_t>(row)];
+    }
+
+private:
+    std::vector<QString> sceneIds_;
+};
+
+class FakeStudioWorkflowController final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(QAbstractItemModel* sceneModel READ sceneModel CONSTANT)
+    Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
+    Q_PROPERTY(bool recording READ recording NOTIFY stateChanged)
+    Q_PROPERTY(QString activeSceneId READ activeSceneId NOTIFY stateChanged)
+    Q_PROPERTY(qlonglong recordingPositionNs READ recordingPositionNs CONSTANT)
+
+public:
+    explicit FakeStudioWorkflowController(QObject* parent = nullptr)
+        : QObject(parent), scenes_(this) {}
+
+    [[nodiscard]] QAbstractItemModel* sceneModel() noexcept { return &scenes_; }
+    [[nodiscard]] bool busy() const noexcept { return busy_; }
+    [[nodiscard]] bool recording() const noexcept { return recording_; }
+    [[nodiscard]] QString activeSceneId() const { return activeSceneId_; }
+    [[nodiscard]] qlonglong recordingPositionNs() const noexcept { return 500; }
+    Q_INVOKABLE void switchScene(const QString& sceneId, qlonglong positionNs) {
+        ++switchCalls_;
+        lastSceneId_ = sceneId;
+        lastPositionNs_ = positionNs;
+        activeSceneId_ = sceneId;
+        emit stateChanged();
+    }
+    Q_INVOKABLE void addMarker(const QString&, qlonglong positionNs) {
+        ++markerCalls_;
+        lastPositionNs_ = positionNs;
+    }
+    void setBusy(bool busy) {
+        if (busy_ == busy) return;
+        busy_ = busy;
+        emit stateChanged();
+    }
+    void setRecording(bool recording) {
+        if (recording_ == recording) return;
+        recording_ = recording;
+        emit stateChanged();
+    }
+    void setActiveSceneId(QString sceneId) {
+        activeSceneId_ = std::move(sceneId);
+        emit stateChanged();
+    }
+    [[nodiscard]] int switchCalls() const noexcept { return switchCalls_; }
+    [[nodiscard]] int markerCalls() const noexcept { return markerCalls_; }
+    [[nodiscard]] QString lastSceneId() const { return lastSceneId_; }
+    [[nodiscard]] qlonglong lastPositionNs() const noexcept { return lastPositionNs_; }
+
+signals:
+    void stateChanged();
+
+private:
+    FakeStudioSceneModel scenes_;
+    bool busy_{false};
+    bool recording_{true};
+    QString activeSceneId_{QStringLiteral("scene-5")};
+    int switchCalls_{0};
+    int markerCalls_{0};
+    QString lastSceneId_;
+    qlonglong lastPositionNs_{0};
 };
 
 class FakeScreenCaptureController final : public QObject {
@@ -630,6 +792,8 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
     FakeScreenCaptureController screenCaptureController;
     FakeDeviceCaptureController deviceCaptureController;
     FakeEditorController editorController;
+    FakeStudioWorkflowController studioWorkflowController;
+    FakeShortcutSettingsController shortcutSettingsController;
     engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
                                              &projectController);
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
@@ -640,6 +804,10 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
                                              &deviceCaptureController);
     engine.rootContext()->setContextProperty(QStringLiteral("editorController"),
                                              &editorController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("studioWorkflowController"), &studioWorkflowController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
     QQmlComponent component{
         &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/Main.qml"))};
 
@@ -647,6 +815,59 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
 
     ASSERT_NE(object, nullptr) << component.errorString().toStdString();
     EXPECT_EQ(object->property("currentPage").toString(), QStringLiteral("Recovery"));
+}
+
+TEST(QmlSmokeTest, MainRecordShortcutSharesVisibleActionAndStateGuard) {
+    QQmlEngine engine;
+    FakeProjectController projectController;
+    FakeStudioController studioController;
+    FakeScreenCaptureController screenCaptureController;
+    FakeDeviceCaptureController deviceCaptureController;
+    FakeEditorController editorController;
+    FakeStudioWorkflowController studioWorkflowController;
+    FakeShortcutSettingsController shortcutSettingsController;
+    projectController.setHasOpenProject(true);
+    engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
+                                             &projectController);
+    engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
+                                             &studioController);
+    engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),
+                                             &screenCaptureController);
+    engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
+                                             &deviceCaptureController);
+    engine.rootContext()->setContextProperty(QStringLiteral("editorController"),
+                                             &editorController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("studioWorkflowController"), &studioWorkflowController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
+    QQmlComponent component{
+        &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/Main.qml"))};
+    std::unique_ptr<QObject> object{component.create()};
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    object->setProperty("currentPage", QStringLiteral("Studio"));
+    QCoreApplication::processEvents();
+
+    auto* action = object->findChild<QObject*>(QStringLiteral("studioRecordAction"));
+    auto* button = object->findChild<QObject*>(QStringLiteral("studioRecordButton"));
+    auto* shortcut = object->findChild<QObject*>(QStringLiteral("studioRecordShortcut"));
+    ASSERT_NE(action, nullptr);
+    ASSERT_NE(button, nullptr);
+    ASSERT_NE(shortcut, nullptr);
+    EXPECT_EQ(button->property("action").value<QObject*>(), action);
+    EXPECT_TRUE(action->property("enabled").toBool());
+    EXPECT_TRUE(shortcut->property("enabled").toBool());
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(action, "trigger"));
+    EXPECT_EQ(studioController.startCalls(), 1);
+    studioController.setRecording(false);
+    ASSERT_TRUE(QMetaObject::invokeMethod(shortcut, "activated"));
+    EXPECT_EQ(studioController.startCalls(), 2);
+
+    studioController.setBusy(true);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(action->property("enabled").toBool());
+    EXPECT_FALSE(shortcut->property("enabled").toBool());
 }
 
 TEST(QmlSmokeTest, EditorPageRendersTypedModelsAndPreviewState) {
@@ -1033,12 +1254,18 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     FakeStudioController studioController;
     FakeScreenCaptureController screenCaptureController;
     FakeDeviceCaptureController deviceCaptureController;
+    FakeStudioWorkflowController studioWorkflowController;
+    FakeShortcutSettingsController shortcutSettingsController;
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
                                              &studioController);
     engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),
                                              &screenCaptureController);
     engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
                                              &deviceCaptureController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("studioWorkflowController"), &studioWorkflowController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
     QQmlComponent component{
         &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/StudioPage.qml"))};
 
@@ -1077,6 +1304,118 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     EXPECT_EQ(cameraSelector->property("count").toInt(), 1);
     EXPECT_EQ(microphoneSelector->property("count").toInt(), 1);
     EXPECT_GT(microphoneMeter->property("value").toDouble(), 0.0);
+}
+
+TEST(QmlSmokeTest, StudioShortcutsShareVisibleActionsAndStateGuards) {
+    QQmlEngine engine;
+    FakeStudioController studioController;
+    FakeScreenCaptureController screenCaptureController;
+    FakeDeviceCaptureController deviceCaptureController;
+    FakeStudioWorkflowController studioWorkflowController;
+    FakeShortcutSettingsController shortcutSettingsController;
+    studioController.setRecording(true);
+    engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
+                                             &studioController);
+    engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),
+                                             &screenCaptureController);
+    engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
+                                             &deviceCaptureController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("studioWorkflowController"), &studioWorkflowController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
+    QQmlComponent component{
+        &engine,
+        QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/StudioPage.qml"))};
+    std::unique_ptr<QObject> object{component.create()};
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    QCoreApplication::processEvents();
+
+    const auto proveParity = [&](const QString& actionName,
+                                 const QString& buttonName,
+                                 const QString& shortcutName,
+                                 const std::function<void()>& reset,
+                                 const std::function<int()>& calls) {
+        auto* action = object->findChild<QObject*>(actionName);
+        auto* button = object->findChild<QObject*>(buttonName);
+        auto* shortcut = object->findChild<QObject*>(shortcutName);
+        ASSERT_NE(action, nullptr) << actionName.toStdString();
+        ASSERT_NE(button, nullptr) << buttonName.toStdString();
+        ASSERT_NE(shortcut, nullptr) << shortcutName.toStdString();
+        EXPECT_EQ(button->property("action").value<QObject*>(), action);
+        ASSERT_TRUE(action->property("enabled").toBool());
+        ASSERT_TRUE(shortcut->property("enabled").toBool());
+        reset();
+        const int before = calls();
+        ASSERT_TRUE(QMetaObject::invokeMethod(action, "trigger"));
+        const int afterAction = calls();
+        EXPECT_EQ(afterAction, before + 1);
+        reset();
+        ASSERT_TRUE(QMetaObject::invokeMethod(shortcut, "activated"));
+        EXPECT_EQ(calls(), afterAction + 1);
+    };
+
+    proveParity(QStringLiteral("studioMarkerAction"),
+                QStringLiteral("studioMarkerButton"),
+                QStringLiteral("studioMarkerShortcut"), [] {},
+                [&] { return studioWorkflowController.markerCalls(); });
+    EXPECT_EQ(studioWorkflowController.lastPositionNs(), 777);
+
+    proveParity(QStringLiteral("studioPreviousSceneAction"),
+                QStringLiteral("studioPreviousSceneButton"),
+                QStringLiteral("studioPreviousSceneShortcut"),
+                [&] { studioWorkflowController.setActiveSceneId(QStringLiteral("scene-5")); },
+                [&] { return studioWorkflowController.switchCalls(); });
+    EXPECT_EQ(studioWorkflowController.lastSceneId(), QStringLiteral("scene-4"));
+    proveParity(QStringLiteral("studioNextSceneAction"),
+                QStringLiteral("studioNextSceneButton"),
+                QStringLiteral("studioNextSceneShortcut"),
+                [&] { studioWorkflowController.setActiveSceneId(QStringLiteral("scene-5")); },
+                [&] { return studioWorkflowController.switchCalls(); });
+    EXPECT_EQ(studioWorkflowController.lastSceneId(), QStringLiteral("scene-6"));
+
+    for (int scene = 1; scene <= 9; ++scene) {
+        proveParity(QStringLiteral("studioScene%1Action").arg(scene),
+                    QStringLiteral("studioSceneButton%1").arg(scene),
+                    QStringLiteral("studioScene%1Shortcut").arg(scene), [] {},
+                    [&] { return studioWorkflowController.switchCalls(); });
+        EXPECT_EQ(studioWorkflowController.lastSceneId(),
+                  QStringLiteral("scene-%1").arg(scene));
+    }
+
+    studioWorkflowController.setBusy(true);
+    QCoreApplication::processEvents();
+    for (const QString& name :
+         {QStringLiteral("studioMarkerAction"),
+          QStringLiteral("studioPreviousSceneAction"),
+          QStringLiteral("studioNextSceneAction"),
+          QStringLiteral("studioScene1Action")}) {
+        EXPECT_FALSE(object->findChild<QObject*>(name)->property("enabled").toBool());
+    }
+    studioWorkflowController.setBusy(false);
+    studioController.setBusy(true);
+    QCoreApplication::processEvents();
+    for (const QString& name :
+         {QStringLiteral("studioMarkerAction"),
+          QStringLiteral("studioPreviousSceneAction"),
+          QStringLiteral("studioNextSceneAction"),
+          QStringLiteral("studioScene1Action")}) {
+        EXPECT_FALSE(object->findChild<QObject*>(name)->property("enabled").toBool());
+    }
+    studioController.setBusy(false);
+    studioController.setRecording(false);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(object->findChild<QObject*>(QStringLiteral("studioMarkerAction"))
+                     ->property("enabled")
+                     .toBool());
+    studioWorkflowController.setRecording(false);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(object->findChild<QObject*>(QStringLiteral("studioMarkerAction"))
+                     ->property("enabled")
+                     .toBool());
+    EXPECT_TRUE(object->findChild<QObject*>(QStringLiteral("studioScene1Action"))
+                    ->property("enabled")
+                    .toBool());
 }
 
 }  // namespace

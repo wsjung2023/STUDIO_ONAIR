@@ -289,6 +289,10 @@ TEST(StudioSceneModelTest, PublishesStableSceneRolesAndSelection) {
     EXPECT_TRUE(model.data(screen, StudioSceneModel::ActiveRole).toBool());
     EXPECT_FALSE(model.data(screen, StudioSceneModel::SelectedRole).toBool());
     EXPECT_EQ(model.data(screen, StudioSceneModel::SourceCountRole).toInt(), 4);
+    EXPECT_EQ(model.sceneIdAt(0), QStringLiteral("presentation"));
+    EXPECT_EQ(model.sceneIdAt(2), QStringLiteral("camera"));
+    EXPECT_TRUE(model.sceneIdAt(-1).isEmpty());
+    EXPECT_TRUE(model.sceneIdAt(3).isEmpty());
     EXPECT_TRUE(model.data(model.index(2, 0),
                            StudioSceneModel::SelectedRole)
                     .toBool());

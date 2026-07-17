@@ -11,6 +11,82 @@ import CreatorStudio.Native 1.0
 Item {
     id: root
 
+    function switchSceneAt(sceneIndex) {
+        const sceneId = studioWorkflowController.sceneModel.sceneIdAt(sceneIndex)
+        if (sceneId.length > 0)
+            studioWorkflowController.switchScene(
+                        sceneId, studioController.recordingPositionNs)
+    }
+
+    function switchRelativeScene(offset) {
+        const sceneIds = []
+        for (let index = 0; index < 10000; ++index) {
+            const sceneId = studioWorkflowController.sceneModel.sceneIdAt(index)
+            if (sceneId.length === 0)
+                break
+            sceneIds.push(sceneId)
+        }
+        if (sceneIds.length === 0)
+            return
+        let activeIndex = sceneIds.indexOf(studioWorkflowController.activeSceneId)
+        if (activeIndex < 0)
+            activeIndex = 0
+        const nextIndex = (activeIndex + offset + sceneIds.length) % sceneIds.length
+        root.switchSceneAt(nextIndex)
+    }
+
+    Action {
+        id: markerAction
+        objectName: "studioMarkerAction"
+        text: qsTr("Add marker")
+        enabled: root.visible && studioController.recording
+                 && studioWorkflowController.recording
+                 && !studioController.busy
+                 && !studioWorkflowController.busy
+        onTriggered: studioWorkflowController.addMarker(
+                         "", studioController.recordingPositionNs)
+    }
+    Action {
+        id: previousSceneAction
+        objectName: "studioPreviousSceneAction"
+        text: qsTr("Previous scene")
+        enabled: root.visible && !studioController.busy
+                 && !studioWorkflowController.busy
+                 && studioWorkflowController.activeSceneId.length > 0
+        onTriggered: root.switchRelativeScene(-1)
+    }
+    Action {
+        id: nextSceneAction
+        objectName: "studioNextSceneAction"
+        text: qsTr("Next scene")
+        enabled: root.visible && !studioController.busy
+                 && !studioWorkflowController.busy
+                 && studioWorkflowController.activeSceneId.length > 0
+        onTriggered: root.switchRelativeScene(1)
+    }
+    Action { id: scene1Action; objectName: "studioScene1Action"; text: qsTr("Scene 1"); enabled: root.visible && !studioController.busy && !studioWorkflowController.busy && studioWorkflowController.sceneModel.sceneIdAt(0).length > 0; onTriggered: root.switchSceneAt(0) }
+    Action { id: scene2Action; objectName: "studioScene2Action"; text: qsTr("Scene 2"); enabled: root.visible && !studioController.busy && !studioWorkflowController.busy && studioWorkflowController.sceneModel.sceneIdAt(1).length > 0; onTriggered: root.switchSceneAt(1) }
+    Action { id: scene3Action; objectName: "studioScene3Action"; text: qsTr("Scene 3"); enabled: root.visible && !studioController.busy && !studioWorkflowController.busy && studioWorkflowController.sceneModel.sceneIdAt(2).length > 0; onTriggered: root.switchSceneAt(2) }
+    Action { id: scene4Action; objectName: "studioScene4Action"; text: qsTr("Scene 4"); enabled: root.visible && !studioController.busy && !studioWorkflowController.busy && studioWorkflowController.sceneModel.sceneIdAt(3).length > 0; onTriggered: root.switchSceneAt(3) }
+    Action { id: scene5Action; objectName: "studioScene5Action"; text: qsTr("Scene 5"); enabled: root.visible && !studioController.busy && !studioWorkflowController.busy && studioWorkflowController.sceneModel.sceneIdAt(4).length > 0; onTriggered: root.switchSceneAt(4) }
+    Action { id: scene6Action; objectName: "studioScene6Action"; text: qsTr("Scene 6"); enabled: root.visible && !studioController.busy && !studioWorkflowController.busy && studioWorkflowController.sceneModel.sceneIdAt(5).length > 0; onTriggered: root.switchSceneAt(5) }
+    Action { id: scene7Action; objectName: "studioScene7Action"; text: qsTr("Scene 7"); enabled: root.visible && !studioController.busy && !studioWorkflowController.busy && studioWorkflowController.sceneModel.sceneIdAt(6).length > 0; onTriggered: root.switchSceneAt(6) }
+    Action { id: scene8Action; objectName: "studioScene8Action"; text: qsTr("Scene 8"); enabled: root.visible && !studioController.busy && !studioWorkflowController.busy && studioWorkflowController.sceneModel.sceneIdAt(7).length > 0; onTriggered: root.switchSceneAt(7) }
+    Action { id: scene9Action; objectName: "studioScene9Action"; text: qsTr("Scene 9"); enabled: root.visible && !studioController.busy && !studioWorkflowController.busy && studioWorkflowController.sceneModel.sceneIdAt(8).length > 0; onTriggered: root.switchSceneAt(8) }
+
+    Shortcut { objectName: "studioMarkerShortcut"; sequence: shortcutSettingsController.markerShortcut; enabled: markerAction.enabled; onActivated: markerAction.trigger() }
+    Shortcut { objectName: "studioPreviousSceneShortcut"; sequence: shortcutSettingsController.previousSceneShortcut; enabled: previousSceneAction.enabled; onActivated: previousSceneAction.trigger() }
+    Shortcut { objectName: "studioNextSceneShortcut"; sequence: shortcutSettingsController.nextSceneShortcut; enabled: nextSceneAction.enabled; onActivated: nextSceneAction.trigger() }
+    Shortcut { objectName: "studioScene1Shortcut"; sequence: shortcutSettingsController.scene1Shortcut; enabled: scene1Action.enabled; onActivated: scene1Action.trigger() }
+    Shortcut { objectName: "studioScene2Shortcut"; sequence: shortcutSettingsController.scene2Shortcut; enabled: scene2Action.enabled; onActivated: scene2Action.trigger() }
+    Shortcut { objectName: "studioScene3Shortcut"; sequence: shortcutSettingsController.scene3Shortcut; enabled: scene3Action.enabled; onActivated: scene3Action.trigger() }
+    Shortcut { objectName: "studioScene4Shortcut"; sequence: shortcutSettingsController.scene4Shortcut; enabled: scene4Action.enabled; onActivated: scene4Action.trigger() }
+    Shortcut { objectName: "studioScene5Shortcut"; sequence: shortcutSettingsController.scene5Shortcut; enabled: scene5Action.enabled; onActivated: scene5Action.trigger() }
+    Shortcut { objectName: "studioScene6Shortcut"; sequence: shortcutSettingsController.scene6Shortcut; enabled: scene6Action.enabled; onActivated: scene6Action.trigger() }
+    Shortcut { objectName: "studioScene7Shortcut"; sequence: shortcutSettingsController.scene7Shortcut; enabled: scene7Action.enabled; onActivated: scene7Action.trigger() }
+    Shortcut { objectName: "studioScene8Shortcut"; sequence: shortcutSettingsController.scene8Shortcut; enabled: scene8Action.enabled; onActivated: scene8Action.trigger() }
+    Shortcut { objectName: "studioScene9Shortcut"; sequence: shortcutSettingsController.scene9Shortcut; enabled: scene9Action.enabled; onActivated: scene9Action.trigger() }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 1
@@ -28,6 +104,37 @@ Item {
                     anchors.fill: parent
 
                     Label { text: qsTr("Scenes"); font.bold: true }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        ToolButton {
+                            objectName: "studioPreviousSceneButton"
+                            action: previousSceneAction
+                        }
+                        ToolButton {
+                            objectName: "studioNextSceneButton"
+                            action: nextSceneAction
+                        }
+                        Button {
+                            objectName: "studioMarkerButton"
+                            Layout.fillWidth: true
+                            action: markerAction
+                        }
+                    }
+
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: 5
+                        ToolButton { objectName: "studioSceneButton1"; action: scene1Action }
+                        ToolButton { objectName: "studioSceneButton2"; action: scene2Action }
+                        ToolButton { objectName: "studioSceneButton3"; action: scene3Action }
+                        ToolButton { objectName: "studioSceneButton4"; action: scene4Action }
+                        ToolButton { objectName: "studioSceneButton5"; action: scene5Action }
+                        ToolButton { objectName: "studioSceneButton6"; action: scene6Action }
+                        ToolButton { objectName: "studioSceneButton7"; action: scene7Action }
+                        ToolButton { objectName: "studioSceneButton8"; action: scene8Action }
+                        ToolButton { objectName: "studioSceneButton9"; action: scene9Action }
+                    }
 
                     ListView {
                         Layout.fillWidth: true
