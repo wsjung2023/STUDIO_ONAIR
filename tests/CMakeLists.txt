@@ -76,6 +76,8 @@ add_executable(cs_tests
     avatar/ExpressionNormalizerTest.cpp
     avatar/AvatarMotionSerializerTest.cpp
     avatar/AvatarMotionNdjsonSinkTest.cpp
+    avatar/FakeTrackingProviderTest.cpp
+    avatar/PipelineTest.cpp
     recorder/RecordingTrackTest.cpp
     recorder/DiskSpaceMonitorTest.cpp
     recorder/DurableSegmentPublisherTest.cpp
