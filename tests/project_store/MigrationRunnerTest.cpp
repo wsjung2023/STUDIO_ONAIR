@@ -52,7 +52,7 @@ TEST_F(MigrationRunnerTest, AppliesAllMigrationsExactlyOnce) {
     ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
     ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
 
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 4);
     EXPECT_EQ(connection.scalarInt64(
                   "SELECT count(*) FROM schema_migrations WHERE version=1")
                   .value(),
@@ -85,17 +85,78 @@ TEST_F(MigrationRunnerTest, AppliesAllMigrationsExactlyOnce) {
               1);
 }
 
+TEST_F(MigrationRunnerTest, AppliesRenderJobsMigrationFourExactlyOnce) {
+    auto opened = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(opened.hasValue()) << opened.error().message();
+    auto connection = std::move(opened).value();
+
+    ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
+    ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
+
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 4);
+    EXPECT_EQ(connection.scalarInt64(
+                  "SELECT count(*) FROM schema_migrations WHERE version=4")
+                  .value(),
+              1);
+    EXPECT_EQ(connection.scalarInt64(
+                  "SELECT count(*) FROM sqlite_master WHERE type='table' "
+                  "AND name='render_jobs'")
+                  .value(),
+              1);
+}
+
+TEST_F(MigrationRunnerTest, RenderJobSchemaRejectsCrossProjectAndInvalidState) {
+    auto opened = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(opened.hasValue()) << opened.error().message();
+    auto connection = std::move(opened).value();
+    ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
+    ASSERT_TRUE(connection.execute(
+        "INSERT INTO projects VALUES"
+        "('one','One',1,'2026-07-18T00:00:00Z','2026-07-18T00:00:00Z'),"
+        "('two','Two',1,'2026-07-18T00:00:00Z','2026-07-18T00:00:00Z');"
+        "INSERT INTO timelines(timeline_id,project_id,name,frame_rate_numerator,"
+        "frame_rate_denominator,revision,is_primary) VALUES"
+        "('timeline-one','one','Main',30,1,7,1),"
+        "('timeline-two','two','Main',30,1,0,1);")
+                    .hasValue());
+    constexpr std::string_view pendingValues =
+        "'job','one','timeline-one',7,'h264-1080p30',1920,1080,30,1,"
+        "12000000,192000,'HARDWARE_THEN_SOFTWARE','FAIL_IF_EXISTS',"
+        "'D:/Exports/out.mp4','D:/Exports/.out.job.partial.mp4',"
+        "'PENDING',0,1000,0.0,NULL,NULL,NULL,NULL,NULL,NULL,"
+        "'2026-07-18T00:00:00Z',NULL,'2026-07-18T00:00:00Z',NULL";
+    ASSERT_TRUE(connection.execute(
+        "INSERT INTO render_jobs VALUES(" + std::string{pendingValues} + ")")
+                    .hasValue());
+
+    EXPECT_FALSE(connection.execute(
+        "UPDATE render_jobs SET state='COMPLETED',rendered_through_ns=1000,"
+        "fraction=1.0,output_sha256='"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+        "destination_identity='id',finished_at_utc='2026-07-18T00:00:01Z',"
+        "updated_at_utc='2026-07-18T00:00:01Z' WHERE job_id='job'")
+                     .hasValue());
+    EXPECT_FALSE(connection.execute(
+        "INSERT INTO render_jobs VALUES("
+        "'cross','one','timeline-two',0,'h264-1080p30',1920,1080,30,1,"
+        "12000000,192000,'HARDWARE_THEN_SOFTWARE','FAIL_IF_EXISTS',"
+        "'D:/Exports/cross.mp4','D:/Exports/.cross.partial.mp4',"
+        "'PENDING',0,1000,0.0,NULL,NULL,NULL,NULL,NULL,NULL,"
+        "'2026-07-18T00:00:00Z',NULL,'2026-07-18T00:00:00Z',NULL)")
+                     .hasValue());
+}
+
 TEST_F(MigrationRunnerTest, RejectsFutureDatabaseWithoutChangingVersion) {
     auto opened = SqliteConnection::open(databasePath());
     ASSERT_TRUE(opened.hasValue()) << opened.error().message();
     auto connection = std::move(opened).value();
-    ASSERT_TRUE(connection.execute("PRAGMA user_version=4").hasValue());
+    ASSERT_TRUE(connection.execute("PRAGMA user_version=5").hasValue());
 
     const auto result = MigrationRunner::apply(connection);
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::UnsupportedVersion);
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 4);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 5);
     EXPECT_EQ(connection.scalarInt64(
                   "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='projects'")
                   .value(),
@@ -115,7 +176,7 @@ TEST_F(MigrationRunnerTest, RejectsChangedChecksum) {
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 4);
 }
 
 TEST_F(MigrationRunnerTest, RejectsChangedSecondMigrationChecksum) {
@@ -131,7 +192,7 @@ TEST_F(MigrationRunnerTest, RejectsChangedSecondMigrationChecksum) {
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 4);
 }
 
 TEST_F(MigrationRunnerTest, RejectsChangedStudioMigrationChecksum) {
@@ -147,7 +208,23 @@ TEST_F(MigrationRunnerTest, RejectsChangedStudioMigrationChecksum) {
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 4);
+}
+
+TEST_F(MigrationRunnerTest, RejectsChangedRenderMigrationChecksum) {
+    auto opened = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(opened.hasValue()) << opened.error().message();
+    auto connection = std::move(opened).value();
+    ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
+    ASSERT_TRUE(connection.execute(
+        "UPDATE schema_migrations SET checksum='wrong' WHERE version=4")
+                    .hasValue());
+
+    const auto result = MigrationRunner::apply(connection);
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 4);
 }
 
 TEST_F(MigrationRunnerTest, UpgradesVersionOneWithoutLosingExistingRows) {
@@ -155,7 +232,7 @@ TEST_F(MigrationRunnerTest, UpgradesVersionOneWithoutLosingExistingRows) {
     ASSERT_TRUE(opened.hasValue()) << opened.error().message();
     auto connection = std::move(opened).value();
     const auto migrations = defaultMigrations();
-    ASSERT_EQ(migrations.size(), 3U);
+    ASSERT_EQ(migrations.size(), 4U);
     ASSERT_TRUE(applyMigrations(connection, migrations.first(1)).hasValue());
     ASSERT_TRUE(connection.execute(
         "INSERT INTO projects VALUES("
@@ -169,7 +246,7 @@ TEST_F(MigrationRunnerTest, UpgradesVersionOneWithoutLosingExistingRows) {
 
     ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
 
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 4);
     EXPECT_EQ(connection.scalarInt64("SELECT count(*) FROM projects").value(), 1);
     EXPECT_EQ(connection.scalarInt64("SELECT count(*) FROM recording_sessions").value(), 1);
     EXPECT_EQ(connection.scalarInt64("SELECT count(*) FROM segments").value(), 1);
@@ -180,7 +257,7 @@ TEST_F(MigrationRunnerTest, UpgradesVersionTwoWithoutChangingExistingRows) {
     ASSERT_TRUE(opened.hasValue()) << opened.error().message();
     auto connection = std::move(opened).value();
     const auto migrations = defaultMigrations();
-    ASSERT_EQ(migrations.size(), 3U);
+    ASSERT_EQ(migrations.size(), 4U);
     ASSERT_TRUE(applyMigrations(connection, migrations.first(2)).hasValue());
     ASSERT_TRUE(connection.execute(
         "INSERT INTO projects VALUES("
@@ -192,7 +269,7 @@ TEST_F(MigrationRunnerTest, UpgradesVersionTwoWithoutChangingExistingRows) {
 
     ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
 
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 4);
     EXPECT_EQ(connection.scalarInt64(
                   "SELECT revision FROM timelines WHERE timeline_id='timeline'")
                   .value(),
@@ -390,7 +467,7 @@ TEST_F(MigrationRunnerTest, RejectsMissingMigrationMetadataAtCurrentVersion) {
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 4);
 }
 
 TEST_F(MigrationRunnerTest, RejectsExtraMigrationMetadataAtCurrentVersion) {
@@ -407,7 +484,7 @@ TEST_F(MigrationRunnerTest, RejectsExtraMigrationMetadataAtCurrentVersion) {
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 4);
 }
 
 TEST_F(MigrationRunnerTest, InvalidMigrationRollsBackSchemaAndVersion) {

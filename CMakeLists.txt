@@ -135,6 +135,17 @@ configure_file(
     @ONLY
 )
 
+set(CS_MIGRATION_004
+    "${PROJECT_SOURCE_DIR}/src/project_store/migrations/004_render_jobs.sql")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CS_MIGRATION_004}")
+file(READ "${CS_MIGRATION_004}" CS_MIGRATION_004_SQL)
+file(SHA256 "${CS_MIGRATION_004}" CS_MIGRATION_004_SHA256)
+configure_file(
+    "${PROJECT_SOURCE_DIR}/cmake/Migration004.h.in"
+    "${PROJECT_BINARY_DIR}/generated/project_store/Migration004.h"
+    @ONLY
+)
+
 # Layers below the application boundary. None of these link Qt.
 add_subdirectory(src/core)
 add_subdirectory(src/domain)

@@ -5,6 +5,7 @@
 #include "project_store/Migration001.h"
 #include "project_store/Migration002.h"
 #include "project_store/Migration003.h"
+#include "project_store/Migration004.h"
 #include "project_store/internal/SqliteConnection.h"
 
 #include <array>
@@ -122,7 +123,11 @@ std::span<const MigrationDescriptor> defaultMigrations() noexcept {
         MigrationDescriptor{.version = embedded::kMigration003Version,
                             .name = embedded::kMigration003Name,
                             .checksum = embedded::kMigration003Sha256,
-                            .sql = embedded::kMigration003Sql}};
+                            .sql = embedded::kMigration003Sql},
+        MigrationDescriptor{.version = embedded::kMigration004Version,
+                            .name = embedded::kMigration004Name,
+                            .checksum = embedded::kMigration004Sha256,
+                            .sql = embedded::kMigration004Sql}};
     static_assert(migrations.back().version == MigrationRunner::kLatestVersion);
     return migrations;
 }

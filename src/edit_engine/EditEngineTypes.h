@@ -162,6 +162,9 @@ public:
         return fallbackPolicy_;
     }
 
+    friend bool operator==(const RenderPreset&,
+                           const RenderPreset&) = default;
+
 private:
     RenderPreset(std::string id, std::uint32_t width, std::uint32_t height,
                  core::FrameRate frameRate, std::uint32_t videoBitrate,
