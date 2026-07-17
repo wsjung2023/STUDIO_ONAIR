@@ -245,6 +245,9 @@ std::optional<FileProvenance> expectedProvenance(const std::string& path) {
         return FileProvenance{"FFmpeg", "8.1.2", kFfmpegIdentity,
                               "LGPL-2.1-or-later"};
     }
+    if (name == "z.dll") {
+        return FileProvenance{"zlib", "1.3.2", kVcpkgIdentity, "Zlib"};
+    }
     if (name.starts_with("pthread") ||
         lower.starts_with("include/mlt-deps/")) {
         return FileProvenance{"PThreads4W", "3.0.0", kVcpkgIdentity,
@@ -276,6 +279,10 @@ nlohmann::json expectedDependencies() {
          {"version", "8.1.2"},
          {"source_identity", kFfmpegIdentity},
          {"license", "LGPL-2.1-or-later"}},
+        {{"component", "zlib"},
+         {"version", "1.3.2"},
+         {"source_identity", kVcpkgIdentity},
+         {"license", "Zlib"}},
         {{"component", "PThreads4W"},
          {"version", "3.0.0"},
          {"source_identity", kVcpkgIdentity},
@@ -399,6 +406,7 @@ Result<void> verifyMltRuntimeManifest(
     }
 
     for (const auto* required : {"bin/mlt-7.dll", "bin/mlt++-7.dll",
+                                 "bin/z.dll",
                                  "lib/mlt-7/mltcore.dll",
                                  "lib/mlt-7/mltavformat.dll"}) {
         if (!expected.contains(keyFor(required))) {

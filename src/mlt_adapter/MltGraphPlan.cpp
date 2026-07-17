@@ -134,6 +134,8 @@ core::Result<MltGraphPlan> compileMltGraphPlan(
         const auto& track = snapshot.timeline.tracks()[trackPosition];
         std::vector<MltGraphClip> clips;
         clips.reserve(track.clips().size());
+        std::vector<MltGraphClip> audioClips;
+        audioClips.reserve(track.clips().size());
         for (const auto& clip : track.clips()) {
             auto timelineFrames = toFrames(clip.timelineRange(), frameRate);
             if (!timelineFrames.hasValue()) return timelineFrames.error();
@@ -199,7 +201,8 @@ core::Result<MltGraphPlan> compileMltGraphPlan(
                                             : 0;
                     visualBranches.push_back(MltVisualBranch{
                         clip.id(), cueId, std::nullopt,
-                        MltVisualSourceKind::Generated, std::move(sourcePath),
+                        MltVisualSourceKind::Generated,
+                        domain::MediaKind::Image, std::move(sourcePath),
                         available, track.enabled() && clip.enabled(), 0,
                         frames.value().last - frames.value().first,
                         frames.value().first, frames.value().last, transform,
@@ -259,13 +262,15 @@ core::Result<MltGraphPlan> compileMltGraphPlan(
                 clip.visualTransform(),
                 clip.audioEnvelope()};
             clips.push_back(graphClip);
+            if (clip.hasAudio()) audioClips.push_back(graphClip);
 
             if (track.kind() == domain::TrackKind::Video) {
                 const auto transform =
                     clip.visualTransform().value_or(identity.value());
                 visualBranches.push_back(MltVisualBranch{
                     clip.id(), std::nullopt, *clip.assetId(),
-                    MltVisualSourceKind::Asset, graphClip.mediaPath,
+                    MltVisualSourceKind::Asset, clip.mediaKind(),
+                    graphClip.mediaPath,
                     graphClip.available, track.enabled() && clip.enabled(),
                     graphClip.sourceIn, graphClip.sourceOut,
                     graphClip.timelineIn, graphClip.timelineOut, transform,
@@ -276,8 +281,9 @@ core::Result<MltGraphPlan> compileMltGraphPlan(
         }
         auto graphTrack = MltGraphTrack{track.id(), track.kind(),
                                         track.enabled(), std::move(clips)};
-        if (track.kind() == domain::TrackKind::Audio && track.enabled()) {
-            audioTracks.push_back(graphTrack);
+        if (track.enabled() && !audioClips.empty()) {
+            audioTracks.push_back(MltGraphTrack{
+                track.id(), track.kind(), true, std::move(audioClips)});
         }
         tracks.push_back(std::move(graphTrack));
     }

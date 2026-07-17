@@ -74,9 +74,10 @@ $FfmpegEvidence = Get-Content -LiteralPath (Join-Path $FfmpegRoot "creator-studi
 if ($FfmpegEvidence -match '--enable-(gpl|nonfree)' -or $FfmpegEvidence -notmatch '--enable-shared') {
     throw "FFmpeg root does not satisfy the dynamic LGPL policy"
 }
-if ($FfmpegEvidence -notmatch "(?m)^ffmpeg_version=$ExpectedFfmpegVersion$" -or
-    $FfmpegEvidence -notmatch "(?m)^official_release_archive_sha256=$ExpectedFfmpegArchiveSha256$" -or
-    $FfmpegEvidence -notmatch "(?m)^vcpkg_commit=$PinnedVcpkgCommit$") {
+if ($FfmpegEvidence -notmatch "(?m)^ffmpeg_version=$ExpectedFfmpegVersion\r?$" -or
+    $FfmpegEvidence -notmatch "(?m)^official_release_archive_sha256=$ExpectedFfmpegArchiveSha256\r?$" -or
+    $FfmpegEvidence -notmatch "(?m)^vcpkg_commit=$PinnedVcpkgCommit\r?$" -or
+    $FfmpegEvidence -notmatch "(?m)^png_decoder=enabled\r?$") {
     throw "FFmpeg root identity does not match the audited release"
 }
 
@@ -255,6 +256,7 @@ Copy-RequiredFile (Join-Path $MltOutput "lib/mlt/mltcore.dll") (Join-Path $Insta
 Copy-RequiredFile (Join-Path $MltOutput "lib/mlt/mltavformat.dll") (Join-Path $InstallRoot "lib/mlt-7/mltavformat.dll")
 Copy-RequiredFile (Join-Path $MltOutput "lib/mlt-7.lib") (Join-Path $InstallRoot "lib/mlt-7.lib")
 Copy-RequiredFile (Join-Path $MltOutput "lib/mlt++-7.lib") (Join-Path $InstallRoot "lib/mlt++-7.lib")
+Copy-RequiredFile (Join-Path $FfmpegRoot "bin/z.dll") (Join-Path $InstallRoot "bin/z.dll")
 
 Copy-SelectedTree (Join-Path $SourceRoot "src/framework") (Join-Path $InstallRoot "include/mlt-7/framework") @("*.h")
 Copy-RequiredFile (Join-Path $NativeBuildRoot "src/framework/mlt_export.h") (Join-Path $InstallRoot "include/mlt-7/framework/mlt_export.h")
@@ -300,6 +302,9 @@ function Get-FileProvenance {
     if ($Name -match '^(avcodec-|avfilter-|avformat-|avutil-|swresample-|swscale-).*\.dll$') {
         return [ordered]@{ component = "FFmpeg"; version = $ExpectedFfmpegVersion; source_identity = "sha256:$ExpectedFfmpegArchiveSha256"; license = "LGPL-2.1-or-later" }
     }
+    if ($Name -match '^z\.dll$') {
+        return [ordered]@{ component = "zlib"; version = "1.3.2"; source_identity = $VcpkgIdentity; license = "Zlib" }
+    }
     if ($Name -match '^pthread.*\.dll$' -or $Lower.StartsWith("include/mlt-deps/")) {
         return [ordered]@{ component = "PThreads4W"; version = "3.0.0"; source_identity = $VcpkgIdentity; license = "Apache-2.0" }
     }
@@ -343,6 +348,7 @@ $Manifest = [ordered]@{
     allowed_modules = @("core", "avformat")
     dependencies = @(
         [ordered]@{ component = "FFmpeg"; version = $ExpectedFfmpegVersion; source_identity = "sha256:$ExpectedFfmpegArchiveSha256"; license = "LGPL-2.1-or-later" }
+        [ordered]@{ component = "zlib"; version = "1.3.2"; source_identity = "vcpkg:$PinnedVcpkgCommit"; license = "Zlib" }
         [ordered]@{ component = "PThreads4W"; version = "3.0.0"; source_identity = "vcpkg:$PinnedVcpkgCommit"; license = "Apache-2.0" }
         [ordered]@{ component = "GNU libiconv"; version = "1.19"; source_identity = "vcpkg:$PinnedVcpkgCommit"; license = "LGPL-2.1-or-later" }
         [ordered]@{ component = "dlfcn-win32"; version = "1.4.2"; source_identity = "vcpkg:$PinnedVcpkgCommit"; license = "MIT" }

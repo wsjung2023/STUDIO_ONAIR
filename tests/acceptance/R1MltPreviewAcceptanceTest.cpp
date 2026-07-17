@@ -121,6 +121,10 @@ edit_engine::TimelineSnapshot layeredSnapshot(const fs::path& mediaRoot) {
                                           core::DurationNs{500'000'000}},
                                       core::DurationNs{500'000'000})
                                       .value();
+    const auto halfOpacity = domain::VisualTransform::create(
+                                 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0,
+                                 0.0, 0.0, 0.0, 0.0, 0.5, 0)
+                                 .value();
     EXPECT_TRUE(timeline.insertClip(
                             bottomTrack,
                             domain::Clip::createAsset(
@@ -134,7 +138,7 @@ edit_engine::TimelineSnapshot layeredSnapshot(const fs::path& mediaRoot) {
                             domain::Clip::createAsset(
                                 domain::ClipId::create("top-clip").value(),
                                 topAsset, topSourceRange, topTimelineRange, true,
-                                std::nullopt, std::nullopt)
+                                halfOpacity, std::nullopt)
                                 .value())
                     .hasValue());
     std::vector<domain::MediaAsset> assets;
@@ -153,12 +157,14 @@ void expectRed(const QImage& image) {
     EXPECT_LT(color.blue(), 16);
 }
 
-void expectBlue(const QImage& image) {
+void expectPurpleBlend(const QImage& image) {
     ASSERT_FALSE(image.isNull());
     const auto color = image.pixelColor(0, 0);
-    EXPECT_LT(color.red(), 16);
+    EXPECT_GT(color.red(), 100);
+    EXPECT_LT(color.red(), 155);
     EXPECT_LT(color.green(), 16);
-    EXPECT_GT(color.blue(), 239);
+    EXPECT_GT(color.blue(), 100);
+    EXPECT_LT(color.blue(), 155);
 }
 
 TEST(R1MltPreviewAcceptanceTest,
@@ -186,7 +192,7 @@ TEST(R1MltPreviewAcceptanceTest,
         return !controller.busy() && controller.playheadNs() == 600'000'000 &&
                controller.hasPreviewFrame();
     })) << controller.statusMessage().toStdString();
-    expectBlue(controller.previewImage());
+    expectPurpleBlend(controller.previewImage());
 
     controller.play();
     ASSERT_TRUE(waitUntil([&] {

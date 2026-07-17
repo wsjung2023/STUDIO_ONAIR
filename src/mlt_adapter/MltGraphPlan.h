@@ -53,6 +53,7 @@ struct MltVisualBranch final {
     std::optional<domain::CueId> cueId;
     std::optional<domain::AssetId> assetId;
     MltVisualSourceKind sourceKind;
+    domain::MediaKind mediaKind;
     std::filesystem::path sourcePath;
     bool available;
     bool enabled;

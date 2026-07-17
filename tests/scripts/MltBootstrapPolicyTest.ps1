@@ -5,10 +5,14 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$FfmpegBootstrapPath = Join-Path $RepositoryRoot "scripts/bootstrap_ffmpeg.ps1"
 $BootstrapPath = Join-Path $RepositoryRoot "scripts/bootstrap_mlt.ps1"
 $VerifierPath = Join-Path $RepositoryRoot "scripts/verify_mlt_runtime.ps1"
 $StagePath = Join-Path $RepositoryRoot "scripts/stage_mlt_runtime.ps1"
 
+if (-not (Test-Path -LiteralPath $FfmpegBootstrapPath)) {
+    throw "Missing FFmpeg bootstrap: $FfmpegBootstrapPath"
+}
 if (-not (Test-Path -LiteralPath $BootstrapPath)) {
     throw "Missing MLT bootstrap: $BootstrapPath"
 }
@@ -17,6 +21,18 @@ if (-not (Test-Path -LiteralPath $VerifierPath)) {
 }
 if (-not (Test-Path -LiteralPath $StagePath)) {
     throw "Missing MLT runtime staging script: $StagePath"
+}
+
+$FfmpegBootstrap = Get-Content -LiteralPath $FfmpegBootstrapPath -Raw -Encoding utf8
+foreach ($Pattern in @(
+    'ffmpeg\[avcodec,avdevice,avfilter,avformat,ffprobe,swresample,swscale,zlib\]',
+    '--enable-zlib',
+    '-decoders',
+    'png_decoder=enabled'
+)) {
+    if ($FfmpegBootstrap -notmatch $Pattern) {
+        throw "FFmpeg bootstrap is missing PNG/zlib policy evidence: $Pattern"
+    }
 }
 
 $Bootstrap = Get-Content -LiteralPath $BootstrapPath -Raw -Encoding utf8
@@ -59,10 +75,14 @@ foreach ($Pattern in $ForbiddenPackagingPatterns) {
 }
 
 $Verifier = Get-Content -LiteralPath $VerifierPath -Raw -Encoding utf8
-foreach ($Pattern in @('SHA256', 'unexpected', 'forbidden', 'source_commit', '7\.40\.0')) {
+foreach ($Pattern in @('SHA256', 'unexpected', 'forbidden', 'source_commit', '7\.40\.0', 'zlib', 'Zlib')) {
     if ($Verifier -notmatch $Pattern) {
         throw "MLT verifier is missing fail-closed check: $Pattern"
     }
+}
+if ($Bootstrap -notmatch 'Copy-RequiredFile[^\r\n]*bin/z\.dll' -or
+    $Verifier -notmatch '"bin/z\.dll"') {
+    throw "MLT runtime policy must package and verify the vcpkg z.dll name"
 }
 
 $Stage = Get-Content -LiteralPath $StagePath -Raw -Encoding utf8

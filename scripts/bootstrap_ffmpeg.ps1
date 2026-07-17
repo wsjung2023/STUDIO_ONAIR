@@ -13,7 +13,7 @@ $PinnedVcpkgCommit = "43643e1f5cf73db40d0d4bd610183348eb09b24e"
 $ExpectedFfmpegVersion = "8.1.2"
 $OfficialReleaseArchiveSha256 = "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"
 $OfficialReleaseArchiveUrl = "https://ffmpeg.org/releases/ffmpeg-$ExpectedFfmpegVersion.tar.xz"
-$PackageSpec = "ffmpeg[avcodec,avdevice,avfilter,avformat,ffprobe,swresample,swscale]:$Triplet"
+$PackageSpec = "ffmpeg[avcodec,avdevice,avfilter,avformat,ffprobe,swresample,swscale,zlib]:$Triplet"
 $RunningOnWindows = $env:OS -eq "Windows_NT"
 
 if ([string]::IsNullOrWhiteSpace($VcpkgRoot)) {
@@ -93,6 +93,13 @@ if ($BuildConfiguration -match "--enable-(gpl|nonfree)") {
 if ($BuildConfiguration -notmatch "--enable-shared") {
     throw "FFmpeg must be built as dynamic libraries for the approved LGPL distribution model"
 }
+if ($BuildConfiguration -notmatch "--enable-zlib") {
+    throw "FFmpeg must include zlib for generated PNG overlay decoding"
+}
+$DecoderList = (& $Probe -v quiet -decoders 2>&1 | Out-String)
+if ($LASTEXITCODE -ne 0 -or $DecoderList -notmatch "(?m)^\s*V\S*\s+png\s") {
+    throw "FFmpeg build completed without the required PNG decoder"
+}
 
 $Evidence = @(
     "Creator Studio FFmpeg build evidence"
@@ -103,6 +110,7 @@ $Evidence = @(
     "vcpkg_commit=$PinnedVcpkgCommit"
     "triplet=$Triplet"
     "package_spec=$PackageSpec"
+    "png_decoder=enabled"
     ""
     $BuildConfiguration.Trim()
 ) -join [Environment]::NewLine

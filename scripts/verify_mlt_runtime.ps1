@@ -44,6 +44,7 @@ if ($Manifest.abi -ne 1) {
 
 $ApprovedDependencies = @(
     [pscustomobject]@{ component = "FFmpeg"; version = $ExpectedFfmpegVersion; source_identity = "sha256:$ExpectedFfmpegArchiveSha256"; license = "LGPL-2.1-or-later" }
+    [pscustomobject]@{ component = "zlib"; version = "1.3.2"; source_identity = "vcpkg:$ExpectedVcpkgCommit"; license = "Zlib" }
     [pscustomobject]@{ component = "PThreads4W"; version = "3.0.0"; source_identity = "vcpkg:$ExpectedVcpkgCommit"; license = "Apache-2.0" }
     [pscustomobject]@{ component = "GNU libiconv"; version = "1.19"; source_identity = "vcpkg:$ExpectedVcpkgCommit"; license = "LGPL-2.1-or-later" }
     [pscustomobject]@{ component = "dlfcn-win32"; version = "1.4.2"; source_identity = "vcpkg:$ExpectedVcpkgCommit"; license = "MIT" }
@@ -69,6 +70,9 @@ function Get-ApprovedProvenance {
     $VcpkgIdentity = "vcpkg:$ExpectedVcpkgCommit"
     if ($Name -match '^(avcodec-|avfilter-|avformat-|avutil-|swresample-|swscale-).*\.dll$') {
         return @("FFmpeg", $ExpectedFfmpegVersion, "sha256:$ExpectedFfmpegArchiveSha256", "LGPL-2.1-or-later")
+    }
+    if ($Name -match '^z\.dll$') {
+        return @("zlib", "1.3.2", $VcpkgIdentity, "Zlib")
     }
     if ($Name -match '^pthread.*\.dll$' -or $Lower.StartsWith("include/mlt-deps/")) {
         return @("PThreads4W", "3.0.0", $VcpkgIdentity, "Apache-2.0")
@@ -115,6 +119,18 @@ foreach ($Entry in $Manifest.files) {
         throw "Unapproved file provenance in MLT runtime manifest: $Relative"
     }
     $Expected[$Relative] = [string]$Entry.sha256
+}
+
+foreach ($Required in @(
+    "bin/mlt-7.dll",
+    "bin/mlt++-7.dll",
+    "bin/z.dll",
+    "lib/mlt-7/mltcore.dll",
+    "lib/mlt-7/mltavformat.dll"
+)) {
+    if (-not $Expected.ContainsKey($Required)) {
+        throw "MLT runtime is missing a required approved component: $Required"
+    }
 }
 
 $Actual = @{}

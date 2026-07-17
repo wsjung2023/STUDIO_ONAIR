@@ -52,7 +52,8 @@ private:
 };
 
 domain::MediaAsset videoAsset(std::string id, std::string path,
-                              domain::AssetAvailability availability) {
+                              domain::AssetAvailability availability,
+                              bool withAudio = false) {
     return domain::MediaAsset::create(
                domain::AssetId::create(std::move(id)).value(),
                domain::MediaKind::Video, path, core::DurationNs{2'000'000'000},
@@ -60,7 +61,12 @@ domain::MediaAsset videoAsset(std::string id, std::string path,
                    .width = 1920,
                    .height = 1080,
                    .frameRate = core::FrameRate::create(30, 1).value()},
-               std::nullopt, 7, "hash", availability)
+               withAudio
+                   ? std::optional<domain::AudioAssetMetadata>{
+                         domain::AudioAssetMetadata{.sampleRate = 48'000,
+                                                    .channels = 2}}
+                   : std::nullopt,
+               7, "hash", availability)
         .value();
 }
 
@@ -252,7 +258,7 @@ TEST(MltGraphPlanTest, SeparatesAudioAndOrdersAssetTitleAndCaptionBranches) {
     package.addFile("cache/generated/cue-a.png");
     package.addFile("cache/generated/cue-b.png");
     const auto video = videoAsset("video", "media/video.bin",
-                                  domain::AssetAvailability::Available);
+                                  domain::AssetAvailability::Available, true);
     const auto audio = audioAsset("audio", "audio/audio.bin");
     auto timeline = domain::Timeline::create(
                         domain::TimelineId::create("main").value(), "Main",
@@ -406,8 +412,10 @@ TEST(MltGraphPlanTest, SeparatesAudioAndOrdersAssetTitleAndCaptionBranches) {
     ASSERT_TRUE(plan.hasValue()) << plan.error().message();
     EXPECT_EQ(plan.value().canvasWidth, 1280);
     EXPECT_EQ(plan.value().canvasHeight, 720);
-    ASSERT_EQ(plan.value().audioTracks.size(), 1U);
-    ASSERT_EQ(plan.value().audioTracks[0].clips.size(), 1U);
+    ASSERT_EQ(plan.value().audioTracks.size(), 2U);
+    ASSERT_EQ(plan.value().audioTracks[0].clips.size(), 2U);
+    EXPECT_EQ(plan.value().audioTracks[0].kind, domain::TrackKind::Video);
+    ASSERT_EQ(plan.value().audioTracks[1].clips.size(), 1U);
     ASSERT_EQ(plan.value().visualBranches.size(), 5U);
     EXPECT_EQ(plan.value().visualBranches[0].clipId.value(), "video-low");
     EXPECT_EQ(plan.value().visualBranches[1].clipId.value(), "title-clip");

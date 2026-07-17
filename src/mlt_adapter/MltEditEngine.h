@@ -20,6 +20,10 @@ struct MltEditEngineDiagnostics final {
     std::size_t nativeTrackCount{};
     std::size_t videoCompositeTransitions{};
     std::size_t audioMixTransitions{};
+    std::size_t visualBranchCount{};
+    std::size_t transformedVisualBranchCount{};
+    std::size_t audioEnvelopeBranchCount{};
+    std::size_t missingOverlayCount{};
 };
 
 class MltEditEngine final : public edit_engine::IEditEngine {

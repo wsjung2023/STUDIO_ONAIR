@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -66,6 +67,10 @@ public:
         fs::create_directories(root_);
         entries_ = {{"bin/mlt-7.dll", kHelloSha256, "runtime-library"},
                     {"bin/mlt++-7.dll", kHelloSha256, "runtime-library"},
+                    {"bin/z.dll", kHelloSha256, "runtime-library",
+                     "zlib", "1.3.2",
+                     "vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e",
+                     "Zlib"},
                     {"lib/mlt-7/mltcore.dll", kHelloSha256, "runtime-module"},
                     {"lib/mlt-7/mltavformat.dll", kHelloSha256,
                      "runtime-module"}};
@@ -100,6 +105,7 @@ public:
                   "\"dependencies\":["
                   "{\"component\":\"FFmpeg\",\"version\":\"8.1.2\","
                   "\"source_identity\":\"sha256:464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c\",\"license\":\"LGPL-2.1-or-later\"},"
+                  "{\"component\":\"zlib\",\"version\":\"1.3.2\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"Zlib\"},"
                   "{\"component\":\"PThreads4W\",\"version\":\"3.0.0\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"Apache-2.0\"},"
                   "{\"component\":\"GNU libiconv\",\"version\":\"1.19\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"LGPL-2.1-or-later\"},"
                   "{\"component\":\"dlfcn-win32\",\"version\":\"1.4.2\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"MIT\"}],\"files\":[";
@@ -171,6 +177,19 @@ TEST(MltRuntimeManifestTest, RejectsMissingAndUnexpectedFiles) {
     unexpected.writeFile("bin/unexpected.dll", "hello");
     EXPECT_FALSE(creator::mlt_adapter::verifyMltRuntimeManifest(unexpected.root())
                      .hasValue());
+}
+
+TEST(MltRuntimeManifestTest, RejectsManifestWithoutRequiredZlibRuntime) {
+    RuntimeFixture fixture;
+    auto& entries = fixture.entries();
+    std::erase_if(entries, [](const Entry& entry) {
+        return entry.path == "bin/z.dll";
+    });
+    ASSERT_TRUE(fs::remove(fixture.root() / "bin/z.dll"));
+    fixture.writeManifest();
+
+    EXPECT_FALSE(
+        creator::mlt_adapter::verifyMltRuntimeManifest(fixture.root()).hasValue());
 }
 
 TEST(MltRuntimeManifestTest, RejectsWrongVersionDuplicateAndTraversal) {
