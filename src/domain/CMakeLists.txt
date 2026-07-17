@@ -17,6 +17,8 @@ cs_add_qtfree_library(cs_domain
         RecordingSession.h
         RecordingSession.cpp
         Segment.h
+        StudioScene.h
+        StudioScene.cpp
         TimelineTypes.h
         TimelineTypes.cpp
         Timeline.h

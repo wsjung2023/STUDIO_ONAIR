@@ -38,6 +38,7 @@ add_executable(cs_tests
     core/UtcTest.cpp
     domain/IdentifiersTest.cpp
     domain/TimelineTypesTest.cpp
+    domain/StudioSceneTest.cpp
     domain/MediaAssetTest.cpp
     domain/TimelineTest.cpp
     domain/EditCommandTest.cpp
