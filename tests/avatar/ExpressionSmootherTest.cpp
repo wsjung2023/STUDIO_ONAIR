@@ -243,6 +243,67 @@ TEST(ExpressionSmootherTest, ResetRestoresColdStartPassthrough) {
         << "after reset(), the next sample must be a fresh cold-start passthrough";
 }
 
+TEST(ExpressionSmootherTest, BetaWideningMakesFastStepConvergeFasterThanFixedCutoff) {
+    // Isolates beta, the adaptive term that makes this a One-Euro filter
+    // rather than a plain fixed-cutoff low-pass. Two smoothers see the exact
+    // same fast step at the exact same timestamps: one with the production
+    // beta, one with beta pinned to 0 (cutoff == minCutoffHz always, i.e. a
+    // plain low-pass). A regression that dropped `+ beta*|edx|` from the
+    // cutoff formula would make the production smoother behave identically
+    // to the beta=0 one here, and this test would fail.
+    constexpr std::int64_t kFrameDurationNs = 16'666'667;  // 60fps
+    constexpr float kOldValue = -1.0F;  // full-range headYaw step: large
+    constexpr float kNewValue = 1.0F;   // enough that beta's widening of the
+                                         // cutoff is clearly measurable.
+    constexpr int kSettleFrames = 200;
+    constexpr float kConvergenceBand = 0.05F;
+
+    ExpressionSmoother productionSmoother;  // default Constants: beta = 0.007
+    ExpressionSmoother fixedCutoffSmoother{
+        ExpressionSmoother::Constants{/*minCutoffHz=*/1.0, /*beta=*/0.0, /*dCutoffHz=*/1.0}};
+
+    // Returns the frame index (0-based, counted from the step) at which
+    // `smoother`'s headYaw output first lands within kConvergenceBand of
+    // kNewValue, or -1 if it never does within kSettleFrames.
+    auto convergenceFrame = [&](ExpressionSmoother& smoother) {
+        // Hold at the old value so the filter is in steady state before the
+        // step.
+        for (int i = 0; i < 10; ++i) {
+            ExpressionParameters raw{};
+            raw.headYaw = kOldValue;
+            static_cast<void>(smoother.smooth(raw, tsAtFrame(i, kFrameDurationNs)));
+        }
+        int convergedAtFrame = -1;
+        for (int i = 10; i < 10 + kSettleFrames; ++i) {
+            ExpressionParameters raw{};
+            raw.headYaw = kNewValue;
+            const ExpressionParameters out = smoother.smooth(raw, tsAtFrame(i, kFrameDurationNs));
+            if (convergedAtFrame < 0 && std::fabs(out.headYaw - kNewValue) < kConvergenceBand) {
+                convergedAtFrame = i - 10;
+            }
+        }
+        return convergedAtFrame;
+    };
+
+    const int productionConvergedAtFrame = convergenceFrame(productionSmoother);
+    const int fixedCutoffConvergedAtFrame = convergenceFrame(fixedCutoffSmoother);
+
+    ASSERT_GE(productionConvergedAtFrame, 0)
+        << "production-beta filter never converged toward the step's new value";
+    ASSERT_GE(fixedCutoffConvergedAtFrame, 0)
+        << "beta=0 (fixed-cutoff) filter never converged toward the step's new value";
+
+    // Measured for these exact constants/inputs: productionConvergedAtFrame
+    // == 31, fixedCutoffConvergedAtFrame == 37. beta widens the cutoff in
+    // proportion to the signal's (smoothed) derivative, so on a fast step the
+    // production filter must reach the new value in strictly fewer frames
+    // than the beta=0 baseline, which is stuck at the fixed minCutoffHz
+    // regardless of how fast the signal is moving.
+    EXPECT_LT(productionConvergedAtFrame, fixedCutoffConvergedAtFrame)
+        << "production=" << productionConvergedAtFrame
+        << " fixedCutoff=" << fixedCutoffConvergedAtFrame;
+}
+
 TEST(ExpressionSmootherTest, PerFieldIndependenceAJumpInOneFieldDoesNotMoveAnother) {
     constexpr std::int64_t kFrameDurationNs = 16'666'667;
 
