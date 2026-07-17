@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/MediaBinModel.h"
+#include "app/EditorSessionTypes.h"
 #include "app/TimelineTrackModel.h"
 #include "core/Timebase.h"
 #include "edit_engine/EditEngineTypes.h"
@@ -13,6 +14,7 @@
 #include <QString>
 #include <QThread>
 #include <QTimer>
+#include <QUrl>
 
 #include <cstdint>
 #include <deque>
@@ -24,6 +26,7 @@
 namespace creator::app {
 
 class EditorEngineWorker;
+class EditorSessionWorker;
 enum class EditorEngineOperation;
 
 class EditorController final : public QObject {
@@ -39,6 +42,15 @@ class EditorController final : public QObject {
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
     Q_PROPERTY(QImage previewImage READ previewImage NOTIFY previewImageChanged)
     Q_PROPERTY(bool hasPreviewFrame READ hasPreviewFrame NOTIFY previewImageChanged)
+    Q_PROPERTY(bool sessionBusy READ sessionBusy NOTIFY sessionBusyChanged)
+    Q_PROPERTY(QString selectedTrackId READ selectedTrackId NOTIFY selectionChanged)
+    Q_PROPERTY(QString selectedClipId READ selectedClipId NOTIFY selectionChanged)
+    Q_PROPERTY(qlonglong rangeInNs READ rangeInNs NOTIFY markedRangeChanged)
+    Q_PROPERTY(qlonglong rangeOutNs READ rangeOutNs NOTIFY markedRangeChanged)
+    Q_PROPERTY(bool hasMarkedRange READ hasMarkedRange NOTIFY markedRangeChanged)
+    Q_PROPERTY(bool canUndo READ canUndo NOTIFY editStateChanged)
+    Q_PROPERTY(bool canRedo READ canRedo NOTIFY editStateChanged)
+    Q_PROPERTY(bool clean READ clean NOTIFY editStateChanged)
 
 public:
     explicit EditorController(std::unique_ptr<edit_engine::IEditEngine> engine,
@@ -64,6 +76,26 @@ public:
     [[nodiscard]] bool hasPreviewFrame() const noexcept {
         return !previewImage_.isNull();
     }
+    [[nodiscard]] bool sessionBusy() const noexcept { return sessionBusy_; }
+    [[nodiscard]] QString selectedTrackId() const { return selectedTrackId_; }
+    [[nodiscard]] QString selectedClipId() const { return selectedClipId_; }
+    [[nodiscard]] qlonglong rangeInNs() const noexcept {
+        return rangeIn_.has_value()
+                   ? rangeIn_->time_since_epoch().count()
+                   : -1;
+    }
+    [[nodiscard]] qlonglong rangeOutNs() const noexcept {
+        return rangeOut_.has_value()
+                   ? rangeOut_->time_since_epoch().count()
+                   : -1;
+    }
+    [[nodiscard]] bool hasMarkedRange() const noexcept {
+        return rangeIn_.has_value() && rangeOut_.has_value() &&
+               *rangeIn_ < *rangeOut_;
+    }
+    [[nodiscard]] bool canUndo() const noexcept { return canUndo_; }
+    [[nodiscard]] bool canRedo() const noexcept { return canRedo_; }
+    [[nodiscard]] bool clean() const noexcept { return clean_; }
 
     void openSession(std::vector<domain::MediaAsset> assets,
                      edit_engine::TimelineSnapshot snapshot);
@@ -72,6 +104,17 @@ public:
     Q_INVOKABLE void play();
     Q_INVOKABLE void pause();
     Q_INVOKABLE void seek(qlonglong positionNs);
+    Q_INVOKABLE void selectClip(QString trackId, QString clipId);
+    Q_INVOKABLE void markRangeIn();
+    Q_INVOKABLE void markRangeOut();
+    Q_INVOKABLE void openProject(QUrl projectUrl);
+    Q_INVOKABLE void splitSelected();
+    Q_INVOKABLE void trimSelectedStart();
+    Q_INVOKABLE void trimSelectedEnd();
+    Q_INVOKABLE void deleteMarkedRange(bool ripple);
+    Q_INVOKABLE void undo();
+    Q_INVOKABLE void redo();
+    Q_INVOKABLE void save();
 
 signals:
     void busyChanged();
@@ -81,6 +124,10 @@ signals:
     void timelineChanged();
     void statusMessageChanged();
     void previewImageChanged();
+    void sessionBusyChanged();
+    void selectionChanged();
+    void markedRangeChanged();
+    void editStateChanged();
 
 private:
     struct PendingCommand final {
@@ -119,6 +166,13 @@ private:
                               bool success, const QString& errorMessage,
                               qlonglong revision, qlonglong positionNs,
                               QImage image);
+    void handleSessionOpened(quint64 generation,
+                             EditorSessionResultPtr result);
+    void handleSessionEdited(quint64 generation, quint64 commandId,
+                             EditorSessionResultPtr result);
+    void queueSessionEdit(EditorEditRequest request);
+    void publishSessionState(const EditorSessionState& state);
+    void setSessionBusy(bool value);
     void requestPlaybackFrame();
     void setPreviewStale(bool value);
     void setPlaying(bool value);
@@ -126,6 +180,8 @@ private:
 
     QThread workerThread_;
     EditorEngineWorker* worker_{};
+    QThread sessionThread_;
+    EditorSessionWorker* sessionWorker_{};
     MediaBinModel mediaBinModel_;
     TimelineTrackModel timelineTrackModel_;
     std::optional<edit_engine::TimelineSnapshot> snapshot_;
@@ -144,6 +200,18 @@ private:
     std::deque<QueuedCommand> queuedCommands_;
     bool workerCommandActive_{false};
     bool frameRequestInFlight_{false};
+    bool sessionBusy_{false};
+    QString selectedTrackId_;
+    QString selectedClipId_;
+    std::optional<core::TimestampNs> rangeIn_;
+    std::optional<core::TimestampNs> rangeOut_;
+    bool canUndo_{false};
+    bool canRedo_{false};
+    bool clean_{true};
+    bool durableSessionReady_{false};
+    quint64 sessionGeneration_{0};
+    quint64 nextSessionCommandId_{1};
+    std::optional<quint64> activeSessionCommand_;
 };
 
 }  // namespace creator::app

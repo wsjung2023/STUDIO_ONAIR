@@ -10,6 +10,9 @@
 #include "edit_engine/EditEngineTypes.h"
 #include "edit_engine/IEditEngine.h"
 #include "fakes/FakeEditEngine.h"
+#include "project_store/ProjectPackageStore.h"
+#include "project_store/SqliteTimelineStore.h"
+#include "project_store/internal/SqliteConnection.h"
 
 #include <QAbstractItemModel>
 #include <QCoreApplication>
@@ -17,12 +20,14 @@
 #include <QImage>
 #include <QSignalSpy>
 #include <QThread>
+#include <QUrl>
 #include <QVariantList>
 
 #include <gtest/gtest.h>
 
 #include <atomic>
 #include <condition_variable>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -64,6 +69,10 @@ using creator::edit_engine::TimelineChangeSet;
 using creator::edit_engine::TimelineSnapshot;
 using creator::fakes::FakeEditEngine;
 using creator::fakes::FakeEditOperation;
+using creator::project_store::ProjectPackageStore;
+using creator::project_store::SqliteTimelineStore;
+
+namespace fs = std::filesystem;
 
 bool waitUntil(const std::function<bool()>& predicate, int timeoutMs = 3000) {
     QElapsedTimer timer;
@@ -128,6 +137,293 @@ TimelineSnapshot snapshotWithVideo(std::int64_t revision,
                     .hasValue());
     value.assets = {std::move(video)};
     return value;
+}
+
+class DurableControllerPackage final {
+public:
+    DurableControllerPackage() {
+        root_ = fs::temp_directory_path() /
+                ("creator-studio-controller-durable-" +
+                 std::to_string(++nextId_));
+        package_ = root_ / fs::path{L"편집-세션.cstudio"};
+        std::error_code error;
+        fs::remove_all(root_, error);
+        fs::create_directories(root_);
+        ProjectPackageStore packageStore;
+        auto created = packageStore.create(package_, "Controller durable");
+        EXPECT_TRUE(created.hasValue())
+            << (created.hasValue() ? "" : created.error().message());
+        if (!created.hasValue()) return;
+        const auto& manifest = created.value().package.manifest;
+        database_ = package_ / manifest.database;
+        auto storeResult = SqliteTimelineStore::open(
+            database_, manifest.projectId);
+        EXPECT_TRUE(storeResult.hasValue())
+            << (storeResult.hasValue() ? "" : storeResult.error().message());
+        if (!storeResult.hasValue()) return;
+        auto store = std::move(storeResult).value();
+        EXPECT_TRUE(store.putAsset(asset()).hasValue());
+        EXPECT_TRUE(store.createTimeline(
+                             snapshotWithVideo(0, DurationNs{1'000}).timeline)
+                        .hasValue());
+    }
+
+    ~DurableControllerPackage() {
+        std::error_code error;
+        fs::remove_all(root_, error);
+    }
+
+    [[nodiscard]] QUrl url() const {
+        return QUrl::fromLocalFile(QString::fromStdWString(package_.wstring()));
+    }
+
+    void rejectEditCommits() const {
+        auto connection =
+            creator::project_store::internal::SqliteConnection::open(database_);
+        ASSERT_TRUE(connection.hasValue()) << connection.error().message();
+        ASSERT_TRUE(connection.value()
+                        .execute(
+                            "CREATE TRIGGER reject_controller_edit "
+                            "BEFORE INSERT ON edit_commands "
+                            "BEGIN SELECT RAISE(ABORT, 'injected controller "
+                            "commit failure'); END")
+                        .hasValue());
+    }
+
+private:
+    inline static std::uint64_t nextId_{0};
+    fs::path root_;
+    fs::path package_;
+    fs::path database_;
+};
+
+TEST(EditorControllerDurableTest, PublishesSelectionAndNormalizesMarkedRange) {
+    auto engine = std::make_unique<FakeEditEngine>();
+    EditorController controller{std::move(engine)};
+    controller.openSession({asset()}, snapshotWithVideo(1, DurationNs{1'000}));
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+
+    controller.selectClip(QStringLiteral("missing-track"),
+                          QStringLiteral("missing-clip"));
+    EXPECT_TRUE(controller.selectedTrackId().isEmpty());
+    EXPECT_TRUE(controller.selectedClipId().isEmpty());
+
+    controller.selectClip(QStringLiteral("v1"),
+                          QStringLiteral("timed-clip"));
+    EXPECT_EQ(controller.selectedTrackId(), QStringLiteral("v1"));
+    EXPECT_EQ(controller.selectedClipId(), QStringLiteral("timed-clip"));
+
+    controller.seek(800);
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    controller.markRangeOut();
+    controller.seek(200);
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    controller.markRangeIn();
+
+    EXPECT_TRUE(controller.hasMarkedRange());
+    EXPECT_EQ(controller.rangeInNs(), 200);
+    EXPECT_EQ(controller.rangeOutNs(), 800);
+    EXPECT_TRUE(controller.clean());
+    EXPECT_FALSE(controller.canUndo());
+    EXPECT_FALSE(controller.canRedo());
+    EXPECT_FALSE(controller.sessionBusy());
+}
+
+TEST(EditorControllerDurableTest,
+     SerializesDurableSplitAndPausesPlaybackBeforePreviewUpdate) {
+    DurableControllerPackage package;
+    auto engine = std::make_unique<FakeEditEngine>();
+    FakeEditEngine* fake = engine.get();
+    EditorController controller{std::move(engine)};
+
+    controller.openProject(package.url());
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy() &&
+               controller.timelineRevision() == 0;
+    }));
+    controller.selectClip(QStringLiteral("v1"),
+                          QStringLiteral("timed-clip"));
+    controller.seek(400);
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    controller.play();
+    ASSERT_TRUE(waitUntil([&] { return controller.playing(); }));
+    const auto callsBeforeEdit = fake->calls().size();
+
+    controller.splitSelected();
+    EXPECT_TRUE(controller.sessionBusy());
+    EXPECT_FALSE(controller.playing());
+    controller.splitSelected();
+
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy() &&
+               controller.timelineRevision() == 1;
+    }));
+    EXPECT_TRUE(controller.canUndo());
+    EXPECT_FALSE(controller.canRedo());
+    EXPECT_FALSE(controller.clean());
+    const auto clips = controller.timelineTrackModel()
+                           ->data(controller.timelineTrackModel()->index(0, 0),
+                                  TimelineTrackModel::ClipsRole)
+                           .toList();
+    EXPECT_EQ(clips.size(), 2);
+
+    ASSERT_GT(fake->calls().size(), callsBeforeEdit + 1U);
+    EXPECT_EQ(fake->calls()[callsBeforeEdit].operation,
+              FakeEditOperation::Pause);
+    EXPECT_EQ(fake->calls()[callsBeforeEdit + 1].operation,
+              FakeEditOperation::Update);
+
+    controller.undo();
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy() &&
+               controller.timelineRevision() == 2;
+    }));
+    EXPECT_FALSE(controller.canUndo());
+    EXPECT_TRUE(controller.canRedo());
+}
+
+TEST(EditorControllerDurableTest,
+     FailedCommitChangesNeitherControllerModelsNorPreviewGraph) {
+    DurableControllerPackage package;
+    auto engine = std::make_unique<FakeEditEngine>();
+    FakeEditEngine* fake = engine.get();
+    EditorController controller{std::move(engine)};
+    controller.openProject(package.url());
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy() &&
+               controller.timelineRevision() == 0;
+    }));
+    controller.selectClip(QStringLiteral("v1"),
+                          QStringLiteral("timed-clip"));
+    controller.seek(400);
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    const auto callsBefore = fake->calls().size();
+    const auto clipsBefore = controller.timelineTrackModel()
+                                 ->data(
+                                     controller.timelineTrackModel()->index(0, 0),
+                                     TimelineTrackModel::ClipsRole)
+                                 .toList();
+    package.rejectEditCommits();
+
+    controller.splitSelected();
+    ASSERT_TRUE(waitUntil([&] { return !controller.sessionBusy(); }));
+
+    EXPECT_EQ(controller.timelineRevision(), 0);
+    EXPECT_EQ(controller.timelineTrackModel()
+                  ->data(controller.timelineTrackModel()->index(0, 0),
+                         TimelineTrackModel::ClipsRole)
+                  .toList(),
+              clipsBefore);
+    EXPECT_EQ(controller.selectedClipId(), QStringLiteral("timed-clip"));
+    EXPECT_FALSE(controller.canUndo());
+    EXPECT_FALSE(controller.canRedo());
+    EXPECT_TRUE(controller.clean());
+    EXPECT_EQ(fake->calls().size(), callsBefore);
+    EXPECT_TRUE(controller.statusMessage().contains(
+        QStringLiteral("injected controller commit failure")));
+}
+
+TEST(EditorControllerDurableTest,
+     MapsTrimRangeUndoRedoSaveAndClearsDeletedSelection) {
+    DurableControllerPackage package;
+    auto engine = std::make_unique<FakeEditEngine>();
+    EditorController controller{std::move(engine)};
+    controller.openProject(package.url());
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy() &&
+               controller.timelineRevision() == 0;
+    }));
+    controller.selectClip(QStringLiteral("v1"),
+                          QStringLiteral("timed-clip"));
+
+    const auto seekAndWait = [&](qlonglong position) {
+        controller.seek(position);
+        EXPECT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    };
+    const auto waitRevision = [&](qlonglong revision) {
+        return waitUntil([&] {
+            return !controller.sessionBusy() && !controller.busy() &&
+                   controller.timelineRevision() == revision;
+        });
+    };
+
+    seekAndWait(100);
+    controller.trimSelectedStart();
+    ASSERT_TRUE(waitRevision(1));
+    seekAndWait(900);
+    controller.trimSelectedEnd();
+    ASSERT_TRUE(waitRevision(2));
+
+    seekAndWait(300);
+    controller.markRangeIn();
+    seekAndWait(500);
+    controller.markRangeOut();
+    controller.deleteMarkedRange(false);
+    ASSERT_TRUE(waitRevision(3));
+    EXPECT_EQ(controller.selectedClipId(), QStringLiteral("timed-clip"));
+
+    seekAndWait(100);
+    controller.markRangeIn();
+    seekAndWait(300);
+    controller.markRangeOut();
+    controller.deleteMarkedRange(true);
+    ASSERT_TRUE(waitRevision(4));
+    EXPECT_TRUE(controller.selectedTrackId().isEmpty());
+    EXPECT_TRUE(controller.selectedClipId().isEmpty());
+
+    controller.undo();
+    ASSERT_TRUE(waitRevision(5));
+    EXPECT_TRUE(controller.canUndo());
+    EXPECT_TRUE(controller.canRedo());
+    controller.redo();
+    ASSERT_TRUE(waitRevision(6));
+    EXPECT_TRUE(controller.canUndo());
+    EXPECT_FALSE(controller.canRedo());
+    controller.save();
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && controller.clean();
+    }));
+    EXPECT_EQ(controller.timelineRevision(), 6);
+
+    seekAndWait(300);
+    controller.markRangeIn();
+    controller.markRangeOut();
+    ASSERT_FALSE(controller.hasMarkedRange());
+    controller.deleteMarkedRange(false);
+    EXPECT_FALSE(controller.sessionBusy());
+    EXPECT_EQ(controller.timelineRevision(), 6);
+    EXPECT_TRUE(controller.statusMessage().contains(
+        QStringLiteral("non-empty range")));
+}
+
+TEST(EditorControllerDurableTest, BoundarySplitLeavesDurableAndPreviewStateUntouched) {
+    DurableControllerPackage package;
+    auto engine = std::make_unique<FakeEditEngine>();
+    FakeEditEngine* fake = engine.get();
+    EditorController controller{std::move(engine)};
+    controller.openProject(package.url());
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy() &&
+               controller.timelineRevision() == 0;
+    }));
+    controller.selectClip(QStringLiteral("v1"),
+                          QStringLiteral("timed-clip"));
+    const auto callsBefore = fake->calls().size();
+
+    controller.splitSelected();
+    ASSERT_TRUE(waitUntil([&] { return !controller.sessionBusy(); }));
+
+    EXPECT_EQ(controller.timelineRevision(), 0);
+    EXPECT_EQ(controller.timelineTrackModel()
+                  ->data(controller.timelineTrackModel()->index(0, 0),
+                         TimelineTrackModel::ClipsRole)
+                  .toList()
+                  .size(),
+              1);
+    EXPECT_FALSE(controller.canUndo());
+    EXPECT_TRUE(controller.clean());
+    EXPECT_EQ(fake->calls().size(), callsBefore);
+    EXPECT_FALSE(controller.statusMessage().isEmpty());
 }
 
 TEST(EditorControllerTest, PublishesModelsBeforeAsynchronousEngineLoadCompletes) {
