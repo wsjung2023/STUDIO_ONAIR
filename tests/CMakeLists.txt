@@ -36,6 +36,7 @@ add_executable(cs_tests
     core/TimebaseTest.cpp
     core/UuidTest.cpp
     core/UtcTest.cpp
+    core/Sha256Test.cpp
     domain/IdentifiersTest.cpp
     domain/TimelineTypesTest.cpp
     domain/StudioSceneTest.cpp
@@ -204,6 +205,7 @@ endif()
 if(CS_ENABLE_FFMPEG)
     add_executable(cs_ffmpeg_tests
         ffmpeg_adapter/FfmpegCapabilityProbeTest.cpp
+        ffmpeg_adapter/FfmpegMediaProbeTest.cpp
         ffmpeg_adapter/FfmpegVideoSegmentEncoderTest.cpp
         ffmpeg_adapter/FfmpegAudioSegmentEncoderTest.cpp
         ffmpeg_adapter/BgraFrameMappersTest.cpp
