@@ -17,6 +17,11 @@ option(CS_ENABLE_MLT "Build the audited MLT edit-engine adapter" OFF)
 set(CS_FFMPEG_ROOT "" CACHE PATH "Audited FFmpeg dynamic-library prefix")
 set(CS_MLT_ROOT "" CACHE PATH "Audited MLT dynamic-library prefix")
 
+if(CS_ENABLE_MLT AND NOT CS_ENABLE_FFMPEG)
+    message(FATAL_ERROR
+        "CS_ENABLE_MLT requires CS_ENABLE_FFMPEG for audited export codecs")
+endif()
+
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(CreatorStudioTargets)
 
@@ -151,13 +156,13 @@ add_subdirectory(src/core)
 add_subdirectory(src/domain)
 add_subdirectory(src/media)
 add_subdirectory(src/edit_engine)
-add_subdirectory(src/mlt_adapter)
 add_subdirectory(src/sync)
 add_subdirectory(src/capture)
 add_subdirectory(src/recorder)
 if(CS_ENABLE_FFMPEG)
     add_subdirectory(src/ffmpeg_adapter)
 endif()
+add_subdirectory(src/mlt_adapter)
 add_subdirectory(src/project_store)
 add_subdirectory(src/fakes)
 

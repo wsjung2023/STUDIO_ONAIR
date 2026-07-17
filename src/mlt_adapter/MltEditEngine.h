@@ -36,6 +36,11 @@ public:
     [[nodiscard]] static core::Result<void> preflightRuntime(
         const std::filesystem::path& runtimeRoot);
 
+    /// Verifies and binds the audited process-global MLT runtime. Repeated
+    /// calls for the same canonical runtime are safe.
+    [[nodiscard]] static core::Result<void> initializeRuntime(
+        const std::filesystem::path& runtimeRoot);
+
     [[nodiscard]] core::Result<void> load(
         const edit_engine::TimelineSnapshot& snapshot) override;
     [[nodiscard]] core::Result<void> update(

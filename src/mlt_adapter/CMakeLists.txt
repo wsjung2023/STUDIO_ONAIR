@@ -11,12 +11,15 @@ cs_add_qtfree_library(cs_mlt_graph_plan
 if(CS_ENABLE_MLT)
     cs_add_qtfree_library(cs_mlt_adapter
         SOURCES
+            ExportEncoderProbe.h
+            ExportEncoderProbe.cpp
             MltRuntimeManifest.h
             MltRuntimeManifest.cpp
             MltEditEngine.h
             MltEditEngine.cpp
         DEPENDS
             cs_mlt_graph_plan
+            cs_ffmpeg_adapter
             MLT::PlusPlus
             nlohmann_json::nlohmann_json
     )

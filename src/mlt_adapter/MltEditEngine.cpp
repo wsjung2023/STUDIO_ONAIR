@@ -533,22 +533,8 @@ class MltEditEngine::Impl final {
 
     core::Result<void> initialize() {
         if (initialized_) return core::ok();
-        auto verified = verifyMltRuntimeManifest(config_.runtimeRoot);
-        if (!verified.hasValue()) return verified;
-        std::error_code pathError;
-        const auto runtimeRoot =
-            std::filesystem::weakly_canonical(config_.runtimeRoot, pathError);
-        if (pathError) {
-            return stateError("MLT runtime root could not be canonicalized");
-        }
-        auto bound = MltProcessRuntime::instance().bind(runtimeRoot);
+        auto bound = MltEditEngine::initializeRuntime(config_.runtimeRoot);
         if (!bound.hasValue()) return bound;
-        const auto bin = utf8Path(runtimeRoot / "bin");
-        const auto data = utf8Path(runtimeRoot / "share/mlt-7");
-        mlt_environment_set("MLT_APPDIR", bin.c_str());
-        mlt_environment_set("MLT_DATA", data.c_str());
-        mlt_environment_set("MLT_PROFILES_PATH", (data + "/profiles").c_str());
-        mlt_environment_set("MLT_PRESETS_PATH", (data + "/presets").c_str());
         initialized_ = true;
         return core::ok();
     }
@@ -864,6 +850,26 @@ core::Result<void> MltEditEngine::preflightRuntime(
     if (error) return stateError("MLT runtime root could not be canonicalized");
     auto libraries = loadRuntimeLibraries(root);
     if (!libraries.hasValue()) return libraries.error();
+    return core::ok();
+}
+
+core::Result<void> MltEditEngine::initializeRuntime(
+    const std::filesystem::path& runtimeRoot) {
+    auto verified = verifyMltRuntimeManifest(runtimeRoot);
+    if (!verified.hasValue()) return verified;
+    std::error_code pathError;
+    const auto root = std::filesystem::weakly_canonical(runtimeRoot, pathError);
+    if (pathError) {
+        return stateError("MLT runtime root could not be canonicalized");
+    }
+    auto bound = MltProcessRuntime::instance().bind(root);
+    if (!bound.hasValue()) return bound;
+    const auto bin = utf8Path(root / "bin");
+    const auto data = utf8Path(root / "share/mlt-7");
+    mlt_environment_set("MLT_APPDIR", bin.c_str());
+    mlt_environment_set("MLT_DATA", data.c_str());
+    mlt_environment_set("MLT_PROFILES_PATH", (data + "/profiles").c_str());
+    mlt_environment_set("MLT_PRESETS_PATH", (data + "/presets").c_str());
     return core::ok();
 }
 
