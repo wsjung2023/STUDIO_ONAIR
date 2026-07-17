@@ -4,6 +4,7 @@
 #include "app/FakeProjectPackageStore.h"
 #include "app/RecentProjectRegistry.h"
 #include "core/Utc.h"
+#include "core/Uuid.h"
 #include "fakes/FakeCaptureSource.h"
 #include "fakes/FakeRecorder.h"
 #include "project_store/ProjectPackageStore.h"
@@ -36,7 +37,8 @@ using creator::project_store::RecoveryResult;
 class ProjectControllerTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        root_ = fs::temp_directory_path() / "cs_project_controller";
+        root_ = fs::temp_directory_path() /
+                ("cs_project_controller_" + creator::core::generateUuidV4());
         std::error_code ec;
         fs::remove_all(root_, ec);
         fs::create_directories(root_);
