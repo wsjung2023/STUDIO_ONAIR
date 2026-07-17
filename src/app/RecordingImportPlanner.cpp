@@ -302,7 +302,10 @@ Result<domain::MediaAsset> makeAsset(
     auto end = segmentEnd(segment);
     if (!end.hasValue()) return end.error();
     if (probe.duration < segment.duration) {
-        return invalid("media probe duration is shorter than its segment");
+        return invalid("media probe duration is shorter than its segment: " +
+                       segment.relativePath + " reports " +
+                       std::to_string(probe.duration.count()) + " ns for " +
+                       std::to_string(segment.duration.count()) + " ns");
     }
     if ((videoRole(role) && !probe.video.has_value()) ||
         (!videoRole(role) &&

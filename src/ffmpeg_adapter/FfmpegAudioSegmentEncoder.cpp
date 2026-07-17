@@ -1,6 +1,7 @@
 #include "ffmpeg_adapter/FfmpegAudioSegmentEncoder.h"
 
 #include "core/AppError.h"
+#include "ffmpeg_adapter/FfmpegEncodedDuration.h"
 #include "sync/AudioRateCompensator.h"
 
 extern "C" {
@@ -202,6 +203,7 @@ public:
         if (trailer < 0) return ffmpegError("Could not write Matroska audio trailer", trailer);
 
         const auto path = config_->partPath;
+        const auto startTime = config_->startTime;
         closeMedia();
         std::error_code fileError;
         const auto bytes = std::filesystem::file_size(path, fileError);
@@ -211,9 +213,17 @@ public:
             return core::AppError{core::ErrorCode::IoFailure,
                                   "FFmpeg audio segment file is empty or unreadable"};
         }
+        auto physicalDuration = detail::probeEncodedDuration(path);
+        if (!physicalDuration.hasValue()) {
+            started_ = false;
+            config_.reset();
+            return physicalDuration.error();
+        }
+        const auto publishedDuration =
+            std::min(endTime - startTime, physicalDuration.value());
         started_ = false;
         config_.reset();
-        return recorder::EncodedSegment{.endTime = endTime,
+        return recorder::EncodedSegment{.endTime = startTime + publishedDuration,
                                         .bytesWritten = bytes,
                                         .codecName = "aac"};
     }

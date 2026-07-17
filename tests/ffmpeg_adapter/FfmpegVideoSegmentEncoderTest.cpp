@@ -221,15 +221,17 @@ TEST_F(FfmpegVideoSegmentEncoderTest, ReusesEncoderForFollowingSegment) {
         VideoEncoderOptions{.preferredEncoderNames = {"mpeg4"}}};
     ASSERT_TRUE(encoder.start(config(path_)).hasValue());
     ASSERT_TRUE(encoder.accept(frameAt(std::chrono::milliseconds{0}, 20)).hasValue());
-    ASSERT_TRUE(encoder.finish(creator::core::TimestampNs{std::chrono::milliseconds{33}})
-                    .hasValue());
+    const auto first = encoder.finish(
+        creator::core::TimestampNs{std::chrono::milliseconds{33}});
+    ASSERT_TRUE(first.hasValue()) << first.error().message();
     std::error_code ignored;
     fs::remove(path_, ignored);
 
     ASSERT_TRUE(encoder.start(config(path_)).hasValue());
     ASSERT_TRUE(encoder.accept(frameAt(std::chrono::milliseconds{0}, 40)).hasValue());
-    EXPECT_TRUE(encoder.finish(creator::core::TimestampNs{std::chrono::milliseconds{33}})
-                    .hasValue());
+    const auto second = encoder.finish(
+        creator::core::TimestampNs{std::chrono::milliseconds{33}});
+    EXPECT_TRUE(second.hasValue()) << second.error().message();
 }
 
 }  // namespace

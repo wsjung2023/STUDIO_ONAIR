@@ -120,6 +120,32 @@ TEST(ClockCoordinatorTest, ClampsExtremeRateCorrectionToOneThousandPpm) {
     EXPECT_DOUBLE_EQ(last.audioRateRatio, 0.999);
 }
 
+TEST(ClockCoordinatorTest, DelayedFollowerCallbacksNeverMoveCorrectedTimeBackward) {
+    auto clock = coordinator();
+    const auto microphone = SourceId::create("microphone").value();
+    const auto system = SourceId::create("system").value();
+    ASSERT_TRUE(clock->observe(microphone, at({}), at({})).hasValue());
+    ASSERT_TRUE(clock->observe(system, at({}), at({})).hasValue());
+
+    ASSERT_TRUE(clock->observe(microphone, at(std::chrono::milliseconds{10}),
+                               at(std::chrono::seconds{1}))
+                    .hasValue());
+    const auto delayed = clock->observe(
+        system, at(std::chrono::milliseconds{10}),
+        at(std::chrono::milliseconds{1'100}));
+    ASSERT_TRUE(delayed.hasValue());
+
+    ASSERT_TRUE(clock->observe(microphone, at(std::chrono::milliseconds{20}),
+                               at(std::chrono::seconds{2}))
+                    .hasValue());
+    const auto recovered = clock->observe(
+        system, at(std::chrono::milliseconds{20}), at(std::chrono::seconds{2}));
+    ASSERT_TRUE(recovered.hasValue());
+
+    EXPECT_GE(recovered.value().correctedTimestamp,
+              delayed.value().correctedTimestamp);
+}
+
 TEST(ClockCoordinatorTest, RejectsUnknownAndBackwardSourceObservations) {
     auto clock = coordinator();
     const auto microphone = SourceId::create("microphone").value();

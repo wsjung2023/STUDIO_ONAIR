@@ -254,6 +254,34 @@ TEST_F(FfmpegMediaProbeTest, ProbesVideoContainerAndIndependentHashExactly) {
               std::chrono::milliseconds{34});
 }
 
+TEST_F(FfmpegMediaProbeTest, EncodedSegmentEndNeverExceedsPhysicalVideoDuration) {
+    const fs::path relative{"media/duration-video.mkv"};
+    FfmpegVideoSegmentEncoder encoder{
+        std::make_unique<Mapper>(),
+        VideoEncoderOptions{.preferredEncoderNames = {"mpeg4"},
+                            .frameRateNumerator = 60,
+                            .frameRateDenominator = 1}};
+    ASSERT_TRUE(encoder.start(
+                    config(root_ / relative, TrackRole::Screen, "screen"))
+                    .hasValue());
+    for (std::int64_t frame = 0; frame < 60; ++frame) {
+        ASSERT_TRUE(encoder.accept(frameAt(
+                                   std::chrono::milliseconds{
+                                       frame * 1'000LL / 30LL},
+                                   static_cast<std::uint8_t>(frame)))
+                        .hasValue());
+    }
+    const auto encoded = encoder.finish(
+        creator::core::TimestampNs{std::chrono::seconds{2}});
+    ASSERT_TRUE(encoded.hasValue()) << encoded.error().message();
+
+    FfmpegMediaProbe probe;
+    const auto physical = probe.probe(root_, relative);
+    ASSERT_TRUE(physical.hasValue()) << physical.error().message();
+    EXPECT_LE(encoded.value().endTime.time_since_epoch(),
+              physical.value().duration);
+}
+
 TEST_F(FfmpegMediaProbeTest, ProbesMonoAudioContainerExactly) {
     const auto path = encodeAudio();
     FfmpegMediaProbe probe;

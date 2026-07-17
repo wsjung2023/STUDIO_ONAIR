@@ -82,11 +82,15 @@ void setMltEnvironment(const std::filesystem::path& root) {
     setEnvironment("MLT_DATA", data);
     setEnvironment("MLT_PROFILES_PATH", data + "/profiles");
     setEnvironment("MLT_PRESETS_PATH", data + "/presets");
+    setEnvironment("MLT_AVFORMAT_THREADS", "1");
+    setEnvironment("MLT_AVFORMAT_PRODUCER_CACHE", "4");
 #else
     setenv("MLT_APPDIR", bin.c_str(), 1);
     setenv("MLT_DATA", data.c_str(), 1);
     setenv("MLT_PROFILES_PATH", (data + "/profiles").c_str(), 1);
     setenv("MLT_PRESETS_PATH", (data + "/presets").c_str(), 1);
+    setenv("MLT_AVFORMAT_THREADS", "1", 1);
+    setenv("MLT_AVFORMAT_PRODUCER_CACHE", "4", 1);
 #endif
 }
 
@@ -631,6 +635,9 @@ class MltEditEngine::Impl final {
                     auto producer = std::make_unique<Mlt::Producer>(
                         *graph->profile, "avformat",
                         utf8Path(clip.mediaPath).c_str());
+                    producer->set("threads", 1);
+                    producer->set("astream", 0);
+                    producer->set("vstream", -1);
                     if (!producer->is_valid()) {
                         return stateError("MLT could not open an audio asset");
                     }
@@ -729,6 +736,9 @@ class MltEditEngine::Impl final {
                 auto producer = std::make_unique<Mlt::Producer>(
                     *graph->profile, "avformat",
                     utf8Path(branch.sourcePath).c_str());
+                producer->set("threads", 1);
+                producer->set("astream", -1);
+                producer->set("vstream", 0);
                 if (!producer->is_valid()) {
                     return stateError("MLT could not open a visual branch");
                 }

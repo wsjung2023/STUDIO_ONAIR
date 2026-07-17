@@ -128,7 +128,9 @@ class TempDirectory final {
 public:
     TempDirectory() {
         path_ = fs::temp_directory_path() /
-                ("creator-overlay-cache-" + std::to_string(++nextId_));
+                ("creator-overlay-cache-" +
+                 std::to_string(QCoreApplication::applicationPid()) + "-" +
+                 std::to_string(++nextId_));
         std::error_code error;
         fs::remove_all(path_, error);
         fs::create_directories(path_);

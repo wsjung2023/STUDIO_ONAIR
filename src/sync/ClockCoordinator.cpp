@@ -65,6 +65,7 @@ public:
     struct SourceState final {
         ClockSourceConfig config;
         std::optional<core::TimestampNs> lastSourceTimestamp;
+        std::optional<core::TimestampNs> lastCorrectedTimestamp;
         std::optional<core::TimestampNs> lastObservedAt;
         std::optional<core::TimestampNs> lastEstimatedMaster;
         std::int64_t filteredDriftNs{0};
@@ -132,6 +133,7 @@ Result<ClockCorrection> ClockCoordinator::observe(
     }
     auto& state = *found;
     auto next = state;
+    const auto previousSourceTimestamp = next.lastSourceTimestamp;
     if (next.lastSourceTimestamp && sourceTimestamp < *next.lastSourceTimestamp) {
         return AppError{ErrorCode::InvalidArgument,
                         "source timestamp moved backward"};
@@ -148,6 +150,7 @@ Result<ClockCorrection> ClockCoordinator::observe(
     if (stateIndex == impl_->masterIndex) {
         next.filteredDriftNs = 0;
         next.synchronized = true;
+        next.lastCorrectedTimestamp = sourceTimestamp;
         state = std::move(next);
         return ClockCorrection{.correctedTimestamp = sourceTimestamp,
                                .synchronized = true,
@@ -156,6 +159,7 @@ Result<ClockCorrection> ClockCoordinator::observe(
 
     const auto& master = impl_->sources[impl_->masterIndex];
     if (!master.lastSourceTimestamp || !master.lastObservedAt) {
+        next.lastCorrectedTimestamp = sourceTimestamp;
         state = std::move(next);
         return ClockCorrection{.correctedTimestamp = sourceTimestamp};
     }
@@ -205,15 +209,22 @@ Result<ClockCorrection> ClockCoordinator::observe(
         core::ProjectClock::duration{estimatedMasterCount.value()}};
     next.maximumAbsoluteDriftNs = std::max(
         next.maximumAbsoluteDriftNs, absoluteClamped(next.filteredDriftNs));
-    const auto correctedCount = checkedSubtract(
+    auto correctedCount = checkedSubtract(
         sourceTimestamp.time_since_epoch().count(), next.filteredDriftNs,
         "corrected source timestamp overflowed");
     if (!correctedCount.hasValue()) return correctedCount.error();
+    if (previousSourceTimestamp && next.lastCorrectedTimestamp &&
+        correctedCount.value() <
+            next.lastCorrectedTimestamp->time_since_epoch().count()) {
+        correctedCount = next.lastCorrectedTimestamp->time_since_epoch().count();
+    }
     const double ratio = next.config.mediaKind == SyncMediaKind::Audio
                              ? std::clamp(1.0 - next.rateCorrectionPpm / 1'000'000.0,
                                           0.999, 1.001)
                              : 1.0;
     const auto drift = next.filteredDriftNs;
+    next.lastCorrectedTimestamp = core::TimestampNs{
+        core::ProjectClock::duration{correctedCount.value()}};
     state = std::move(next);
     return ClockCorrection{
         .correctedTimestamp = core::TimestampNs{

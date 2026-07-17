@@ -1,5 +1,7 @@
 #include "ffmpeg_adapter/FfmpegVideoSegmentEncoder.h"
 
+#include "ffmpeg_adapter/FfmpegEncodedDuration.h"
+
 #include "core/AppError.h"
 
 extern "C" {
@@ -134,6 +136,8 @@ public:
         constexpr AVRational nanoseconds{1, 1'000'000'000};
         outputFrame_->pts = av_rescale_q((frame.timestamp - config_->startTime).count(),
                                         nanoseconds, codecContext_->time_base);
+        outputFrame_->duration = av_rescale_q(
+            1, av_inv_q(codecContext_->framerate), codecContext_->time_base);
         outputFrame_->pict_type = frameCount_ == 0 ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
         if (frameCount_ == 0) outputFrame_->flags |= AV_FRAME_FLAG_KEY;
         else outputFrame_->flags &= ~AV_FRAME_FLAG_KEY;
@@ -167,6 +171,7 @@ public:
         if (trailer < 0) return ffmpegError("Could not write Matroska video trailer", trailer);
 
         const auto path = config_->partPath;
+        const auto startTime = config_->startTime;
         const auto codecName = selectedEncoderName_;
         closeMedia();
         std::error_code fileError;
@@ -177,9 +182,25 @@ public:
             return core::AppError{core::ErrorCode::IoFailure,
                                   "FFmpeg video segment file is empty or unreadable"};
         }
+        auto physicalDuration = detail::probeEncodedDuration(path);
+        if (!physicalDuration.hasValue()) {
+            if (frameCount_ != 1) {
+                started_ = false;
+                config_.reset();
+                return physicalDuration.error();
+            }
+            constexpr AVRational nanoseconds{1, 1'000'000'000};
+            physicalDuration = core::DurationNs{av_rescale_q(
+                1,
+                AVRational{static_cast<int>(options_.frameRateDenominator),
+                           static_cast<int>(options_.frameRateNumerator)},
+                nanoseconds)};
+        }
+        const auto publishedDuration =
+            std::min(endTime - startTime, physicalDuration.value());
         started_ = false;
         config_.reset();
-        return recorder::EncodedSegment{.endTime = endTime,
+        return recorder::EncodedSegment{.endTime = startTime + publishedDuration,
                                         .bytesWritten = bytes,
                                         .codecName = codecName};
     }

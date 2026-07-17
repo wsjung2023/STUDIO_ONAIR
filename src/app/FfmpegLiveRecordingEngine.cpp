@@ -67,6 +67,8 @@ public:
 private:
     std::weak_ptr<FfmpegLiveRecordingEngine::Run> run_;
     domain::SourceId sourceId_;
+    std::mutex timestampMutex_;
+    std::optional<core::TimestampNs> lastBlockEnd_;
 };
 
 std::unique_ptr<recorder::IVideoFrameMapper> makeVideoMapper() {
@@ -79,11 +81,20 @@ std::unique_ptr<recorder::IVideoFrameMapper> makeVideoMapper() {
 
 core::Result<std::unique_ptr<AsyncTrackRecorder>> makeTrackRecorder(
     RecordingTrack track, const LiveRecordingStart& start,
-    std::shared_ptr<ProjectSegmentLifecycleContext> context) {
+    std::shared_ptr<ProjectSegmentLifecycleContext> context,
+    bool concurrentVideoSources) {
     std::unique_ptr<recorder::ITrackSegmentEncoder> encoder;
     if (track.mediaKind() == TrackMediaKind::Video) {
+        ffmpeg_adapter::VideoEncoderOptions options;
+        if (concurrentVideoSources) {
+            // Windows hardware encoders may advertise H.264 support but reject
+            // a second simultaneous source after opening. Source-isolated
+            // recording must remain atomic, so use the audited LGPL software
+            // encoder whenever screen and camera are recorded together.
+            options.preferredEncoderNames = {"mpeg4"};
+        }
         encoder = std::make_unique<ffmpeg_adapter::FfmpegVideoSegmentEncoder>(
-            makeVideoMapper());
+            makeVideoMapper(), std::move(options));
     } else {
         encoder =
             std::make_unique<ffmpeg_adapter::FfmpegAudioSegmentEncoder>();
@@ -210,6 +221,17 @@ void AudioRouter::onAudioBlock(media::AudioBlock block) noexcept {
     }
     block.timestamp = correction.value().correctedTimestamp;
     block.sampleRateRatio = correction.value().audioRateRatio;
+    if (block.sampleRate > 0 && block.frameCount > 0) {
+        std::lock_guard lock{timestampMutex_};
+        if (lastBlockEnd_ && block.timestamp < *lastBlockEnd_) {
+            block.timestamp = *lastBlockEnd_;
+        }
+        const auto durationCount =
+            (static_cast<std::int64_t>(block.frameCount) * 1'000'000'000LL +
+             static_cast<std::int64_t>(block.sampleRate) - 1LL) /
+            static_cast<std::int64_t>(block.sampleRate);
+        lastBlockEnd_ = block.timestamp + core::DurationNs{durationCount};
+    }
     if (auto accepted = run->service->accept(sourceId_, std::move(block));
         !accepted.hasValue()) {
         run->fail(accepted.error(), observedAt);
@@ -324,13 +346,10 @@ FfmpegLiveRecordingEngine::FfmpegLiveRecordingEngine(
             });
         return found != capabilities.value().encoders.end();
     };
-    const bool hasVideo = hasEncoder("h264_videotoolbox") || hasEncoder("h264_mf") ||
-                          hasEncoder("h264_nvenc") || hasEncoder("h264_qsv") ||
-                          hasEncoder("mpeg4");
-    if (!hasVideo || !hasEncoder("aac")) {
+    if (!hasEncoder("mpeg4") || !hasEncoder("aac")) {
         capabilityStatus_ = core::AppError{
             core::ErrorCode::UnsupportedVersion,
-            "Audited FFmpeg runtime lacks a required video or AAC encoder"};
+            "Audited FFmpeg runtime lacks the required software video or AAC encoder"};
     }
 }
 
@@ -434,12 +453,19 @@ core::Result<void> FfmpegLiveRecordingEngine::start(
     };
     std::vector<PendingAttachment> pendingAttachments;
     pendingAttachments.reserve(sources.size());
+    const auto videoSourceCount = std::ranges::count_if(
+        sources, [](const LiveCaptureSource& source) {
+            return source.role == recorder::TrackRole::Screen ||
+                   source.role == recorder::TrackRole::Camera;
+        });
     for (const auto& source : sources) {
         auto track = RecordingTrack::create(source.sourceId, source.role);
         if (!track.hasValue()) return track.error();
         auto recordingTrack = std::move(track).value();
         const auto mediaKind = recordingTrack.mediaKind();
-        auto recorder = makeTrackRecorder(std::move(recordingTrack), start, run->context);
+        auto recorder = makeTrackRecorder(std::move(recordingTrack), start,
+                                          run->context,
+                                          videoSourceCount > 1);
         if (!recorder.hasValue()) return recorder.error();
         auto added = run->service->addTrack(std::move(recorder).value());
         if (!added.hasValue()) {

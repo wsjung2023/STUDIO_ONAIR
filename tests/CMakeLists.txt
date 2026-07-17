@@ -208,6 +208,50 @@ if(WIN32)
     )
 endif()
 
+if(CS_ENABLE_FFMPEG AND CS_ENABLE_MLT)
+    add_executable(cs_r1_studio_workflow_acceptance_tests
+        acceptance/R1StudioWorkflowAcceptanceTest.cpp
+    )
+    target_link_libraries(cs_r1_studio_workflow_acceptance_tests PRIVATE
+        cs_app
+        cs_ffmpeg_adapter
+        cs_mlt_adapter
+        Qt6::Quick
+        Qt6::Test
+        GTest::gtest
+    )
+    target_compile_definitions(cs_r1_studio_workflow_acceptance_tests PRIVATE
+        CS_TEST_STAGED_MLT_ROOT="$<TARGET_FILE_DIR:creator_studio>/mlt-runtime"
+    )
+    target_include_directories(cs_r1_studio_workflow_acceptance_tests SYSTEM PRIVATE
+        ${FFMPEG_INCLUDE_DIRS}
+    )
+    if(WIN32 AND MSVC)
+        target_link_libraries(cs_r1_studio_workflow_acceptance_tests PRIVATE
+            delayimp
+            psapi
+        )
+        target_link_options(cs_r1_studio_workflow_acceptance_tests PRIVATE
+            "/DELAYLOAD:mlt++-7.dll"
+            "/DELAYLOAD:mlt-7.dll"
+        )
+    endif()
+    add_dependencies(cs_r1_studio_workflow_acceptance_tests creator_studio)
+    cs_apply_warnings(cs_r1_studio_workflow_acceptance_tests)
+    set_property(TARGET cs_r1_studio_workflow_acceptance_tests PROPERTY
+        TEST_LAUNCHER
+        "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;--"
+    )
+    gtest_discover_tests(cs_r1_studio_workflow_acceptance_tests
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES
+            TIMEOUT 60
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+    )
+endif()
+
 if(CS_ENABLE_FFMPEG)
     add_executable(cs_ffmpeg_tests
         ffmpeg_adapter/FfmpegCapabilityProbeTest.cpp
