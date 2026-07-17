@@ -4,7 +4,7 @@
 
 **Goal:** Record source-separated cursor coordinates and exact mouse-button transitions into durable, recoverable project telemetry on the same monotonic timebase as a Studio take.
 
-**Architecture:** Add a Qt-free `cs_telemetry` value/queue layer, SQLite migration 004 and a durable NDJSON store, a bounded cursor recorder, and an application-owned Windows Raw Input adapter. Replace the single recording-preparation callback with ordered lifecycle participants so Studio and cursor telemetry prepare, abort, and complete without hidden coupling.
+**Architecture:** Add a Qt-free `cs_telemetry` value/queue layer, SQLite migration 005 and a durable NDJSON store, a bounded cursor recorder, and an application-owned Windows Raw Input adapter. Replace the single recording-preparation callback with ordered lifecycle participants so Studio and cursor telemetry prepare, abort, and complete without hidden coupling.
 
 **Tech Stack:** C++20, CMake/Ninja, GoogleTest, SQLite 3.53.3, nlohmann/json 3.11.3, Qt 6.8.3 application boundary, Win32 User32 Raw Input on Windows 11 x64.
 
@@ -202,11 +202,11 @@ git commit -m "feat(r2): bound cursor event delivery"
 
 ---
 
-### Task 3: Migration 004 and telemetry stream metadata store
+### Task 3: Migration 005 and telemetry stream metadata store
 
 **Files:**
-- Create: `src/project_store/migrations/004_cursor_telemetry.sql`
-- Create: `cmake/Migration004.h.in`
+- Create: `src/project_store/migrations/005_cursor_telemetry.sql`
+- Create: `cmake/Migration005.h.in`
 - Create: `src/project_store/ICursorTelemetryStore.h`
 - Create: `src/project_store/SqliteCursorTelemetryStore.h`
 - Create: `src/project_store/SqliteCursorTelemetryStore.cpp`
@@ -224,14 +224,14 @@ git commit -m "feat(r2): bound cursor event delivery"
 - Consumes: project/session/source identities and package-relative paths.
 - Produces: `ICursorTelemetryStore::begin`, `updateWritingMetadata`, `markReady`, `markFailed`, `load`, and `listRecoverable`.
 
-- [ ] **Step 1: Write failing version-4 migration and store tests**
+- [ ] **Step 1: Write failing version-5 migration and store tests**
 
 ```cpp
-TEST(MigrationRunnerTest, AppliesCursorTelemetryMigrationFourExactlyOnce) {
+TEST(MigrationRunnerTest, AppliesCursorTelemetryMigrationFiveExactlyOnce) {
     auto connection = openMemoryDatabase();
     ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
-    EXPECT_EQ(userVersion(connection), 4);
-    EXPECT_EQ(appliedMigrationCount(connection), 4);
+    EXPECT_EQ(userVersion(connection), 5);
+    EXPECT_EQ(appliedMigrationCount(connection), 5);
     EXPECT_TRUE(tableExists(connection, "telemetry_streams"));
 }
 
@@ -248,9 +248,9 @@ TEST_F(SqliteCursorTelemetryStoreTest, EnforcesOneImmutableCursorStreamPerSessio
 
 Run: `build/windows-debug/cs_tests.exe --gtest_filter=MigrationRunnerTest.*:SqliteCursorTelemetryStoreTest.*`
 
-Expected: migration version remains 3 and the store type is missing.
+Expected: migration version remains 4 and the store type is missing.
 
-- [ ] **Step 3: Add checksum-pinned migration 004**
+- [ ] **Step 3: Add checksum-pinned migration 005**
 
 ```sql
 CREATE TABLE telemetry_streams (
@@ -297,11 +297,11 @@ WHEN OLD.state = 'WRITING' AND NEW.state NOT IN ('READY','FAILED')
 BEGIN
     SELECT RAISE(ABORT, 'invalid telemetry stream state transition');
 END;
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 ```
 
-Embed its SHA-256 exactly like migrations 001-003 and set
-`MigrationRunner::kLatestVersion = 4`. Add
+Embed its SHA-256 exactly like migrations 001-004 and set
+`MigrationRunner::kLatestVersion = 5`. Add
 `TelemetryStreamIdTag`/`TelemetryStreamId` beside `RenderJobIdTag` and cover its
 validation in `IdentifiersTest.cpp`.
 
@@ -337,7 +337,7 @@ Expected: all tests pass and migration checksums remain stable.
 - [ ] **Step 6: Commit**
 
 ```powershell
-git add CMakeLists.txt cmake/Migration004.h.in src/domain/Identifiers.h src/project_store tests/domain/IdentifiersTest.cpp tests/project_store tests/CMakeLists.txt
+git add CMakeLists.txt cmake/Migration005.h.in src/domain/Identifiers.h src/project_store tests/domain/IdentifiersTest.cpp tests/project_store tests/CMakeLists.txt
 git commit -m "feat(r2): persist cursor telemetry streams"
 ```
 

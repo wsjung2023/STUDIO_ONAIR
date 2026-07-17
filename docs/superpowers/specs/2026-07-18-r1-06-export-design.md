@@ -113,7 +113,7 @@ the worker and never leaves a running thread.
 
 ### Persistence
 
-The next available migration when R1-06 resumes adds `render_jobs` with:
+Migration 004 adds `render_jobs` with:
 
 - render job ID, project ID, frozen timeline ID and revision;
 - canonical preset ID and serialized validated preset values;

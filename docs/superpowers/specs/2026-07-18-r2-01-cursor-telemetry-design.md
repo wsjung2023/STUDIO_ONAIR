@@ -16,9 +16,8 @@ R2 is split into seven product checkpoints so the numbering remains explicit:
    long-form physical verification.
 
 This document covers R2-01 only. It does not remove or downgrade any later R2
-checkpoint. R1-06 Export and R1-07 final R1 verification remain honestly marked
-as paused, not completed, because the user explicitly directed development to
-move to R2 now.
+checkpoint. Implementation starts only after R1-06 Export and R1-07 final R1
+verification are complete, and then integrates into the verified R1 base.
 
 ## Goal and user-visible result
 
@@ -164,7 +163,7 @@ renames on the same volume, and only then marks the SQLite row ready.
 
 ## Persistence and recovery
 
-Migration 004 belongs to the now-active R2-01 work and adds
+Migration 005 follows the R1-06 render-job migration and adds
 `telemetry_streams` with:
 
 - stream, project, recording-session, and source identities;
@@ -189,9 +188,8 @@ Recovery validates package identity before touching files:
   changed data is quarantined and the row is failed;
 - unrelated files and ready streams are never moved or rewritten.
 
-Because development moved to R2 before R1 Export implementation, the R1 Export
-design must use the next schema number available when resumed rather than
-claiming migration 004.
+R1-06 owns migration 004. R2-01 must retain migration 005 when it is implemented
+after the R1 completion gate.
 
 ## Recording lifecycle and UI
 
