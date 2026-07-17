@@ -1,5 +1,6 @@
 #include "avatar/CalibrationProfile.h"
 
+#include <cmath>
 #include <limits>
 
 #include <gtest/gtest.h>
@@ -98,10 +99,65 @@ TEST(CalibrationProfileTest, ExpressiveInputMapsAboveTheCalibratedNeutral) {
 
     const ExpressionParameters calibrated = profile.apply(expressive);
 
-    // (0.9 - 0.15) / (1 - 0.15) * 1 == 0.75 / 0.85 - the rescale step
-    // stretching the remaining travel back onto the full documented range.
+    // Offset-removal calibration: clamp(raw - baseline, lo, hi) ==
+    // clamp(0.9 - 0.15, 0, 1) == 0.75. No rescale/gain in Stage A - see
+    // CalibrationProfile.h.
     EXPECT_GT(calibrated.mouthOpen, 0.0F);
-    EXPECT_NEAR(calibrated.mouthOpen, 0.75F / 0.85F, kTolerance);
+    EXPECT_NEAR(calibrated.mouthOpen, 0.75F, kTolerance);
+}
+
+TEST(CalibrationProfileTest, BelowNeutralUnitFieldClampsToZeroByDesign) {
+    // eye/brow/mouth are documented as unidirectional expression magnitude
+    // (0 = neutral, 1 = max): a raw reading below the performer's own
+    // captured neutral still means "no expression", not a negative
+    // expression, so it must clamp to exactly 0 - not collapse through some
+    // broken degenerate-denominator branch, and not read as a negative
+    // value either. This is the intended semantics of offset+clamp
+    // calibration on a [0,1] field, documented in CalibrationProfile.h.
+    ExpressionParameters neutralRaw{};
+    neutralRaw.mouthOpen = 0.4F; // this performer's resting mouth reads 0.4, not 0
+
+    const auto profileResult = CalibrationProfile::fromNeutral(neutralRaw);
+    ASSERT_TRUE(profileResult.hasValue());
+    const CalibrationProfile profile = profileResult.value();
+
+    for (const float belowNeutral : {0.35F, 0.2F, 0.0F}) {
+        ExpressionParameters raw = neutralRaw;
+        raw.mouthOpen = belowNeutral;
+
+        const ExpressionParameters calibrated = profile.apply(raw);
+
+        EXPECT_NEAR(calibrated.mouthOpen, 0.0F, kTolerance)
+            << "raw.mouthOpen=" << belowNeutral << " below neutral 0.4 must clamp to 0";
+    }
+}
+
+TEST(CalibrationProfileTest, BelowNeutralHeadFieldStaysGradedNotCollapsed) {
+    // headYaw is bidirectional over [-1,1] with 0 in the interior of the
+    // range (not at an endpoint), so unlike a [0,1] expression-magnitude
+    // field, a below-neutral raw must remain a distinct, graded negative
+    // value per distinct input - proving head fields are not collapsed to a
+    // single "no signal" value the way [0,1] fields intentionally are.
+    ExpressionParameters neutralRaw{};
+    neutralRaw.headYaw = 0.1F; // camera mounted slightly off-axis
+
+    const auto profileResult = CalibrationProfile::fromNeutral(neutralRaw);
+    ASSERT_TRUE(profileResult.hasValue());
+    const CalibrationProfile profile = profileResult.value();
+
+    ExpressionParameters rawA = neutralRaw;
+    rawA.headYaw = -0.2F; // below this performer's own captured neutral
+    ExpressionParameters rawB = neutralRaw;
+    rawB.headYaw = -0.5F; // further below
+
+    const ExpressionParameters calibratedA = profile.apply(rawA);
+    const ExpressionParameters calibratedB = profile.apply(rawB);
+
+    EXPECT_NEAR(calibratedA.headYaw, -0.3F, kTolerance);
+    EXPECT_NEAR(calibratedB.headYaw, -0.6F, kTolerance);
+    EXPECT_LT(calibratedB.headYaw, calibratedA.headYaw)
+        << "two distinct below-neutral raw values must yield two distinct outputs, not both "
+           "collapse to the same value";
 }
 
 TEST(CalibrationProfileTest, FromNeutralClampsOutOfRangeInputAfterCalibration) {
@@ -137,6 +193,45 @@ TEST(CalibrationProfileTest, FromNeutralRejectsInfiniteBaseline) {
 
     ASSERT_FALSE(profileResult.hasValue());
     EXPECT_EQ(profileResult.error().code(), ErrorCode::InvalidArgument);
+}
+
+TEST(CalibrationProfileTest, FromNeutralRejectsOutOfRangeButFiniteBaseline) {
+    // A finite baseline that is nonetheless outside the field's own
+    // documented range (e.g. mouthOpen == 1.4, but mouthOpen is documented
+    // [0,1]) is a malformed capture, not a valid "expressive" neutral pose -
+    // it must be rejected the same way a NaN/infinite baseline is.
+    ExpressionParameters neutralRaw{};
+    neutralRaw.mouthOpen = 1.4F; // finite, but beyond documented [0,1] max
+
+    const auto profileResult = CalibrationProfile::fromNeutral(neutralRaw);
+
+    ASSERT_FALSE(profileResult.hasValue());
+    EXPECT_EQ(profileResult.error().code(), ErrorCode::InvalidArgument);
+}
+
+TEST(CalibrationProfileTest, ApplySanitizesNanRawFieldToNeutralWithoutAffectingOtherFields) {
+    // A non-finite raw field must not leak through the clamp as NaN/Inf
+    // (std::clamp(NaN, lo, hi) returns NaN, since both comparisons are
+    // false) - CLAUDE.md 9 forbids hiding a tracking failure behind a
+    // fake-valid number. The provider must signal tracking loss via
+    // faceFound/confidence, not NaN; apply() defensively treats a NaN field
+    // as that field's neutral value.
+    ExpressionParameters neutralRaw{};
+    neutralRaw.mouthOpen = 0.2F;
+
+    const auto profileResult = CalibrationProfile::fromNeutral(neutralRaw);
+    ASSERT_TRUE(profileResult.hasValue());
+    const CalibrationProfile profile = profileResult.value();
+
+    ExpressionParameters raw = neutralRaw;
+    raw.mouthOpen = std::numeric_limits<float>::quiet_NaN();
+    raw.eyeOpenLeft = 0.6F; // an ordinary, unaffected field
+
+    const ExpressionParameters calibrated = profile.apply(raw);
+
+    EXPECT_TRUE(std::isfinite(calibrated.mouthOpen));
+    EXPECT_NEAR(calibrated.mouthOpen, 0.0F, kTolerance);
+    EXPECT_NEAR(calibrated.eyeOpenLeft, 0.6F, kTolerance);
 }
 
 }  // namespace
