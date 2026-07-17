@@ -1,4 +1,6 @@
 #include "app/EditorController.h"
+#include "app/ProjectController.h"
+#include "app/ProjectEditorBinding.h"
 
 #include "core/AppError.h"
 #include "core/Timebase.h"
@@ -39,6 +41,8 @@
 namespace {
 
 using creator::app::EditorController;
+using creator::app::ProjectController;
+using creator::app::bindProjectEditor;
 using creator::app::MediaBinModel;
 using creator::app::TimelineTrackModel;
 using creator::core::DurationNs;
@@ -176,6 +180,7 @@ public:
     [[nodiscard]] QUrl url() const {
         return QUrl::fromLocalFile(QString::fromStdWString(package_.wstring()));
     }
+    [[nodiscard]] const fs::path& root() const noexcept { return root_; }
 
     void rejectEditCommits() const {
         auto connection =
@@ -424,6 +429,27 @@ TEST(EditorControllerDurableTest, BoundarySplitLeavesDurableAndPreviewStateUntou
     EXPECT_TRUE(controller.clean());
     EXPECT_EQ(fake->calls().size(), callsBefore);
     EXPECT_FALSE(controller.statusMessage().isEmpty());
+}
+
+TEST(ProjectEditorIntegrationTest,
+     ValidatedProjectOpenPublishesDefaultTimelineWithoutBlockingUi) {
+    DurableControllerPackage package;
+    ProjectController projects{std::make_unique<ProjectPackageStore>(),
+                               package.root() / "recent-projects.json", false};
+    auto engine = std::make_unique<FakeEditEngine>();
+    EditorController editor{std::move(engine)};
+    const auto binding = bindProjectEditor(projects, editor);
+    ASSERT_TRUE(binding);
+
+    projects.openProject(package.url());
+
+    ASSERT_TRUE(waitUntil([&] {
+        return projects.hasOpenProject() && !projects.busy() &&
+               !editor.sessionBusy() && !editor.busy() &&
+               editor.timelineRevision() == 0;
+    }));
+    EXPECT_EQ(projects.projectUrl(), package.url());
+    EXPECT_EQ(editor.timelineTrackModel()->rowCount(), 1);
 }
 
 TEST(EditorControllerTest, PublishesModelsBeforeAsynchronousEngineLoadCompletes) {

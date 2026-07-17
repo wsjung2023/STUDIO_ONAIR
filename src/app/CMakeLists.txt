@@ -34,6 +34,8 @@ add_library(cs_app STATIC
     ProjectWorker.cpp
     ProjectController.h
     ProjectController.cpp
+    ProjectEditorBinding.h
+    ProjectEditorBinding.cpp
     TimelineEditService.h
     TimelineEditService.cpp
     EditorSessionTypes.h

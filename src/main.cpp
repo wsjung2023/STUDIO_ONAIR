@@ -1,4 +1,5 @@
 #include "app/ProjectController.h"
+#include "app/ProjectEditorBinding.h"
 #include "app/EditorController.h"
 #include "app/EditorPreviewItem.h"
 #include "app/DeviceCaptureController.h"
@@ -90,6 +91,8 @@ int main(int argc, char* argv[]) {
         std::make_unique<creator::edit_engine::UnavailableEditEngine>();
 #endif
     creator::app::EditorController editorController{std::move(editEngine), &app};
+    static_cast<void>(
+        creator::app::bindProjectEditor(projectController, editorController));
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
