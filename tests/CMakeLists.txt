@@ -70,6 +70,8 @@ add_executable(cs_tests
     capture/AudioPcmLayoutTest.cpp
     capture/DeviceCaptureAssemblerTest.cpp
     capture/DeviceCaptureStopCoordinatorTest.cpp
+    avatar/ExpressionParametersTest.cpp
+    avatar/TrackingPortContractTest.cpp
     recorder/RecordingTrackTest.cpp
     recorder/DiskSpaceMonitorTest.cpp
     recorder/DurableSegmentPublisherTest.cpp
@@ -103,6 +105,7 @@ target_link_libraries(cs_tests
         cs_sync
         cs_capture
         cs_recorder
+        cs_avatar
         cs_project_store
         cs_edit_engine
         cs_mlt_graph_plan

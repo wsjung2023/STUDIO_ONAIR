@@ -1,0 +1,10 @@
+cs_add_qtfree_library(cs_avatar
+    SOURCES
+        ExpressionParameters.h
+        TrackingResult.h
+        ITrackingProvider.h
+    DEPENDS
+        cs_core
+        cs_media
+        cs_domain
+)
