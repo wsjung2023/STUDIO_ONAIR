@@ -73,6 +73,7 @@ add_executable(cs_tests
     avatar/ExpressionParametersTest.cpp
     avatar/TrackingPortContractTest.cpp
     avatar/CalibrationProfileTest.cpp
+    avatar/CalibrationCaptureTest.cpp
     avatar/ExpressionNormalizerTest.cpp
     avatar/ExpressionSmootherTest.cpp
     avatar/AvatarMotionSerializerTest.cpp

@@ -6,6 +6,8 @@ cs_add_qtfree_library(cs_avatar
         ITrackingProvider.h
         CalibrationProfile.h
         CalibrationProfile.cpp
+        CalibrationCapture.h
+        CalibrationCapture.cpp
         ExpressionNormalizer.h
         ExpressionNormalizer.cpp
         ExpressionSmoother.h
