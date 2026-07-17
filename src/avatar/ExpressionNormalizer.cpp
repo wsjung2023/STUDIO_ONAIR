@@ -4,11 +4,11 @@
 
 namespace creator::avatar {
 
-ExpressionNormalizer::ExpressionNormalizer(CalibrationProfile profile)
-    : profile_(std::move(profile)) {}
+ExpressionNormalizer::ExpressionNormalizer(CalibrationProfile profile, float minConfidence)
+    : profile_(std::move(profile)), minConfidence_(minConfidence) {}
 
 ExpressionParameters ExpressionNormalizer::normalize(const TrackingResult& result) const {
-    if (!result.faceFound) {
+    if (!result.faceFound || result.confidence < minConfidence_) {
         return ExpressionParameters::neutral();
     }
     return profile_.apply(result.raw);
