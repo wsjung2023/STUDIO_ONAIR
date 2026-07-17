@@ -48,11 +48,27 @@ QString mediaKindName(domain::MediaKind kind) {
     return {};
 }
 
+QString textAlignmentName(domain::TextAlignment alignment) {
+    switch (alignment) {
+        case domain::TextAlignment::Left:
+            return QStringLiteral("left");
+        case domain::TextAlignment::Center:
+            return QStringLiteral("center");
+        case domain::TextAlignment::Right:
+            return QStringLiteral("right");
+    }
+    return {};
+}
+
 QVariantMap clipDto(const domain::Clip& clip) {
     QVariantMap dto{
         {QStringLiteral("id"), QString::fromStdString(clip.id().value())},
         {QStringLiteral("kind"), clipKindName(clip.kind())},
+        {QStringLiteral("clipKind"), clipKindName(clip.kind())},
         {QStringLiteral("mediaKind"), mediaKindName(clip.mediaKind())},
+        {QStringLiteral("visualCompatible"),
+         clip.mediaKind() != domain::MediaKind::Audio},
+        {QStringLiteral("audioCompatible"), clip.hasAudio()},
         {QStringLiteral("enabled"), clip.enabled()},
         {QStringLiteral("sourceStartNs"),
          QVariant::fromValue<qint64>(
@@ -95,6 +111,37 @@ QVariantMap clipDto(const domain::Clip& clip) {
                    QVariant::fromValue<qint64>(envelope.fadeIn().count()));
         dto.insert(QStringLiteral("fadeOutNs"),
                    QVariant::fromValue<qint64>(envelope.fadeOut().count()));
+    }
+    if (clip.titlePayload().has_value()) {
+        const auto& title = *clip.titlePayload();
+        dto.insert(QStringLiteral("titleText"),
+                   QString::fromUtf8(title.text()));
+        dto.insert(QStringLiteral("titleFontFamily"),
+                   QString::fromUtf8(title.fontFamily()));
+        dto.insert(QStringLiteral("titleX"), title.x());
+        dto.insert(QStringLiteral("titleY"), title.y());
+        dto.insert(QStringLiteral("titleForeground"),
+                   QString::fromStdString(title.foreground().toString()));
+        dto.insert(QStringLiteral("titleBackground"),
+                   QString::fromStdString(title.background().toString()));
+        dto.insert(QStringLiteral("titleAlignment"),
+                   textAlignmentName(title.alignment()));
+    }
+    if (clip.kind() == domain::ClipKind::Caption) {
+        QVariantList cues;
+        cues.reserve(static_cast<qsizetype>(clip.captionCues().size()));
+        for (const auto& cue : clip.captionCues()) {
+            cues.push_back(QVariantMap{
+                {QStringLiteral("cueId"),
+                 QString::fromStdString(cue.id().value())},
+                {QStringLiteral("startOffsetNs"),
+                 QVariant::fromValue<qint64>(cue.startOffset().count())},
+                {QStringLiteral("durationNs"),
+                 QVariant::fromValue<qint64>(cue.duration().count())},
+                {QStringLiteral("text"), QString::fromUtf8(cue.text())},
+            });
+        }
+        dto.insert(QStringLiteral("captionCues"), cues);
     }
     return dto;
 }

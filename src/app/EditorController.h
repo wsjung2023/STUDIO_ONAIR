@@ -15,6 +15,8 @@
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
+#include <QVariantList>
+#include <QVariantMap>
 
 #include <cstdint>
 #include <deque>
@@ -45,6 +47,14 @@ class EditorController final : public QObject {
     Q_PROPERTY(bool sessionBusy READ sessionBusy NOTIFY sessionBusyChanged)
     Q_PROPERTY(QString selectedTrackId READ selectedTrackId NOTIFY selectionChanged)
     Q_PROPERTY(QString selectedClipId READ selectedClipId NOTIFY selectionChanged)
+    Q_PROPERTY(QString selectedClipKind READ selectedClipKind NOTIFY selectionChanged)
+    Q_PROPERTY(bool selectedVisualCompatible READ selectedVisualCompatible NOTIFY selectionChanged)
+    Q_PROPERTY(bool selectedAudioCompatible READ selectedAudioCompatible NOTIFY selectionChanged)
+    Q_PROPERTY(QVariantMap selectedVisualTransform READ selectedVisualTransform NOTIFY selectionChanged)
+    Q_PROPERTY(QVariantMap selectedAudioEnvelope READ selectedAudioEnvelope NOTIFY selectionChanged)
+    Q_PROPERTY(QVariantMap selectedTitlePayload READ selectedTitlePayload NOTIFY selectionChanged)
+    Q_PROPERTY(QVariantList selectedCaptionCues READ selectedCaptionCues NOTIFY selectionChanged)
+    Q_PROPERTY(QString selectedPipPreset READ selectedPipPreset NOTIFY selectionChanged)
     Q_PROPERTY(qlonglong selectedClipStartNs READ selectedClipStartNs NOTIFY selectionChanged)
     Q_PROPERTY(qlonglong selectedClipEndNs READ selectedClipEndNs NOTIFY selectionChanged)
     Q_PROPERTY(qlonglong rangeInNs READ rangeInNs NOTIFY markedRangeChanged)
@@ -81,6 +91,14 @@ public:
     [[nodiscard]] bool sessionBusy() const noexcept { return sessionBusy_; }
     [[nodiscard]] QString selectedTrackId() const { return selectedTrackId_; }
     [[nodiscard]] QString selectedClipId() const { return selectedClipId_; }
+    [[nodiscard]] QString selectedClipKind() const;
+    [[nodiscard]] bool selectedVisualCompatible() const noexcept;
+    [[nodiscard]] bool selectedAudioCompatible() const noexcept;
+    [[nodiscard]] QVariantMap selectedVisualTransform() const;
+    [[nodiscard]] QVariantMap selectedAudioEnvelope() const;
+    [[nodiscard]] QVariantMap selectedTitlePayload() const;
+    [[nodiscard]] QVariantList selectedCaptionCues() const;
+    [[nodiscard]] QString selectedPipPreset() const;
     [[nodiscard]] qlonglong selectedClipStartNs() const noexcept;
     [[nodiscard]] qlonglong selectedClipEndNs() const noexcept;
     [[nodiscard]] qlonglong rangeInNs() const noexcept {
@@ -116,6 +134,28 @@ public:
     Q_INVOKABLE void trimSelectedStart();
     Q_INVOKABLE void trimSelectedEnd();
     Q_INVOKABLE void deleteMarkedRange(bool ripple);
+    Q_INVOKABLE void applySelectedVisualTransform(
+        double x, double y, double width, double height, double scaleX,
+        double scaleY, double rotationDegrees, double cropLeft, double cropTop,
+        double cropRight, double cropBottom, double opacity, int zOrder);
+    Q_INVOKABLE void applySelectedPipPreset(QString preset);
+    Q_INVOKABLE void resetSelectedVisualTransform();
+    Q_INVOKABLE void applySelectedAudioEnvelope(
+        double gainDb, qlonglong fadeInNs, qlonglong fadeOutNs);
+    Q_INVOKABLE void resetSelectedAudioEnvelope();
+    Q_INVOKABLE void addTitle(
+        QString text, QString fontFamily, double x, double y,
+        QString foreground, QString background, QString alignment);
+    Q_INVOKABLE void editSelectedTitle(
+        QString text, QString fontFamily, double x, double y,
+        QString foreground, QString background, QString alignment);
+    Q_INVOKABLE void removeSelectedTitle();
+    Q_INVOKABLE void addCaptionCue(
+        qlonglong startOffsetNs, qlonglong durationNs, QString text);
+    Q_INVOKABLE void editCaptionCue(
+        QString cueId, qlonglong startOffsetNs, qlonglong durationNs,
+        QString text);
+    Q_INVOKABLE void removeCaptionCue(QString cueId);
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE void save();
@@ -182,6 +222,7 @@ private:
     void setPlaying(bool value);
     void setStatus(QString value);
     [[nodiscard]] const domain::Clip* selectedClip() const noexcept;
+    [[nodiscard]] const domain::Track* selectedTrack() const noexcept;
 
     QThread workerThread_;
     EditorEngineWorker* worker_{};
@@ -214,6 +255,7 @@ private:
     bool canRedo_{false};
     bool clean_{true};
     bool durableSessionReady_{false};
+    bool derivedFailureRecoveryPending_{false};
     quint64 sessionGeneration_{0};
     quint64 nextSessionCommandId_{1};
     std::optional<quint64> activeSessionCommand_;

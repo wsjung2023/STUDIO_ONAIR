@@ -19,11 +19,13 @@
 #include <QAbstractItemModel>
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QImage>
 #include <QSignalSpy>
 #include <QThread>
 #include <QUrl>
 #include <QVariantList>
+#include <QVariantMap>
 
 #include <gtest/gtest.h>
 
@@ -31,6 +33,7 @@
 #include <condition_variable>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -50,21 +53,28 @@ using creator::core::FrameRate;
 using creator::core::TimestampNs;
 using creator::domain::AssetAvailability;
 using creator::domain::AssetId;
+using creator::domain::AudioEnvelope;
 using creator::domain::AudioAssetMetadata;
+using creator::domain::CaptionCue;
 using creator::domain::Clip;
 using creator::domain::ClipId;
 using creator::domain::CommandId;
+using creator::domain::CueId;
 using creator::domain::MediaAsset;
 using creator::domain::MediaKind;
+using creator::domain::RgbaColor;
 using creator::domain::SplitClipCommand;
 using creator::domain::TimeRange;
 using creator::domain::Timeline;
 using creator::domain::TimelineId;
 using creator::domain::TimelineRevision;
+using creator::domain::TitlePayload;
+using creator::domain::TextAlignment;
 using creator::domain::Track;
 using creator::domain::TrackId;
 using creator::domain::TrackKind;
 using creator::domain::VideoAssetMetadata;
+using creator::domain::VisualTransform;
 using creator::edit_engine::IEditEngine;
 using creator::edit_engine::IRenderJob;
 using creator::edit_engine::PreviewFrame;
@@ -143,9 +153,109 @@ TimelineSnapshot snapshotWithVideo(std::int64_t revision,
     return value;
 }
 
+TimelineSnapshot snapshotWithInspectorValues(std::int64_t revision,
+                                             bool lockGenerated = false,
+                                             bool lockVideo = false) {
+    auto video = asset();
+    auto audio = audioAsset("microphone");
+    auto timeline = Timeline::create(TimelineId::create("main").value(),
+                                     "Inspector timeline",
+                                     FrameRate::create(60, 1).value())
+                        .value();
+    EXPECT_TRUE(timeline.addTrack(
+                            Track::create(TrackId::create("v1").value(),
+                                          TrackKind::Video, "Video", true,
+                                          false)
+                                .value())
+                    .hasValue());
+    EXPECT_TRUE(timeline.addTrack(
+                            Track::create(TrackId::create("a1").value(),
+                                          TrackKind::Audio, "Audio", true,
+                                          false)
+                                .value())
+                    .hasValue());
+    EXPECT_TRUE(timeline.addTrack(
+                            Track::create(TrackId::create("title-1").value(),
+                                          TrackKind::Title, "Titles", true,
+                                          false)
+                                .value())
+                    .hasValue());
+    EXPECT_TRUE(timeline.addTrack(
+                            Track::create(TrackId::create("caption-1").value(),
+                                          TrackKind::Caption, "Captions", true,
+                                          false)
+                                .value())
+                    .hasValue());
+    const auto range =
+        TimeRange::create(TimestampNs{}, DurationNs{1'000'000'000}).value();
+    const auto transform = VisualTransform::create(
+                               0.1, 0.2, 0.3, 0.4, 1.0, 1.0, 5.0, 0.01,
+                               0.02, 0.03, 0.04, 0.8, 7)
+                               .value();
+    const auto envelope =
+        AudioEnvelope::create(-4.0, DurationNs{100'000'000},
+                              DurationNs{200'000'000}, range.duration())
+            .value();
+    EXPECT_TRUE(timeline.insertClip(
+                            TrackId::create("v1").value(),
+                            Clip::createAsset(ClipId::create("video").value(),
+                                              video, range, range, true,
+                                              transform, std::nullopt)
+                                .value())
+                    .hasValue());
+    EXPECT_TRUE(timeline.insertClip(
+                            TrackId::create("a1").value(),
+                            Clip::createAsset(ClipId::create("audio").value(),
+                                              audio, range, range, true,
+                                              std::nullopt, envelope)
+                                .value())
+                    .hasValue());
+    const auto title = TitlePayload::create(
+                           "Inspector title", "Noto Sans", 0.25, 0.1,
+                           RgbaColor::parse("#ffffffff").value(),
+                           RgbaColor::parse("#00000080").value(),
+                           TextAlignment::Center)
+                           .value();
+    EXPECT_TRUE(timeline.insertClip(
+                            TrackId::create("title-1").value(),
+                            Clip::createTitle(ClipId::create("title").value(),
+                                              range, true, title, std::nullopt)
+                                .value())
+                    .hasValue());
+    const auto cue = CaptionCue::create(
+                         CueId::create("cue-1").value(), DurationNs{10},
+                         DurationNs{100}, "Caption text")
+                         .value();
+    EXPECT_TRUE(timeline.insertClip(
+                            TrackId::create("caption-1").value(),
+                            Clip::createCaption(
+                                ClipId::create("caption").value(), range, true,
+                                {cue}, std::nullopt)
+                                .value())
+                    .hasValue());
+    if (lockGenerated) {
+        EXPECT_TRUE(timeline.setTrackLocked(
+                                TrackId::create("title-1").value(), true)
+                        .hasValue());
+        EXPECT_TRUE(timeline.setTrackLocked(
+                                TrackId::create("caption-1").value(), true)
+                        .hasValue());
+    }
+    if (lockVideo) {
+        EXPECT_TRUE(timeline.setTrackLocked(
+                                TrackId::create("v1").value(), true)
+                        .hasValue());
+    }
+    return TimelineSnapshot{std::move(timeline),
+                            TimelineRevision::create(revision).value(),
+                            {std::move(video), std::move(audio)}};
+}
+
 class DurableControllerPackage final {
 public:
-    DurableControllerPackage() {
+    explicit DurableControllerPackage(bool inspectorValues = false,
+                                      bool lockGenerated = false,
+                                      bool lockVideo = false) {
         root_ = fs::temp_directory_path() /
                 ("creator-studio-controller-durable-" +
                  std::to_string(++nextId_));
@@ -166,10 +276,19 @@ public:
             << (storeResult.hasValue() ? "" : storeResult.error().message());
         if (!storeResult.hasValue()) return;
         auto store = std::move(storeResult).value();
-        EXPECT_TRUE(store.putAsset(asset()).hasValue());
-        EXPECT_TRUE(store.createTimeline(
-                             snapshotWithVideo(0, DurationNs{1'000}).timeline)
-                        .hasValue());
+        if (inspectorValues) {
+            auto seeded = snapshotWithInspectorValues(
+                0, lockGenerated, lockVideo);
+            for (const auto& media : seeded.assets) {
+                EXPECT_TRUE(store.putAsset(media).hasValue());
+            }
+            EXPECT_TRUE(store.createTimeline(seeded.timeline).hasValue());
+        } else {
+            EXPECT_TRUE(store.putAsset(asset()).hasValue());
+            EXPECT_TRUE(store.createTimeline(
+                                 snapshotWithVideo(0, DurationNs{1'000}).timeline)
+                            .hasValue());
+        }
     }
 
     ~DurableControllerPackage() {
@@ -181,6 +300,16 @@ public:
         return QUrl::fromLocalFile(QString::fromStdWString(package_.wstring()));
     }
     [[nodiscard]] const fs::path& root() const noexcept { return root_; }
+
+    void blockGeneratedCacheWrites() const {
+        const auto generated = package_ / "cache" / "generated";
+        std::error_code error;
+        fs::remove_all(generated, error);
+        ASSERT_FALSE(error) << error.message();
+        QFile blocker{QString::fromStdWString(generated.wstring())};
+        ASSERT_TRUE(blocker.open(QIODevice::WriteOnly));
+        ASSERT_EQ(blocker.write("blocked"), 7);
+    }
 
     void rejectEditCommits() const {
         auto connection =
@@ -234,6 +363,284 @@ TEST(EditorControllerDurableTest, PublishesSelectionAndNormalizesMarkedRange) {
     EXPECT_FALSE(controller.canUndo());
     EXPECT_FALSE(controller.canRedo());
     EXPECT_FALSE(controller.sessionBusy());
+}
+
+TEST(EditorControllerDurableTest,
+     PublishesTypedInspectorValuesAndCompatibilityFromCommittedSelection) {
+    EditorController controller{std::make_unique<FakeEditEngine>()};
+    controller.openSession({}, snapshotWithInspectorValues(1));
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+
+    controller.selectClip(QStringLiteral("v1"), QStringLiteral("video"));
+    EXPECT_EQ(controller.selectedClipKind(), QStringLiteral("asset"));
+    EXPECT_TRUE(controller.selectedVisualCompatible());
+    EXPECT_FALSE(controller.selectedAudioCompatible());
+    EXPECT_DOUBLE_EQ(
+        controller.selectedVisualTransform()
+            .value(QStringLiteral("rotationDegrees"))
+            .toDouble(),
+        5.0);
+    EXPECT_EQ(controller.selectedPipPreset(), QStringLiteral("custom"));
+
+    controller.selectClip(QStringLiteral("a1"), QStringLiteral("audio"));
+    EXPECT_FALSE(controller.selectedVisualCompatible());
+    EXPECT_TRUE(controller.selectedAudioCompatible());
+    EXPECT_DOUBLE_EQ(controller.selectedAudioEnvelope()
+                         .value(QStringLiteral("gainDb"))
+                         .toDouble(),
+                     -4.0);
+
+    controller.selectClip(QStringLiteral("title-1"),
+                          QStringLiteral("title"));
+    EXPECT_EQ(controller.selectedClipKind(), QStringLiteral("title"));
+    EXPECT_EQ(controller.selectedTitlePayload()
+                  .value(QStringLiteral("text"))
+                  .toString(),
+              QStringLiteral("Inspector title"));
+
+    controller.selectClip(QStringLiteral("caption-1"),
+                          QStringLiteral("caption"));
+    EXPECT_EQ(controller.selectedClipKind(), QStringLiteral("caption"));
+    ASSERT_EQ(controller.selectedCaptionCues().size(), 1);
+    EXPECT_EQ(controller.selectedCaptionCues()
+                  .front()
+                  .toMap()
+                  .value(QStringLiteral("cueId"))
+                  .toString(),
+              QStringLiteral("cue-1"));
+
+    controller.openProject(QUrl::fromLocalFile(
+        QCoreApplication::applicationDirPath() +
+        QStringLiteral("/missing-inspector-project.cstudio")));
+    EXPECT_TRUE(controller.selectedClipKind().isEmpty());
+    EXPECT_FALSE(controller.selectedVisualCompatible());
+    EXPECT_TRUE(controller.selectedVisualTransform().isEmpty());
+    EXPECT_TRUE(controller.selectedCaptionCues().isEmpty());
+}
+
+TEST(EditorControllerDurableTest,
+     MapsTypedInspectorSubmissionsToOneDurableRevisionEach) {
+    DurableControllerPackage package{true};
+    EditorController controller{std::make_unique<FakeEditEngine>()};
+    controller.openProject(package.url());
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy() &&
+               controller.timelineRevision() == 0;
+    }));
+    const auto waitRevision = [&](qlonglong revision) {
+        return waitUntil([&] {
+            return !controller.sessionBusy() && !controller.busy() &&
+                   controller.timelineRevision() == revision;
+        });
+    };
+
+    controller.selectClip(QStringLiteral("v1"), QStringLiteral("video"));
+    controller.applySelectedVisualTransform(
+        0.2, 0.1, 0.4, 0.3, 1.0, 1.0, 12.0, 0.01, 0.02, 0.03, 0.04,
+        0.75, 9);
+    ASSERT_TRUE(waitRevision(1));
+    EXPECT_DOUBLE_EQ(controller.selectedVisualTransform()
+                         .value(QStringLiteral("rotationDegrees"))
+                         .toDouble(),
+                     12.0);
+    controller.applySelectedPipPreset(QStringLiteral("bottomRight"));
+    ASSERT_TRUE(waitRevision(2));
+    EXPECT_EQ(controller.selectedPipPreset(), QStringLiteral("bottomRight"));
+    controller.resetSelectedVisualTransform();
+    ASSERT_TRUE(waitRevision(3));
+    EXPECT_TRUE(controller.selectedVisualTransform().isEmpty());
+    EXPECT_EQ(controller.selectedPipPreset(), QStringLiteral("fullFrame"));
+
+    controller.selectClip(QStringLiteral("a1"), QStringLiteral("audio"));
+    controller.applySelectedAudioEnvelope(-6.0, 50'000'000, 75'000'000);
+    ASSERT_TRUE(waitRevision(4));
+    EXPECT_DOUBLE_EQ(controller.selectedAudioEnvelope()
+                         .value(QStringLiteral("gainDb"))
+                         .toDouble(),
+                     -6.0);
+    controller.resetSelectedAudioEnvelope();
+    ASSERT_TRUE(waitRevision(5));
+    EXPECT_TRUE(controller.selectedAudioEnvelope().isEmpty());
+
+    controller.seek(1'000'000'000);
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    controller.addTitle(QStringLiteral("New title"),
+                        QStringLiteral("Noto Sans"), 0.2, 0.1,
+                        QStringLiteral("#ffffffff"),
+                        QStringLiteral("#00000080"),
+                        QStringLiteral("center"));
+    ASSERT_TRUE(waitRevision(6));
+    const QVariantList titles =
+        controller.timelineTrackModel()
+            ->data(controller.timelineTrackModel()->index(2, 0),
+                   TimelineTrackModel::ClipsRole)
+            .toList();
+    ASSERT_EQ(titles.size(), 2);
+    const QString addedTitleId =
+        titles.back().toMap().value(QStringLiteral("id")).toString();
+    controller.selectClip(QStringLiteral("title-1"), addedTitleId);
+    controller.editSelectedTitle(
+        QStringLiteral("Edited title"), QStringLiteral("Noto Sans"), 0.3,
+        0.2, QStringLiteral("#ff0000ff"),
+        QStringLiteral("#00000000"), QStringLiteral("left"));
+    ASSERT_TRUE(waitRevision(7));
+    EXPECT_EQ(controller.selectedTitlePayload()
+                  .value(QStringLiteral("text"))
+                  .toString(),
+              QStringLiteral("Edited title"));
+    controller.removeSelectedTitle();
+    ASSERT_TRUE(waitRevision(8));
+    EXPECT_TRUE(controller.selectedClipId().isEmpty());
+
+    controller.selectClip(QStringLiteral("caption-1"),
+                          QStringLiteral("caption"));
+    controller.addCaptionCue(200, 100, QStringLiteral("Second caption"));
+    ASSERT_TRUE(waitRevision(9));
+    ASSERT_EQ(controller.selectedCaptionCues().size(), 2);
+    const QString addedCueId = controller.selectedCaptionCues()
+                                   .back()
+                                   .toMap()
+                                   .value(QStringLiteral("cueId"))
+                                   .toString();
+    controller.editCaptionCue(addedCueId, 220, 100,
+                              QStringLiteral("Edited caption"));
+    ASSERT_TRUE(waitRevision(10));
+    EXPECT_EQ(controller.selectedCaptionCues()
+                  .back()
+                  .toMap()
+                  .value(QStringLiteral("text"))
+                  .toString(),
+              QStringLiteral("Edited caption"));
+    controller.removeCaptionCue(addedCueId);
+    ASSERT_TRUE(waitRevision(11));
+    ASSERT_EQ(controller.selectedCaptionCues().size(), 1);
+}
+
+TEST(EditorControllerDurableTest,
+     RejectsInvalidInspectorFieldsBeforeIssuingDurableWork) {
+    DurableControllerPackage package{true};
+    EditorController controller{std::make_unique<FakeEditEngine>()};
+    controller.openProject(package.url());
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy();
+    }));
+    controller.selectClip(QStringLiteral("v1"), QStringLiteral("video"));
+    controller.applySelectedVisualTransform(
+        0.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+        std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0, 0.0, 0.0, 1.0,
+        0);
+    EXPECT_FALSE(controller.sessionBusy());
+    EXPECT_EQ(controller.timelineRevision(), 0);
+    EXPECT_TRUE(controller.statusMessage().contains(
+        QStringLiteral("visual transform"), Qt::CaseInsensitive));
+
+    controller.addTitle(QStringLiteral("Bad color"),
+                        QStringLiteral("Noto Sans"), 0.2, 0.1,
+                        QStringLiteral("red"), QStringLiteral("#00000000"),
+                        QStringLiteral("center"));
+    EXPECT_FALSE(controller.sessionBusy());
+    EXPECT_EQ(controller.timelineRevision(), 0);
+    EXPECT_TRUE(controller.statusMessage().contains(
+        QStringLiteral("foreground"), Qt::CaseInsensitive));
+
+    controller.selectClip(QStringLiteral("caption-1"),
+                          QStringLiteral("caption"));
+    controller.addCaptionCue(50, 100, QStringLiteral("Overlaps"));
+    EXPECT_FALSE(controller.sessionBusy());
+    EXPECT_EQ(controller.timelineRevision(), 0);
+    EXPECT_TRUE(controller.statusMessage().contains(
+        QStringLiteral("overlap"), Qt::CaseInsensitive));
+}
+
+TEST(EditorControllerDurableTest,
+     PreservesCommittedTitleAndMarksPreviewStaleAfterCacheFailure) {
+    DurableControllerPackage package;
+    auto engine = std::make_unique<FakeEditEngine>();
+    FakeEditEngine* fake = engine.get();
+    EditorController controller{std::move(engine)};
+    controller.openProject(package.url());
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy() &&
+               controller.timelineRevision() == 0;
+    }));
+    const auto callsBefore = fake->calls().size();
+    package.blockGeneratedCacheWrites();
+
+    controller.addTitle(QStringLiteral("Committed despite cache failure"),
+                        QStringLiteral("Noto Sans"), 0.2, 0.1,
+                        QStringLiteral("#ffffffff"),
+                        QStringLiteral("#00000080"),
+                        QStringLiteral("center"));
+
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy() &&
+               controller.timelineRevision() == 1;
+    }));
+    EXPECT_TRUE(controller.canUndo());
+    EXPECT_FALSE(controller.clean());
+    EXPECT_TRUE(controller.previewStale());
+    EXPECT_TRUE(controller.statusMessage().contains(
+        QStringLiteral("generated overlay"), Qt::CaseInsensitive));
+    EXPECT_EQ(controller.timelineTrackModel()->rowCount(), 2);
+    ASSERT_GT(fake->calls().size(), callsBefore);
+    EXPECT_EQ(fake->calls()[callsBefore].operation, FakeEditOperation::Load);
+}
+
+TEST(EditorControllerDurableTest,
+     RejectsGeneratedEditsOnStableLockedTracksBeforeDurableWork) {
+    DurableControllerPackage package{true, true};
+    EditorController controller{std::make_unique<FakeEditEngine>()};
+    controller.openProject(package.url());
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy();
+    }));
+    controller.selectClip(QStringLiteral("v1"), QStringLiteral("video"));
+
+    controller.addTitle(QStringLiteral("Locked title"),
+                        QStringLiteral("Noto Sans"), 0.2, 0.1,
+                        QStringLiteral("#ffffffff"),
+                        QStringLiteral("#00000080"),
+                        QStringLiteral("center"));
+    EXPECT_FALSE(controller.sessionBusy());
+    EXPECT_EQ(controller.timelineRevision(), 0);
+    EXPECT_TRUE(controller.statusMessage().contains(
+        QStringLiteral("locked"), Qt::CaseInsensitive));
+
+    controller.addCaptionCue(200, 100, QStringLiteral("Locked caption"));
+    EXPECT_FALSE(controller.sessionBusy());
+    EXPECT_EQ(controller.timelineRevision(), 0);
+    EXPECT_TRUE(controller.statusMessage().contains(
+        QStringLiteral("locked"), Qt::CaseInsensitive));
+}
+
+TEST(EditorControllerDurableTest,
+     ReusesCaptionAtPlayheadDespiteUnrelatedLockedSelection) {
+    DurableControllerPackage package{true, false, true};
+    EditorController controller{std::make_unique<FakeEditEngine>()};
+    controller.openProject(package.url());
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy();
+    }));
+    controller.selectClip(QStringLiteral("v1"), QStringLiteral("video"));
+
+    controller.addCaptionCue(200, 100, QStringLiteral("Reused caption"));
+
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy() &&
+               controller.timelineRevision() == 1;
+    }));
+    const QVariantList captionClips =
+        controller.timelineTrackModel()
+            ->data(controller.timelineTrackModel()->index(3, 0),
+                   TimelineTrackModel::ClipsRole)
+            .toList();
+    ASSERT_EQ(captionClips.size(), 1);
+    EXPECT_EQ(captionClips.front()
+                  .toMap()
+                  .value(QStringLiteral("captionCues"))
+                  .toList()
+                  .size(),
+              2);
 }
 
 TEST(EditorControllerDurableTest,
