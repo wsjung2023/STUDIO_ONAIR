@@ -15,6 +15,24 @@ namespace creator::avatar {
 /// assumes a particular pixel format or access path beyond what VideoFrame
 /// already exposes.
 ///
+/// This shape models an **in-process, frame-consuming provider**: the caller
+/// supplies each frame and owns the timeline (the port only reads the frame's
+/// timestamp, never a clock). MediaPipe — an in-process C++ inference graph —
+/// fits this directly. An **out-of-process, self-capturing provider does
+/// NOT fit this pull contract**: OpenSeeFace, the engine ADR-0004 recommends
+/// starting with in Stage B, runs as a separate process that opens its own
+/// camera and streams tracking results asynchronously over UDP on its own
+/// timestamps — it has no app-supplied VideoFrame to receive here. Forcing an
+/// OpenSeeFace adapter through `process()` would mean ignoring the frame it is
+/// handed and fabricating a timestamp, which is dishonest. Such a provider
+/// instead needs a separate, self-driven tracking-source port — deliberately
+/// NOT defined here. Its shape depends on OpenSeeFace's real UDP wire
+/// protocol, which is Stage B work; guessing at a push/streaming port now
+/// without that protocol in front of us would repeat the speculative-design
+/// mistake R0-01 avoided when it deferred ICaptureSource's frame-delivery
+/// shape. See ADR-0004's Stage-B section for how this is expected to play
+/// out.
+///
 /// Implementations own engine/model resources (a MediaPipe graph, GPU/CPU
 /// inference buffers) and must never be copied or moved: copy/move are
 /// deleted, matching ICaptureSource/IRecorder/IProjectStore in this codebase.

@@ -21,6 +21,14 @@ struct TrackingResult final {
     core::TimestampNs timestamp{};
     ExpressionParameters raw{};
     /// Engine confidence in this result, normalized to [0, 1].
+    ///
+    /// Captured but not yet consumed in Stage A: `ExpressionNormalizer` only
+    /// reads `faceFound`, and `avatar.motion` telemetry has no confidence
+    /// slot. This field is reserved for Stage B, once a real provider exists
+    /// to supply a meaningful value — a likely use is gating normalization on
+    /// a low-confidence threshold (treated like `!faceFound`) and/or
+    /// recording it in telemetry. Until then, treat it as a placeholder, not
+    /// a live signal.
     float confidence{0.0F};
     /// Whether a face was found in the frame at all. When false, `raw` and
     /// `confidence` carry no meaningful signal — callers must not treat them
