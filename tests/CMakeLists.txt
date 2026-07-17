@@ -72,6 +72,8 @@ add_executable(cs_tests
     capture/DeviceCaptureStopCoordinatorTest.cpp
     avatar/ExpressionParametersTest.cpp
     avatar/TrackingPortContractTest.cpp
+    avatar/CalibrationProfileTest.cpp
+    avatar/ExpressionNormalizerTest.cpp
     recorder/RecordingTrackTest.cpp
     recorder/DiskSpaceMonitorTest.cpp
     recorder/DurableSegmentPublisherTest.cpp

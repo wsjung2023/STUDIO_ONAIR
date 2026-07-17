@@ -3,6 +3,10 @@ cs_add_qtfree_library(cs_avatar
         ExpressionParameters.h
         TrackingResult.h
         ITrackingProvider.h
+        CalibrationProfile.h
+        CalibrationProfile.cpp
+        ExpressionNormalizer.h
+        ExpressionNormalizer.cpp
     DEPENDS
         cs_core
         cs_media
