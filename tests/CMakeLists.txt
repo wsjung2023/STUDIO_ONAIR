@@ -155,6 +155,25 @@ gtest_discover_tests(cs_app_tests
     PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+add_executable(cs_r1_durable_edit_acceptance_tests
+    acceptance/R1DurableEditAcceptanceTest.cpp
+)
+target_link_libraries(cs_r1_durable_edit_acceptance_tests PRIVATE
+    cs_app
+    cs_fakes
+    Qt6::Quick
+    Qt6::Test
+    GTest::gtest
+)
+cs_apply_warnings(cs_r1_durable_edit_acceptance_tests)
+gtest_discover_tests(cs_r1_durable_edit_acceptance_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+)
+
 if(WIN32)
     add_test(
         NAME MltBootstrapPolicy
