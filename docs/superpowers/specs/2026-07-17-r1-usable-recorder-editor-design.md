@@ -322,8 +322,9 @@ not change a running export.
 Hardware encoders are selected only after a capability probe and a small encode
 test. A hardware initialization or early encode failure retries once with the
 audited software H.264 path when the preset permits fallback. Partial output is
-written under a package temporary path and atomically published only after the
-container is finalized and probed for expected video/audio streams and duration.
+written under an exclusive destination-local temporary name so final publication
+stays on one volume, and is atomically published only after the container is
+finalized and probed for expected video/audio streams and duration.
 
 Cancellation is cooperative and bounded. It stops the consumer, closes media
 resources, removes or quarantines the partial artifact, persists the cancelled
@@ -396,7 +397,7 @@ Windows acceptance is mandatory for the first commercial target. macOS native
 acceptance remains an honest separate gate where the current machine cannot
 provide Apple frameworks or devices.
 
-## Delivery order
+## Delivery order and canonical milestone mapping
 
 1. Timeline domain, migration 002, commands, durable undo/autosave.
 2. Media-bin and multi-track Editor view models with a fake engine.
@@ -407,9 +408,11 @@ provide Apple frameworks or devices.
 7. Revisioned H.264 export, presets, probing, fallback, progress, and cancellation.
 8. Long-form acceptance, OSS evidence bundle, performance and recovery closure.
 
-Each item is a checkpoint for tests and review, not a product completion boundary.
-Work continues through item 8 unless a real requirement, safety, licensing, or
-external hardware blocker requires user action.
+These are eight internal implementation checkpoints, not eight R1 milestones.
+Checkpoints 4 and 5 together are canonical R1-04, checkpoint 6 is R1-05,
+checkpoint 7 is R1-06, and checkpoint 8 is R1-07. There is no R1-08 stage.
+Work continues through checkpoint 8 unless a real requirement, safety,
+licensing, or external hardware blocker requires user action.
 
 ## R2-R4 continuity
 
