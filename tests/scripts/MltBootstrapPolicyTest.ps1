@@ -26,6 +26,7 @@ if (-not (Test-Path -LiteralPath $StagePath)) {
 $FfmpegBootstrap = Get-Content -LiteralPath $FfmpegBootstrapPath -Raw -Encoding utf8
 foreach ($Pattern in @(
     'ffmpeg\[avcodec,avdevice,avfilter,avformat,ffprobe,swresample,swscale,zlib\]',
+    '&\s+\$Vcpkg\s+install[^\r\n]*--recurse',
     '--enable-zlib',
     '-decoders',
     'png_decoder=enabled'

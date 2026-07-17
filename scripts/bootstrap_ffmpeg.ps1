@@ -75,7 +75,7 @@ if ($RunningOnWindows) {
 }
 if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
 
-& $Vcpkg install $PackageSpec "--x-install-root=$InstallRoot" --clean-after-build
+& $Vcpkg install $PackageSpec "--x-install-root=$InstallRoot" --clean-after-build --recurse
 if ($LASTEXITCODE -ne 0) { throw "FFmpeg source build failed" }
 
 $Prefix = Join-Path $InstallRoot $Triplet
