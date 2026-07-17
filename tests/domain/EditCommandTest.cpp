@@ -1,5 +1,7 @@
 #include "domain/EditHistory.h"
 #include "domain/SplitClipCommand.h"
+#include "domain/SetAudioEnvelopeCommand.h"
+#include "domain/SetVisualTransformCommand.h"
 #include "domain/TrimClipCommand.h"
 
 #include "core/AppError.h"
@@ -24,12 +26,16 @@ using creator::core::FrameRate;
 using creator::core::TimestampNs;
 using creator::domain::AssetAvailability;
 using creator::domain::AssetId;
+using creator::domain::AudioAssetMetadata;
+using creator::domain::AudioEnvelope;
 using creator::domain::Clip;
 using creator::domain::ClipId;
 using creator::domain::CommandId;
 using creator::domain::EditHistory;
 using creator::domain::MediaAsset;
 using creator::domain::MediaKind;
+using creator::domain::SetAudioEnvelopeCommand;
+using creator::domain::SetVisualTransformCommand;
 using creator::domain::SplitClipCommand;
 using creator::domain::TimeRange;
 using creator::domain::Timeline;
@@ -40,6 +46,7 @@ using creator::domain::TrackKind;
 using creator::domain::TrimClipCommand;
 using creator::domain::TrimEdge;
 using creator::domain::VideoAssetMetadata;
+using creator::domain::VisualTransform;
 
 TimestampNs at(std::int64_t nanoseconds) {
     return TimestampNs{DurationNs{nanoseconds}};
@@ -86,6 +93,30 @@ Timeline timeline() {
     if (created.hasValue()) {
         EXPECT_TRUE(value.insertClip(videoTrackId(), std::move(created).value()).hasValue());
     }
+    return value;
+}
+
+TrackId audioTrackId() {
+    return TrackId::create("a1").value();
+}
+
+Timeline audioTimeline() {
+    auto value = Timeline::create(TimelineId::create("audio-timeline").value(),
+                                  "Audio", FrameRate::create(60, 1).value()).value();
+    EXPECT_TRUE(value.addTrack(
+        Track::create(audioTrackId(), TrackKind::Audio,
+                      "Microphone", true, false).value()).hasValue());
+    const auto audio = MediaAsset::create(
+        AssetId::create("audio-asset").value(), MediaKind::Audio,
+        "audio/mic.mka", DurationNs{100}, std::nullopt,
+        AudioAssetMetadata{.sampleRate = 48'000, .channels = 1},
+        1000, "audio-hash", AssetAvailability::Available).value();
+    EXPECT_TRUE(value.insertClip(
+        audioTrackId(), Clip::createAsset(
+            clipId("audio"), audio,
+            TimeRange::create(at(0), DurationNs{100}).value(),
+            TimeRange::create(at(0), DurationNs{100}).value(), true,
+            std::nullopt, std::nullopt).value()).hasValue());
     return value;
 }
 
@@ -173,6 +204,84 @@ TEST(EditCommandTest, CommandPayloadEscapesControlCharactersAsJson) {
 
     EXPECT_EQ(record.payload.find('\n'), std::string::npos);
     EXPECT_NE(record.payload.find("clip\\nidentifier"), std::string::npos);
+}
+
+TEST(EditCommandTest, VisualTransformSetResetAndUndoAreExact) {
+    auto value = timeline();
+    const auto before = value;
+    const auto transform = VisualTransform::create(
+        0.66, 0.56, 0.30, 0.40, 1.0, 1.0, 12.5,
+        0.1, 0.0, 0.0, 0.1, 0.75, 4).value();
+    SetVisualTransformCommand set{commandId("set-visual"), videoTrackId(),
+                                  clipId("original"), transform};
+
+    ASSERT_TRUE(set.execute(value).hasValue());
+    ASSERT_TRUE(onlyClip(value).visualTransform().has_value());
+    EXPECT_EQ(*onlyClip(value).visualTransform(), transform);
+    EXPECT_EQ(set.record().type, "SET_VISUAL_TRANSFORM");
+    EXPECT_NE(set.record().payload.find("\"version\":1"),
+              std::string::npos);
+    EXPECT_NE(set.record().payload.find("\"rotationDegrees\":12.5"),
+              std::string::npos);
+    const auto transformed = value;
+
+    SetVisualTransformCommand reset{commandId("reset-visual"), videoTrackId(),
+                                    clipId("original"), std::nullopt};
+    ASSERT_TRUE(reset.execute(value).hasValue());
+    EXPECT_FALSE(onlyClip(value).visualTransform().has_value());
+    ASSERT_TRUE(reset.undo(value).hasValue());
+    EXPECT_EQ(value, transformed);
+    ASSERT_TRUE(set.undo(value).hasValue());
+    EXPECT_EQ(value, before);
+}
+
+TEST(EditCommandTest, AudioEnvelopeSetReplaceAndUndoAreExact) {
+    auto value = audioTimeline();
+    const auto before = value;
+    const auto envelope = AudioEnvelope::create(
+        -6.0, DurationNs{10}, DurationNs{20}, DurationNs{100}).value();
+    SetAudioEnvelopeCommand set{commandId("set-audio"), audioTrackId(),
+                                clipId("audio"), envelope};
+
+    ASSERT_TRUE(set.execute(value).hasValue());
+    ASSERT_TRUE(value.clip(audioTrackId(), clipId("audio"))
+                    ->audioEnvelope().has_value());
+    EXPECT_EQ(*value.clip(audioTrackId(), clipId("audio"))->audioEnvelope(),
+              envelope);
+    EXPECT_EQ(set.record().type, "SET_AUDIO_ENVELOPE");
+    EXPECT_NE(set.record().payload.find("\"version\":1"),
+              std::string::npos);
+    const auto firstValue = value;
+    const auto replacement = AudioEnvelope::create(
+        3.0, DurationNs{5}, DurationNs{5}, DurationNs{100}).value();
+    SetAudioEnvelopeCommand replace{commandId("replace-audio"), audioTrackId(),
+                                    clipId("audio"), replacement};
+    ASSERT_TRUE(replace.execute(value).hasValue());
+    EXPECT_EQ(*value.clip(audioTrackId(), clipId("audio"))->audioEnvelope(),
+              replacement);
+    ASSERT_TRUE(replace.undo(value).hasValue());
+    EXPECT_EQ(value, firstValue);
+    ASSERT_TRUE(set.undo(value).hasValue());
+    EXPECT_EQ(value, before);
+}
+
+TEST(EditCommandTest, EffectCommandsRejectWrongKindsAndLockedTracksAtomically) {
+    auto video = timeline();
+    const auto videoBefore = video;
+    const auto envelope = AudioEnvelope::create(
+        -3.0, DurationNs{0}, DurationNs{0}, DurationNs{100}).value();
+    SetAudioEnvelopeCommand wrong{commandId("wrong"), videoTrackId(),
+                                  clipId("original"), envelope};
+    EXPECT_FALSE(wrong.execute(video).hasValue());
+    EXPECT_EQ(video, videoBefore);
+
+    auto audio = audioTimeline();
+    ASSERT_TRUE(audio.setTrackLocked(audioTrackId(), true).hasValue());
+    const auto audioBefore = audio;
+    SetAudioEnvelopeCommand locked{commandId("locked"), audioTrackId(),
+                                   clipId("audio"), envelope};
+    EXPECT_FALSE(locked.execute(audio).hasValue());
+    EXPECT_EQ(audio, audioBefore);
 }
 
 TEST(EditHistoryTest, FailedCommandDoesNotEnterHistory) {

@@ -6,6 +6,8 @@ cs_add_qtfree_library(cs_domain
         EditCommandJson.cpp
         DeleteRangeCommand.h
         DeleteRangeCommand.cpp
+        GeneratedClipCommands.h
+        GeneratedClipCommands.cpp
         EditHistory.h
         EditHistory.cpp
         MediaAsset.h
@@ -22,6 +24,10 @@ cs_add_qtfree_library(cs_domain
         TimelineRevision.h
         SplitClipCommand.h
         SplitClipCommand.cpp
+        SetVisualTransformCommand.h
+        SetVisualTransformCommand.cpp
+        SetAudioEnvelopeCommand.h
+        SetAudioEnvelopeCommand.cpp
         TrimClipCommand.h
         TrimClipCommand.cpp
     DEPENDS
