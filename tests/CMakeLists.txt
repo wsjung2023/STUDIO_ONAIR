@@ -120,6 +120,7 @@ add_executable(cs_app_tests
     app/EditorModelsTest.cpp
     app/EditorControllerTest.cpp
     app/EditorSessionWorkerTest.cpp
+    app/GeneratedOverlayCacheTest.cpp
     app/StudioControllerTest.cpp
     app/LiveRecordingControllerTest.cpp
     app/ProjectControllerTest.cpp
@@ -151,6 +152,12 @@ target_compile_definitions(cs_app_tests PRIVATE
     CS_QML_SOURCE_DIR="${PROJECT_SOURCE_DIR}/qml"
 )
 
+# PRE_TEST discovery launches the binary before per-test ENVIRONMENT properties
+# exist. Wrap both discovery and execution so Windows can resolve the Qt DLLs.
+set_property(TARGET cs_app_tests PROPERTY TEST_LAUNCHER
+    "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;--"
+)
+
 gtest_discover_tests(cs_app_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES
@@ -170,6 +177,9 @@ target_link_libraries(cs_r1_durable_edit_acceptance_tests PRIVATE
     GTest::gtest
 )
 cs_apply_warnings(cs_r1_durable_edit_acceptance_tests)
+set_property(TARGET cs_r1_durable_edit_acceptance_tests PROPERTY TEST_LAUNCHER
+    "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;--"
+)
 gtest_discover_tests(cs_r1_durable_edit_acceptance_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES
@@ -241,6 +251,9 @@ if(CS_ENABLE_MLT)
         CS_TEST_MLT_ROOT="${CS_MLT_ROOT}"
     )
     cs_apply_warnings(cs_mlt_tests)
+    set_property(TARGET cs_mlt_tests PROPERTY TEST_LAUNCHER
+        "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:${CS_MLT_ROOT}/bin;--"
+    )
     gtest_discover_tests(cs_mlt_tests
         DISCOVERY_MODE PRE_TEST
         PROPERTIES ENVIRONMENT_MODIFICATION
@@ -269,6 +282,9 @@ if(CS_ENABLE_MLT)
     endif()
     add_dependencies(cs_r1_mlt_acceptance_tests creator_studio)
     cs_apply_warnings(cs_r1_mlt_acceptance_tests)
+    set_property(TARGET cs_r1_mlt_acceptance_tests PROPERTY TEST_LAUNCHER
+        "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;--"
+    )
     gtest_discover_tests(cs_r1_mlt_acceptance_tests
         DISCOVERY_MODE PRE_TEST
         PROPERTIES

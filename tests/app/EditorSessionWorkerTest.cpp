@@ -291,6 +291,7 @@ TEST(EditorSessionWorkerTest, OpensUnicodePackageAndPersistsDefaultTimeline) {
 
 TEST(EditorSessionWorkerTest, RoutesEveryEffectAndGeneratedEditDurably) {
     TempPackage package;
+    package.setCanvas(320, 180);
     package.seedOneClipTimeline();
     EditorSessionWorker worker;
     EditorSessionResultPtr openedResult;
@@ -368,6 +369,10 @@ TEST(EditorSessionWorkerTest, RoutesEveryEffectAndGeneratedEditDurably) {
         TrackId::create("title-1").value());
     ASSERT_NE(titleTrack, nullptr);
     ASSERT_EQ(titleTrack->clips().size(), 1U);
+    ASSERT_EQ(editedResult->value().state.snapshot.generatedOverlays.size(), 1U);
+    EXPECT_TRUE(fs::is_regular_file(
+        package.path() /
+        editedResult->value().state.snapshot.generatedOverlays[0].rasterPath()));
     const auto titleClip = titleTrack->clips()[0].id();
     EXPECT_NE(titleClip.value(), "title-1");
 
@@ -382,6 +387,7 @@ TEST(EditorSessionWorkerTest, RoutesEveryEffectAndGeneratedEditDurably) {
                           .clipId = titleClip,
                           .titlePayload = editedTitle},
         true);
+    ASSERT_EQ(editedResult->value().state.snapshot.generatedOverlays.size(), 1U);
 
     run(EditorEditRequest{
             .kind = EditorEditKind::AddCaptionCue,
@@ -399,6 +405,7 @@ TEST(EditorSessionWorkerTest, RoutesEveryEffectAndGeneratedEditDurably) {
     ASSERT_EQ(captionTrack->clips().size(), 1U);
     const auto captionClip = captionTrack->clips()[0].id();
     ASSERT_EQ(captionTrack->clips()[0].captionCues().size(), 1U);
+    ASSERT_EQ(editedResult->value().state.snapshot.generatedOverlays.size(), 2U);
     const auto cueId = captionTrack->clips()[0].captionCues()[0].id();
     EXPECT_FALSE(cueId.value().empty());
 
@@ -418,10 +425,31 @@ TEST(EditorSessionWorkerTest, RoutesEveryEffectAndGeneratedEditDurably) {
                           .clipId = captionClip,
                           .cueId = cueId},
         true);
+    EXPECT_EQ(editedResult->value().state.snapshot.generatedOverlays.size(), 1U);
+    const auto missingRaster =
+        package.path() /
+        editedResult->value().state.snapshot.generatedOverlays[0].rasterPath();
+    ASSERT_TRUE(fs::remove(missingRaster));
+    EditorSessionWorker retryWorker;
+    EditorSessionResultPtr retryResult;
+    QObject::connect(
+        &retryWorker, &EditorSessionWorker::opened, &retryWorker,
+        [&](quint64, EditorSessionResultPtr value) {
+            retryResult = std::move(value);
+        },
+        Qt::DirectConnection);
+    retryWorker.openProject(22, package.path());
+    ASSERT_NE(retryResult, nullptr);
+    ASSERT_TRUE(retryResult->hasValue()) << retryResult->error().message();
+    ASSERT_EQ(retryResult->value().state.snapshot.generatedOverlays.size(), 1U);
+    EXPECT_TRUE(fs::is_regular_file(missingRaster));
+    EXPECT_FALSE(retryResult->value().derivedWorkDiagnostic.has_value());
+
     run(EditorEditRequest{.kind = EditorEditKind::RemoveGeneratedClip,
                           .trackId = TrackId::create("title-1").value(),
                           .clipId = titleClip},
         true);
+    EXPECT_TRUE(editedResult->value().state.snapshot.generatedOverlays.empty());
 
     EditorSessionWorker reopened;
     EditorSessionResultPtr reopenedResult;
@@ -445,8 +473,7 @@ TEST(EditorSessionWorkerTest, PublishesCommittedEditWithDerivedWorkDiagnostic) {
     package.seedOneClipTimeline();
     creator::app::GeneratedOverlayFactory derivedFailure =
         [](const creator::edit_engine::TimelineSnapshot&)
-        -> creator::core::Result<std::vector<
-            creator::edit_engine::GeneratedOverlayDescriptor>> {
+        -> creator::core::Result<creator::app::GeneratedOverlayCacheResult> {
         return creator::core::AppError{creator::core::ErrorCode::IoFailure,
                                        "injected derived work failure"};
     };

@@ -1,5 +1,7 @@
 #include "app/EditorSessionWorker.h"
 
+#include "app/GeneratedOverlayCache.h"
+
 #include "core/Uuid.h"
 #include "domain/DeleteRangeCommand.h"
 #include "domain/GeneratedClipCommands.h"
@@ -279,9 +281,12 @@ EditorSessionWorker::EditorSessionWorker(
       generatedOverlayFactory_(std::move(generatedOverlayFactory)) {
     if (!generatedOverlayFactory_) {
         generatedOverlayFactory_ =
-            [](const edit_engine::TimelineSnapshot&)
-            -> core::Result<std::vector<edit_engine::GeneratedOverlayDescriptor>> {
-            return std::vector<edit_engine::GeneratedOverlayDescriptor>{};
+            [](const edit_engine::TimelineSnapshot& snapshot)
+            -> core::Result<GeneratedOverlayCacheResult> {
+            GeneratedOverlayCache cache;
+            return cache.synchronize(
+                snapshot.mediaRoot, snapshot.timeline, snapshot.canvasWidth,
+                snapshot.canvasHeight, snapshot.timeline.frameRate());
         };
     }
     qRegisterMetaType<EditorSessionResultPtr>();
@@ -480,7 +485,13 @@ core::Result<EditorSessionState> EditorSessionWorker::currentState(
     }
     auto generated = generatedOverlayFactory_(snapshot);
     if (generated.hasValue()) {
-        snapshot.generatedOverlays = std::move(generated).value();
+        auto generatedResult = std::move(generated).value();
+        snapshot.generatedOverlays = std::move(generatedResult.descriptors);
+        if (!generatedResult.diagnostics.empty() &&
+            derivedWorkDiagnostic != nullptr) {
+            *derivedWorkDiagnostic =
+                std::move(generatedResult.diagnostics.front());
+        }
         if (auto validated = edit_engine::validateTimelineSnapshot(snapshot);
             !validated.hasValue()) {
             if (derivedWorkDiagnostic != nullptr) {

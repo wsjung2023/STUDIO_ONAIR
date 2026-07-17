@@ -39,6 +39,8 @@ add_library(cs_app STATIC
     TimelineEditService.h
     TimelineEditService.cpp
     EditorSessionTypes.h
+    GeneratedOverlayCache.h
+    GeneratedOverlayCache.cpp
     EditorSessionWorker.h
     EditorSessionWorker.cpp
     MediaBinModel.h

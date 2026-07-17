@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/GeneratedOverlayCache.h"
 #include "app/EditorSessionTypes.h"
 #include "app/TimelineEditService.h"
 #include "project_store/IProjectPackageStore.h"
@@ -20,7 +21,7 @@ using TimelineStoreFactory = std::function<core::Result<
     std::unique_ptr<project_store::ITimelineStore>>(
     const std::filesystem::path&, const domain::ProjectId&)>;
 using GeneratedOverlayFactory = std::function<core::Result<
-    std::vector<edit_engine::GeneratedOverlayDescriptor>>(
+    GeneratedOverlayCacheResult>(
     const edit_engine::TimelineSnapshot&)>;
 
 class EditorSessionWorker final : public QObject {
