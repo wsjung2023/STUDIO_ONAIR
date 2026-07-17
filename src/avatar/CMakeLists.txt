@@ -11,6 +11,8 @@ cs_add_qtfree_library(cs_avatar
         AvatarMotionSample.h
         AvatarMotionSerializer.h
         AvatarMotionSerializer.cpp
+        AvatarMotionNdjsonSink.h
+        AvatarMotionNdjsonSink.cpp
     DEPENDS
         cs_core
         cs_media
