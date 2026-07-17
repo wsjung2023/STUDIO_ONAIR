@@ -1,4 +1,6 @@
 #include "app/MediaBinModel.h"
+#include "app/StudioSceneModel.h"
+#include "app/StudioSourceModel.h"
 #include "app/TimelineTrackModel.h"
 
 #include "core/Timebase.h"
@@ -20,6 +22,8 @@
 namespace {
 
 using creator::app::MediaBinModel;
+using creator::app::StudioSceneModel;
+using creator::app::StudioSourceModel;
 using creator::app::TimelineTrackModel;
 using creator::core::DurationNs;
 using creator::core::FrameRate;
@@ -264,6 +268,65 @@ TEST(TimelineTrackModelTest, ReplacesTimelineWithExactlyOneReset) {
     model.setTimeline(timeline);
     EXPECT_EQ(resetSpy.count(), 1);
     EXPECT_EQ(model.rowCount(), 0);
+}
+
+TEST(StudioSceneModelTest, PublishesStableSceneRolesAndSelection) {
+    auto scenes = creator::domain::defaultStudioScenes().value();
+    StudioSceneModel model;
+    QSignalSpy resetSpy(&model, &QAbstractItemModel::modelReset);
+
+    model.setScenes(scenes, scenes[1].id(), scenes[2].id());
+
+    ASSERT_EQ(model.rowCount(), 3);
+    EXPECT_EQ(resetSpy.count(), 1);
+    EXPECT_EQ(model.roleNames().value(StudioSceneModel::SceneIdRole),
+              "sceneId");
+    EXPECT_EQ(model.roleNames().value(StudioSceneModel::SourceCountRole),
+              "sourceCount");
+    const auto screen = model.index(1, 0);
+    EXPECT_EQ(model.data(screen, StudioSceneModel::NameRole).toString(),
+              QStringLiteral("Screen"));
+    EXPECT_TRUE(model.data(screen, StudioSceneModel::ActiveRole).toBool());
+    EXPECT_FALSE(model.data(screen, StudioSceneModel::SelectedRole).toBool());
+    EXPECT_EQ(model.data(screen, StudioSceneModel::SourceCountRole).toInt(), 4);
+    EXPECT_TRUE(model.data(model.index(2, 0),
+                           StudioSceneModel::SelectedRole)
+                    .toBool());
+    resetSpy.clear();
+    model.setScenes(scenes, scenes[1].id(), scenes[2].id());
+    EXPECT_EQ(resetSpy.count(), 0);
+}
+
+TEST(StudioSourceModelTest, PublishesExactSourceTransformAndRoleNames) {
+    const auto scene = creator::domain::defaultStudioScenes().value().front();
+    StudioSourceModel model;
+    QSignalSpy resetSpy(&model, &QAbstractItemModel::modelReset);
+
+    model.setScene(scene, scene.sources()[1].id());
+
+    ASSERT_EQ(model.rowCount(), 4);
+    EXPECT_EQ(resetSpy.count(), 1);
+    EXPECT_EQ(model.roleNames().value(StudioSourceModel::SourceIdRole),
+              "sourceId");
+    EXPECT_EQ(model.roleNames().value(StudioSourceModel::TransformRole),
+              "transform");
+    const auto camera = model.index(1, 0);
+    EXPECT_EQ(model.data(camera, StudioSourceModel::RoleNameRole).toString(),
+              QStringLiteral("camera"));
+    EXPECT_TRUE(model.data(camera, StudioSourceModel::EnabledRole).toBool());
+    EXPECT_TRUE(model.data(camera, StudioSourceModel::SelectedRole).toBool());
+    const auto transform =
+        model.data(camera, StudioSourceModel::TransformRole).toMap();
+    EXPECT_DOUBLE_EQ(transform.value(QStringLiteral("x")).toDouble(), 0.70);
+    EXPECT_DOUBLE_EQ(transform.value(QStringLiteral("width")).toDouble(),
+                     0.25);
+    EXPECT_EQ(transform.value(QStringLiteral("zOrder")).toInt(), 10);
+    EXPECT_FALSE(model.data(model.index(2, 0),
+                            StudioSourceModel::HasTransformRole)
+                     .toBool());
+    resetSpy.clear();
+    model.setScene(scene, scene.sources()[1].id());
+    EXPECT_EQ(resetSpy.count(), 0);
 }
 
 }  // namespace

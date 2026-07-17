@@ -125,6 +125,7 @@ add_executable(cs_app_tests
     app/RecordingImportPlannerTest.cpp
     app/RecordingTimelineReconcilerTest.cpp
     app/EditorModelsTest.cpp
+    app/StudioWorkflowControllerTest.cpp
     app/EditorControllerTest.cpp
     app/EditorSessionWorkerTest.cpp
     app/GeneratedOverlayCacheTest.cpp

@@ -49,6 +49,15 @@ add_library(cs_app STATIC
     EditorSessionWorker.cpp
     MediaBinModel.h
     MediaBinModel.cpp
+    StudioSceneModel.h
+    StudioSceneModel.cpp
+    StudioSourceModel.h
+    StudioSourceModel.cpp
+    StudioWorkflowTypes.h
+    StudioWorkflowWorker.h
+    StudioWorkflowWorker.cpp
+    StudioWorkflowController.h
+    StudioWorkflowController.cpp
     TimelineTrackModel.h
     TimelineTrackModel.cpp
     EditorEngineWorker.h
