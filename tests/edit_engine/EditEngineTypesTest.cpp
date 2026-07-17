@@ -22,7 +22,16 @@ using creator::core::TimestampNs;
 using creator::domain::Timeline;
 using creator::domain::TimelineId;
 using creator::domain::TimelineRevision;
+using creator::domain::Clip;
+using creator::domain::ClipId;
+using creator::domain::RgbaColor;
+using creator::domain::TextAlignment;
+using creator::domain::TimeRange;
+using creator::domain::TitlePayload;
+using creator::domain::Track;
 using creator::domain::TrackId;
+using creator::domain::TrackKind;
+using creator::edit_engine::GeneratedOverlayDescriptor;
 using creator::edit_engine::PreviewFrame;
 using creator::edit_engine::RenderJobState;
 using creator::edit_engine::RenderPreset;
@@ -42,6 +51,33 @@ Timeline timeline(std::string name = "Main") {
 
 TimelineSnapshot snapshot(std::int64_t revision = 1) {
     return TimelineSnapshot{timeline(), TimelineRevision::create(revision).value()};
+}
+
+TimelineSnapshot generatedSnapshot() {
+    auto value = timeline();
+    const auto trackId = TrackId::create("title-1").value();
+    EXPECT_TRUE(value.addTrack(
+                         Track::create(trackId, TrackKind::Title, "Titles", true,
+                                       false)
+                             .value())
+                    .hasValue());
+    const auto range = TimeRange::create(TimestampNs{DurationNs{100}},
+                                         DurationNs{500})
+                           .value();
+    const auto payload = TitlePayload::create(
+        "Hello", "Creator Sans", 0.5, 0.5,
+        RgbaColor::parse("#ffffffff").value(),
+        RgbaColor::parse("#00000000").value(), TextAlignment::Center)
+                             .value();
+    EXPECT_TRUE(value.insertClip(
+                         trackId,
+                         Clip::createTitle(ClipId::create("title-clip").value(),
+                                           range, true, payload, std::nullopt)
+                             .value())
+                    .hasValue());
+    return TimelineSnapshot{std::move(value),
+                            TimelineRevision::create(1).value(), {}, {}, 1080,
+                            1920};
 }
 
 VideoFrame frameAt(std::int64_t nanoseconds) {
@@ -121,6 +157,52 @@ TEST(EditEngineTypesTest, BoundsAffectedTrackWork) {
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+}
+
+TEST(EditEngineTypesTest, ValidatesCanvasAndGeneratedOverlayOwnership) {
+    auto valid = generatedSnapshot();
+    valid.generatedOverlays.push_back(
+        GeneratedOverlayDescriptor::create(
+            ClipId::create("title-clip").value(), std::nullopt,
+            std::filesystem::path{"cache/generated/title-clip.png"},
+            TimeRange::create(TimestampNs{DurationNs{150}}, DurationNs{100})
+                .value(),
+            "Creator Sans")
+            .value());
+
+    EXPECT_TRUE(creator::edit_engine::validateTimelineSnapshot(valid).hasValue());
+
+    auto escaped = GeneratedOverlayDescriptor::create(
+        ClipId::create("title-clip").value(), std::nullopt,
+        std::filesystem::path{"cache/generated/../outside.png"},
+        TimeRange::create(TimestampNs{DurationNs{150}}, DurationNs{100}).value(),
+        "Creator Sans");
+    EXPECT_FALSE(escaped.hasValue());
+    EXPECT_FALSE(GeneratedOverlayDescriptor::create(
+                     ClipId::create("title-clip").value(), std::nullopt,
+                     std::filesystem::path{"cache/generated"},
+                     TimeRange::create(TimestampNs{DurationNs{150}},
+                                       DurationNs{100})
+                         .value(),
+                     "Creator Sans")
+                     .hasValue());
+
+    auto outside = generatedSnapshot();
+    outside.generatedOverlays.push_back(
+        GeneratedOverlayDescriptor::create(
+            ClipId::create("title-clip").value(), std::nullopt,
+            std::filesystem::path{"cache/generated/title-clip.png"},
+            TimeRange::create(TimestampNs{DurationNs{550}}, DurationNs{100})
+                .value(),
+            "Creator Sans")
+            .value());
+    EXPECT_FALSE(
+        creator::edit_engine::validateTimelineSnapshot(outside).hasValue());
+
+    auto invalidCanvas = generatedSnapshot();
+    invalidCanvas.canvasWidth = 15;
+    EXPECT_FALSE(creator::edit_engine::validateTimelineSnapshot(invalidCanvas)
+                     .hasValue());
 }
 
 TEST(EditEngineTypesTest, CreatesValidatedPreviewFrame) {

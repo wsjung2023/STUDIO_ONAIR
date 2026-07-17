@@ -153,7 +153,10 @@ target_compile_definitions(cs_app_tests PRIVATE
 
 gtest_discover_tests(cs_app_tests
     DISCOVERY_MODE PRE_TEST
-    PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
 )
 
 add_executable(cs_r1_durable_edit_acceptance_tests

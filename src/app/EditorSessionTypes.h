@@ -10,6 +10,7 @@
 #include <optional>
 #include <memory>
 #include <cstddef>
+#include <string>
 #include <vector>
 
 namespace creator::app {
@@ -19,9 +20,26 @@ enum class EditorEditKind {
     TrimLeading,
     TrimTrailing,
     DeleteRange,
+    SetVisualTransform,
+    SetAudioEnvelope,
+    AddTitle,
+    EditTitle,
+    RemoveGeneratedClip,
+    AddCaptionCue,
+    EditCaptionCue,
+    RemoveCaptionCue,
     Undo,
     Redo,
     Save,
+};
+
+struct CaptionCueDraft final {
+    core::DurationNs startOffset{};
+    core::DurationNs duration{};
+    std::string text;
+
+    friend bool operator==(const CaptionCueDraft&,
+                           const CaptionCueDraft&) = default;
 };
 
 struct EditorEditRequest final {
@@ -31,6 +49,11 @@ struct EditorEditRequest final {
     core::TimestampNs position{};
     std::optional<domain::TimeRange> range{};
     bool ripple{false};
+    std::optional<domain::VisualTransform> visualTransform{};
+    std::optional<domain::AudioEnvelope> audioEnvelope{};
+    std::optional<domain::TitlePayload> titlePayload{};
+    std::optional<domain::CueId> cueId{};
+    std::optional<CaptionCueDraft> captionCue{};
 };
 
 struct EditorSessionState final {
@@ -45,6 +68,7 @@ struct EditorSessionState final {
 struct EditorSessionUpdate final {
     EditorSessionState state;
     std::optional<edit_engine::TimelineChangeSet> change{};
+    std::optional<core::AppError> derivedWorkDiagnostic{};
 };
 
 using EditorSessionResult = core::Result<EditorSessionUpdate>;

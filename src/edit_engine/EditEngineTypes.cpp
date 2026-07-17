@@ -23,7 +23,94 @@ bool containsParentTraversal(const std::filesystem::path& path) {
     });
 }
 
+bool isGeneratedCachePath(const std::filesystem::path& path) {
+    if (path.empty() || path.is_absolute() || path.has_root_name() ||
+        path.has_root_directory() || path.filename().empty() ||
+        containsParentTraversal(path) || path.lexically_normal() != path) {
+        return false;
+    }
+    auto component = path.begin();
+    if (component == path.end() || *component != "cache") return false;
+    ++component;
+    if (component == path.end() || *component != "generated") return false;
+    ++component;
+    return component != path.end();
+}
+
+bool contains(const domain::TimeRange& outer,
+              const domain::TimeRange& inner) noexcept {
+    return inner.start() >= outer.start() && inner.end() <= outer.end();
+}
+
 }  // namespace
+
+Result<GeneratedOverlayDescriptor> GeneratedOverlayDescriptor::create(
+    domain::ClipId ownerClipId, std::optional<domain::CueId> cueId,
+    std::filesystem::path rasterPath, domain::TimeRange timelineRange,
+    std::string resolvedFontFamily) {
+    if (!isGeneratedCachePath(rasterPath)) {
+        return invalid(
+            "generated overlay path must be normalized below cache/generated");
+    }
+    if (resolvedFontFamily.empty() || resolvedFontFamily.size() > 128) {
+        return invalid("generated overlay font family must be bounded");
+    }
+    return GeneratedOverlayDescriptor{
+        std::move(ownerClipId), std::move(cueId), std::move(rasterPath),
+        timelineRange, std::move(resolvedFontFamily)};
+}
+
+Result<void> validateTimelineSnapshot(const TimelineSnapshot& snapshot) {
+    constexpr std::int32_t kMinimumCanvasDimension = 16;
+    constexpr std::int32_t kMaximumCanvasDimension = 16'384;
+    if (snapshot.canvasWidth < kMinimumCanvasDimension ||
+        snapshot.canvasWidth > kMaximumCanvasDimension ||
+        snapshot.canvasHeight < kMinimumCanvasDimension ||
+        snapshot.canvasHeight > kMaximumCanvasDimension) {
+        return invalid("timeline snapshot canvas dimensions are invalid");
+    }
+    for (const auto& descriptor : snapshot.generatedOverlays) {
+        const domain::Clip* owner = nullptr;
+        for (const auto& track : snapshot.timeline.tracks()) {
+            for (const auto& clip : track.clips()) {
+                if (clip.id() == descriptor.ownerClipId()) {
+                    owner = &clip;
+                    break;
+                }
+            }
+            if (owner != nullptr) break;
+        }
+        if (owner == nullptr || owner->kind() == domain::ClipKind::Asset ||
+            !contains(owner->timelineRange(), descriptor.timelineRange())) {
+            return invalid(
+                "generated overlay must stay inside its generated owner clip");
+        }
+        if (owner->kind() == domain::ClipKind::Title) {
+            if (descriptor.cueId().has_value()) {
+                return invalid("title overlay must not identify a caption cue");
+            }
+            continue;
+        }
+        if (!descriptor.cueId().has_value()) {
+            return invalid("caption overlay must identify its caption cue");
+        }
+        const auto cue = std::find_if(
+            owner->captionCues().begin(), owner->captionCues().end(),
+            [&](const domain::CaptionCue& value) {
+                return value.id() == *descriptor.cueId();
+            });
+        if (cue == owner->captionCues().end()) {
+            return invalid("caption overlay identifies an unknown cue");
+        }
+        const auto cueRange = domain::TimeRange::create(
+            owner->timelineRange().start() + cue->startOffset(), cue->duration());
+        if (!cueRange.hasValue() ||
+            !contains(cueRange.value(), descriptor.timelineRange())) {
+            return invalid("caption overlay must stay inside its caption cue");
+        }
+    }
+    return core::ok();
+}
 
 Result<TimelineChangeSet> TimelineChangeSet::create(
     domain::TimelineRevision baseRevision, TimelineSnapshot target,
@@ -37,6 +124,10 @@ Result<TimelineChangeSet> TimelineChangeSet::create(
     }
     if (!requiresFullRebuild && affectedTracks.empty()) {
         return invalid("incremental timeline change needs an affected track");
+    }
+    if (auto validated = validateTimelineSnapshot(target);
+        !validated.hasValue()) {
+        return validated.error();
     }
     std::vector<std::string_view> identities;
     identities.reserve(affectedTracks.size());
@@ -86,6 +177,10 @@ Result<RenderRequest> RenderRequest::create(
     if (destination.empty() || destination.filename().empty() ||
         containsParentTraversal(destination)) {
         return invalid("render destination is empty or contains traversal");
+    }
+    if (auto validated = validateTimelineSnapshot(snapshot);
+        !validated.hasValue()) {
+        return validated.error();
     }
     return RenderRequest{std::move(snapshot), std::move(destination), preset};
 }

@@ -2,6 +2,7 @@
 
 #include "domain/MediaAsset.h"
 #include "domain/Timeline.h"
+#include "project_store/JsonProjectStore.h"
 #include "project_store/ProjectPackageStore.h"
 #include "project_store/SqliteTimelineStore.h"
 
@@ -32,6 +33,8 @@ using creator::core::FrameRate;
 using creator::core::TimestampNs;
 using creator::domain::AssetAvailability;
 using creator::domain::AssetId;
+using creator::domain::AudioAssetMetadata;
+using creator::domain::AudioEnvelope;
 using creator::domain::Clip;
 using creator::domain::ClipId;
 using creator::domain::MediaAsset;
@@ -42,8 +45,13 @@ using creator::domain::TimelineId;
 using creator::domain::Track;
 using creator::domain::TrackId;
 using creator::domain::TrackKind;
+using creator::domain::RgbaColor;
+using creator::domain::TextAlignment;
+using creator::domain::TitlePayload;
+using creator::domain::VisualTransform;
 using creator::domain::VideoAssetMetadata;
 using creator::project_store::ProjectPackageStore;
+using creator::project_store::JsonProjectStore;
 using creator::project_store::SqliteTimelineStore;
 
 MediaAsset videoAsset();
@@ -135,7 +143,8 @@ MediaAsset videoAsset() {
                VideoAssetMetadata{.width = 1920,
                                   .height = 1080,
                                   .frameRate = FrameRate::create(60, 1).value()},
-               std::nullopt, 100, "fingerprint", AssetAvailability::Available)
+               AudioAssetMetadata{.sampleRate = 48'000, .channels = 2}, 100,
+               "fingerprint", AssetAvailability::Available)
         .value();
 }
 
@@ -184,6 +193,16 @@ public:
 
     [[nodiscard]] const fs::path& path() const noexcept { return package_; }
 
+    void setCanvas(std::int32_t width, std::int32_t height) {
+        ASSERT_TRUE(manifest_.has_value());
+        manifest_->canvas.width = width;
+        manifest_->canvas.height = height;
+        JsonProjectStore store;
+        auto saved = store.save(package_, *manifest_);
+        ASSERT_TRUE(saved.hasValue())
+            << (saved.hasValue() ? "" : saved.error().message());
+    }
+
     void seedOneClipTimeline() const {
         auto storeResult = SqliteTimelineStore::open(
             package_ / manifest_->database, manifest_->projectId);
@@ -202,6 +221,7 @@ private:
 
 TEST(EditorSessionWorkerTest, OpensUnicodePackageAndPersistsDefaultTimeline) {
     TempPackage package;
+    package.setCanvas(1080, 1920);
     QThread workerThread;
     auto* worker = new EditorSessionWorker;
     worker->moveToThread(&workerThread);
@@ -245,6 +265,8 @@ TEST(EditorSessionWorkerTest, OpensUnicodePackageAndPersistsDefaultTimeline) {
 
     const auto& state = captured->value().state;
     EXPECT_EQ(state.snapshot.mediaRoot, package.path());
+    EXPECT_EQ(state.snapshot.canvasWidth, 1080);
+    EXPECT_EQ(state.snapshot.canvasHeight, 1920);
     EXPECT_EQ(state.snapshot.timeline.name(), "Main");
     EXPECT_EQ(state.snapshot.timeline.frameRate().numerator(), 60);
     EXPECT_EQ(state.snapshot.timeline.frameRate().denominator(), 1);
@@ -265,6 +287,211 @@ TEST(EditorSessionWorkerTest, OpensUnicodePackageAndPersistsDefaultTimeline) {
     ProjectPackageStore store;
     auto reopened = store.open(package.path());
     ASSERT_TRUE(reopened.hasValue()) << reopened.error().message();
+}
+
+TEST(EditorSessionWorkerTest, RoutesEveryEffectAndGeneratedEditDurably) {
+    TempPackage package;
+    package.seedOneClipTimeline();
+    EditorSessionWorker worker;
+    EditorSessionResultPtr openedResult;
+    EditorSessionResultPtr editedResult;
+    QObject::connect(
+        &worker, &EditorSessionWorker::opened, &worker,
+        [&](quint64, EditorSessionResultPtr value) {
+            openedResult = std::move(value);
+        },
+        Qt::DirectConnection);
+    QObject::connect(
+        &worker, &EditorSessionWorker::edited, &worker,
+        [&](quint64, quint64, EditorSessionResultPtr value) {
+            editedResult = std::move(value);
+        },
+        Qt::DirectConnection);
+    worker.openProject(20, package.path());
+    ASSERT_NE(openedResult, nullptr);
+    ASSERT_TRUE(openedResult->hasValue()) << openedResult->error().message();
+
+    std::int64_t expectedRevision = 0;
+    const auto run = [&](EditorEditRequest request, bool fullRebuild) {
+        editedResult.reset();
+        worker.edit(20, static_cast<quint64>(expectedRevision + 1),
+                    std::move(request));
+        ASSERT_NE(editedResult, nullptr);
+        ASSERT_TRUE(editedResult->hasValue())
+            << (editedResult->hasValue() ? ""
+                                         : editedResult->error().message());
+        ++expectedRevision;
+        EXPECT_EQ(editedResult->value().state.snapshot.revision.value(),
+                  expectedRevision);
+        ASSERT_TRUE(editedResult->value().change.has_value());
+        EXPECT_EQ(editedResult->value().change->requiresFullRebuild(),
+                  fullRebuild);
+    };
+    const auto videoTrack = TrackId::create("video-1").value();
+    const auto assetClip = ClipId::create("clip-1").value();
+    const auto visual = VisualTransform::create(
+                            0.1, 0.1, 0.5, 0.5, 1.0, 1.0, 5.0, 0.0, 0.0,
+                            0.0, 0.0, 0.9, 3)
+                            .value();
+    run(EditorEditRequest{.kind = EditorEditKind::SetVisualTransform,
+                          .trackId = videoTrack,
+                          .clipId = assetClip,
+                          .visualTransform = visual},
+        false);
+    EXPECT_EQ(editedResult->value()
+                  .state.snapshot.timeline.clip(videoTrack, assetClip)
+                  ->visualTransform(),
+              visual);
+
+    const auto audio = AudioEnvelope::create(-3.0, DurationNs{100},
+                                              DurationNs{200}, DurationNs{1000})
+                           .value();
+    run(EditorEditRequest{.kind = EditorEditKind::SetAudioEnvelope,
+                          .trackId = videoTrack,
+                          .clipId = assetClip,
+                          .audioEnvelope = audio},
+        false);
+
+    const auto title = TitlePayload::create(
+                           "Hello", "Creator Sans", 0.5, 0.2,
+                           RgbaColor::parse("#ffffffff").value(),
+                           RgbaColor::parse("#00000000").value(),
+                           TextAlignment::Center)
+                           .value();
+    run(EditorEditRequest{
+            .kind = EditorEditKind::AddTitle,
+            .range = TimeRange::create(at(100), DurationNs{400}).value(),
+            .titlePayload = title,
+        },
+        true);
+    const auto* titleTrack = editedResult->value().state.snapshot.timeline.track(
+        TrackId::create("title-1").value());
+    ASSERT_NE(titleTrack, nullptr);
+    ASSERT_EQ(titleTrack->clips().size(), 1U);
+    const auto titleClip = titleTrack->clips()[0].id();
+    EXPECT_NE(titleClip.value(), "title-1");
+
+    const auto editedTitle = TitlePayload::create(
+                                 "Edited", "Creator Sans", 0.4, 0.3,
+                                 RgbaColor::parse("#ffcc00ff").value(),
+                                 RgbaColor::parse("#00000000").value(),
+                                 TextAlignment::Left)
+                                 .value();
+    run(EditorEditRequest{.kind = EditorEditKind::EditTitle,
+                          .trackId = TrackId::create("title-1").value(),
+                          .clipId = titleClip,
+                          .titlePayload = editedTitle},
+        true);
+
+    run(EditorEditRequest{
+            .kind = EditorEditKind::AddCaptionCue,
+            .range = TimeRange::create(at(0), DurationNs{1000}).value(),
+            .captionCue = creator::app::CaptionCueDraft{
+                .startOffset = DurationNs{100},
+                .duration = DurationNs{300},
+                .text = "First caption"},
+        },
+        true);
+    const auto captionTrackId = TrackId::create("caption-1").value();
+    const auto* captionTrack =
+        editedResult->value().state.snapshot.timeline.track(captionTrackId);
+    ASSERT_NE(captionTrack, nullptr);
+    ASSERT_EQ(captionTrack->clips().size(), 1U);
+    const auto captionClip = captionTrack->clips()[0].id();
+    ASSERT_EQ(captionTrack->clips()[0].captionCues().size(), 1U);
+    const auto cueId = captionTrack->clips()[0].captionCues()[0].id();
+    EXPECT_FALSE(cueId.value().empty());
+
+    run(EditorEditRequest{
+            .kind = EditorEditKind::EditCaptionCue,
+            .trackId = captionTrackId,
+            .clipId = captionClip,
+            .cueId = cueId,
+            .captionCue = creator::app::CaptionCueDraft{
+                .startOffset = DurationNs{200},
+                .duration = DurationNs{250},
+                .text = "Edited caption"},
+        },
+        true);
+    run(EditorEditRequest{.kind = EditorEditKind::RemoveCaptionCue,
+                          .trackId = captionTrackId,
+                          .clipId = captionClip,
+                          .cueId = cueId},
+        true);
+    run(EditorEditRequest{.kind = EditorEditKind::RemoveGeneratedClip,
+                          .trackId = TrackId::create("title-1").value(),
+                          .clipId = titleClip},
+        true);
+
+    EditorSessionWorker reopened;
+    EditorSessionResultPtr reopenedResult;
+    QObject::connect(
+        &reopened, &EditorSessionWorker::opened, &reopened,
+        [&](quint64, EditorSessionResultPtr value) {
+            reopenedResult = std::move(value);
+        },
+        Qt::DirectConnection);
+    reopened.openProject(21, package.path());
+    ASSERT_NE(reopenedResult, nullptr);
+    ASSERT_TRUE(reopenedResult->hasValue()) << reopenedResult->error().message();
+    EXPECT_EQ(reopenedResult->value().state.snapshot.timeline,
+              editedResult->value().state.snapshot.timeline);
+    EXPECT_EQ(reopenedResult->value().state.snapshot.revision.value(),
+              expectedRevision);
+}
+
+TEST(EditorSessionWorkerTest, PublishesCommittedEditWithDerivedWorkDiagnostic) {
+    TempPackage package;
+    package.seedOneClipTimeline();
+    creator::app::GeneratedOverlayFactory derivedFailure =
+        [](const creator::edit_engine::TimelineSnapshot&)
+        -> creator::core::Result<std::vector<
+            creator::edit_engine::GeneratedOverlayDescriptor>> {
+        return creator::core::AppError{creator::core::ErrorCode::IoFailure,
+                                       "injected derived work failure"};
+    };
+    EditorSessionWorker worker{
+        std::make_unique<ProjectPackageStore>(),
+        [](const fs::path& databasePath,
+           const creator::domain::ProjectId& projectId)
+        -> creator::core::Result<
+            std::unique_ptr<creator::project_store::ITimelineStore>> {
+            auto store = SqliteTimelineStore::open(databasePath, projectId);
+            if (!store.hasValue()) return store.error();
+            return std::unique_ptr<creator::project_store::ITimelineStore>{
+                std::make_unique<SqliteTimelineStore>(std::move(store).value())};
+        },
+        std::move(derivedFailure)};
+    EditorSessionResultPtr openedResult;
+    EditorSessionResultPtr editedResult;
+    QObject::connect(&worker, &EditorSessionWorker::opened, &worker,
+                     [&](quint64, EditorSessionResultPtr value) {
+                         openedResult = std::move(value);
+                     });
+    QObject::connect(&worker, &EditorSessionWorker::edited, &worker,
+                     [&](quint64, quint64, EditorSessionResultPtr value) {
+                         editedResult = std::move(value);
+                     });
+    worker.openProject(30, package.path());
+    ASSERT_TRUE(openedResult->hasValue()) << openedResult->error().message();
+    ASSERT_TRUE(openedResult->value().derivedWorkDiagnostic.has_value());
+
+    worker.edit(30, 1,
+                EditorEditRequest{
+                    .kind = EditorEditKind::SetVisualTransform,
+                    .trackId = TrackId::create("video-1").value(),
+                    .clipId = ClipId::create("clip-1").value(),
+                    .visualTransform = VisualTransform::create(
+                        0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0,
+                        0.0, 0.0, 1.0, 0)
+                                           .value(),
+                });
+    ASSERT_NE(editedResult, nullptr);
+    ASSERT_TRUE(editedResult->hasValue()) << editedResult->error().message();
+    EXPECT_EQ(editedResult->value().state.snapshot.revision.value(), 1);
+    ASSERT_TRUE(editedResult->value().derivedWorkDiagnostic.has_value());
+    EXPECT_EQ(editedResult->value().derivedWorkDiagnostic->code(),
+              creator::core::ErrorCode::IoFailure);
 }
 
 TEST(EditorSessionWorkerTest, PersistsSplitUndoAndReopensExactHistoryState) {
@@ -432,6 +659,61 @@ TEST(EditorSessionWorkerTest, FailedCommitLeavesPublishedSessionExactlyUnchanged
     EXPECT_EQ(afterFailure.canUndo, initial.canUndo);
     EXPECT_EQ(afterFailure.canRedo, initial.canRedo);
     EXPECT_EQ(afterFailure.clean, initial.clean);
+}
+
+TEST(EditorSessionWorkerTest, StaleSelectionAndLockedTrackNeverReachCommit) {
+    TempPackage package;
+    auto lockedTimeline = oneClipTimeline();
+    ASSERT_TRUE(lockedTimeline
+                    .setTrackLocked(TrackId::create("video-1").value(), true)
+                    .hasValue());
+    FailingCommitStore* storeView = nullptr;
+    TimelineStoreFactory factory =
+        [&](const fs::path&, const creator::domain::ProjectId&)
+        -> creator::core::Result<
+            std::unique_ptr<creator::project_store::ITimelineStore>> {
+        auto store =
+            std::make_unique<FailingCommitStore>(std::move(lockedTimeline));
+        storeView = store.get();
+        return std::unique_ptr<creator::project_store::ITimelineStore>{
+            std::move(store)};
+    };
+    EditorSessionWorker worker{std::make_unique<ProjectPackageStore>(),
+                               std::move(factory)};
+    EditorSessionResultPtr openedResult;
+    EditorSessionResultPtr editedResult;
+    QObject::connect(&worker, &EditorSessionWorker::opened, &worker,
+                     [&](quint64, EditorSessionResultPtr value) {
+                         openedResult = std::move(value);
+                     });
+    QObject::connect(&worker, &EditorSessionWorker::edited, &worker,
+                     [&](quint64, quint64, EditorSessionResultPtr value) {
+                         editedResult = std::move(value);
+                     });
+    worker.openProject(31, package.path());
+    ASSERT_TRUE(openedResult->hasValue()) << openedResult->error().message();
+    ASSERT_NE(storeView, nullptr);
+
+    worker.edit(31, 1,
+                EditorEditRequest{
+                    .kind = EditorEditKind::SetVisualTransform,
+                    .trackId = TrackId::create("video-1").value(),
+                    .clipId = ClipId::create("missing-clip").value(),
+                });
+    ASSERT_NE(editedResult, nullptr);
+    EXPECT_FALSE(editedResult->hasValue());
+    EXPECT_EQ(storeView->commitCalls, 0U);
+
+    editedResult.reset();
+    worker.edit(31, 2,
+                EditorEditRequest{
+                    .kind = EditorEditKind::SetVisualTransform,
+                    .trackId = TrackId::create("video-1").value(),
+                    .clipId = ClipId::create("clip-1").value(),
+                });
+    ASSERT_NE(editedResult, nullptr);
+    EXPECT_FALSE(editedResult->hasValue());
+    EXPECT_EQ(storeView->commitCalls, 0U);
 }
 
 TEST(EditorSessionWorkerTest, ExecutesTrimDeleteRedoAndExplicitSaveDurably) {

@@ -2,6 +2,9 @@
 
 #include "core/Uuid.h"
 #include "domain/DeleteRangeCommand.h"
+#include "domain/GeneratedClipCommands.h"
+#include "domain/SetAudioEnvelopeCommand.h"
+#include "domain/SetVisualTransformCommand.h"
 #include "domain/SplitClipCommand.h"
 #include "domain/TimelineRevision.h"
 #include "domain/TrimClipCommand.h"
@@ -79,6 +82,138 @@ core::Result<std::unique_ptr<domain::IEditCommand>> editCommand(
                 std::move(commandId).value(), *request.range, request.ripple,
                 std::move(rightIds))};
     }
+    if (request.kind == EditorEditKind::SetVisualTransform ||
+        request.kind == EditorEditKind::SetAudioEnvelope) {
+        if (!request.trackId.has_value() || !request.clipId.has_value()) {
+            return invalidRequest(
+                "effect edit requires a selected track and clip");
+        }
+        if (request.kind == EditorEditKind::SetVisualTransform) {
+            return std::unique_ptr<domain::IEditCommand>{
+                std::make_unique<domain::SetVisualTransformCommand>(
+                    std::move(commandId).value(), *request.trackId,
+                    *request.clipId, request.visualTransform)};
+        }
+        return std::unique_ptr<domain::IEditCommand>{
+            std::make_unique<domain::SetAudioEnvelopeCommand>(
+                std::move(commandId).value(), *request.trackId,
+                *request.clipId, request.audioEnvelope)};
+    }
+    if (request.kind == EditorEditKind::AddTitle) {
+        if (!request.range.has_value() || !request.titlePayload.has_value() ||
+            request.trackId.has_value() || request.clipId.has_value()) {
+            return invalidRequest(
+                "add title requires a range and payload without generated identities");
+        }
+        auto trackId = domain::TrackId::create("title-1");
+        if (!trackId.hasValue()) return trackId.error();
+        auto clipId = domain::ClipId::create(core::generateUuidV4());
+        if (!clipId.hasValue()) return clipId.error();
+        auto clip = domain::Clip::createTitle(
+            std::move(clipId).value(), *request.range, true,
+            *request.titlePayload, request.visualTransform);
+        if (!clip.hasValue()) return clip.error();
+        return std::unique_ptr<domain::IEditCommand>{
+            std::make_unique<domain::AddTitleCommand>(
+                std::move(commandId).value(), std::move(trackId).value(),
+                "Titles", std::move(clip).value())};
+    }
+    if (request.kind == EditorEditKind::EditTitle) {
+        if (!request.trackId.has_value() || !request.clipId.has_value() ||
+            !request.titlePayload.has_value()) {
+            return invalidRequest(
+                "edit title requires a selected title clip and payload");
+        }
+        return std::unique_ptr<domain::IEditCommand>{
+            std::make_unique<domain::EditTitleCommand>(
+                std::move(commandId).value(), *request.trackId,
+                *request.clipId, *request.titlePayload)};
+    }
+    if (request.kind == EditorEditKind::RemoveGeneratedClip) {
+        if (!request.trackId.has_value() || !request.clipId.has_value()) {
+            return invalidRequest(
+                "remove generated clip requires a selected track and clip");
+        }
+        return std::unique_ptr<domain::IEditCommand>{
+            std::make_unique<domain::RemoveGeneratedClipCommand>(
+                std::move(commandId).value(), *request.trackId,
+                *request.clipId)};
+    }
+    if (request.kind == EditorEditKind::AddCaptionCue) {
+        if (!request.captionCue.has_value() || request.cueId.has_value()) {
+            return invalidRequest(
+                "add caption cue requires cue content without a generated cue identity");
+        }
+        auto trackId = domain::TrackId::create("caption-1");
+        if (!trackId.hasValue()) return trackId.error();
+        if (request.trackId.has_value() && *request.trackId != trackId.value()) {
+            return invalidRequest("caption cues require the stable caption track");
+        }
+        std::optional<domain::ClipId> clipId = request.clipId;
+        std::optional<domain::TimeRange> clipRange = request.range;
+        bool enabled = true;
+        auto visual = request.visualTransform;
+        if (request.clipId.has_value()) {
+            if (request.range.has_value() || request.visualTransform.has_value()) {
+                return invalidRequest(
+                    "existing caption clip settings are derived by the worker");
+            }
+            const auto* existing =
+                timeline.clip(trackId.value(), *request.clipId);
+            if (existing == nullptr ||
+                existing->kind() != domain::ClipKind::Caption) {
+                return invalidRequest("selected caption clip was not found");
+            }
+            clipRange = existing->timelineRange();
+            enabled = existing->enabled();
+            visual = existing->visualTransform();
+        } else if (!request.range.has_value()) {
+            return invalidRequest("new caption clip requires a timeline range");
+        } else {
+            auto createdClipId =
+                domain::ClipId::create(core::generateUuidV4());
+            if (!createdClipId.hasValue()) return createdClipId.error();
+            clipId = std::move(createdClipId).value();
+        }
+        auto cueId = domain::CueId::create(core::generateUuidV4());
+        if (!cueId.hasValue()) return cueId.error();
+        auto cue = domain::CaptionCue::create(
+            std::move(cueId).value(), request.captionCue->startOffset,
+            request.captionCue->duration, request.captionCue->text);
+        if (!cue.hasValue()) return cue.error();
+        return std::unique_ptr<domain::IEditCommand>{
+            std::make_unique<domain::AddCaptionCueCommand>(
+                std::move(commandId).value(), std::move(trackId).value(),
+                "Captions", std::move(*clipId), *clipRange, enabled,
+                std::move(visual), std::move(cue).value())};
+    }
+    if (request.kind == EditorEditKind::EditCaptionCue) {
+        if (!request.trackId.has_value() || !request.clipId.has_value() ||
+            !request.cueId.has_value() || !request.captionCue.has_value()) {
+            return invalidRequest(
+                "edit caption cue requires a selected cue and replacement");
+        }
+        auto replacement = domain::CaptionCue::create(
+            *request.cueId, request.captionCue->startOffset,
+            request.captionCue->duration, request.captionCue->text);
+        if (!replacement.hasValue()) return replacement.error();
+        return std::unique_ptr<domain::IEditCommand>{
+            std::make_unique<domain::EditCaptionCueCommand>(
+                std::move(commandId).value(), *request.trackId,
+                *request.clipId, *request.cueId,
+                std::move(replacement).value())};
+    }
+    if (request.kind == EditorEditKind::RemoveCaptionCue) {
+        if (!request.trackId.has_value() || !request.clipId.has_value() ||
+            !request.cueId.has_value()) {
+            return invalidRequest(
+                "remove caption cue requires a selected cue");
+        }
+        return std::unique_ptr<domain::IEditCommand>{
+            std::make_unique<domain::RemoveCaptionCueCommand>(
+                std::move(commandId).value(), *request.trackId,
+                *request.clipId, *request.cueId)};
+    }
     return invalidRequest("edit request kind does not create a command");
 }
 
@@ -133,13 +268,22 @@ EditorSessionWorker::EditorSessionWorker()
               return std::unique_ptr<project_store::ITimelineStore>{
                   std::make_unique<project_store::SqliteTimelineStore>(
                       std::move(store).value())};
-          }) {}
+          }, {}) {}
 
 EditorSessionWorker::EditorSessionWorker(
     std::unique_ptr<project_store::IProjectPackageStore> packageStore,
-    TimelineStoreFactory timelineStoreFactory)
+    TimelineStoreFactory timelineStoreFactory,
+    GeneratedOverlayFactory generatedOverlayFactory)
     : packageStore_(std::move(packageStore)),
-      timelineStoreFactory_(std::move(timelineStoreFactory)) {
+      timelineStoreFactory_(std::move(timelineStoreFactory)),
+      generatedOverlayFactory_(std::move(generatedOverlayFactory)) {
+    if (!generatedOverlayFactory_) {
+        generatedOverlayFactory_ =
+            [](const edit_engine::TimelineSnapshot&)
+            -> core::Result<std::vector<edit_engine::GeneratedOverlayDescriptor>> {
+            return std::vector<edit_engine::GeneratedOverlayDescriptor>{};
+        };
+    }
     qRegisterMetaType<EditorSessionResultPtr>();
 }
 
@@ -149,6 +293,7 @@ void EditorSessionWorker::openProject(quint64 generation,
     timelineStore_.reset();
     packageRoot_.clear();
     assets_.clear();
+    canvas_ = {};
 
     if (!packageStore_ || !timelineStoreFactory_) {
         publishError(generation,
@@ -212,14 +357,18 @@ void EditorSessionWorker::openProject(quint64 generation,
     }
     packageRoot_ = package.path;
     assets_ = std::move(assets).value();
-    auto state = currentState();
+    canvas_ = package.manifest.canvas;
+    std::optional<AppError> derivedDiagnostic;
+    auto state = currentState(&derivedDiagnostic);
     if (!state.hasValue()) {
         publishError(generation, state.error());
         return;
     }
     emit opened(generation, std::make_shared<const EditorSessionResult>(
                                 EditorSessionUpdate{
-                                    .state = std::move(state).value()}));
+                                    .state = std::move(state).value(),
+                                    .derivedWorkDiagnostic =
+                                        std::move(derivedDiagnostic)}));
 }
 
 void EditorSessionWorker::edit(quint64 generation, quint64 commandId,
@@ -257,7 +406,8 @@ void EditorSessionWorker::edit(quint64 generation, quint64 commandId,
         return;
     }
 
-    auto state = currentState();
+    std::optional<AppError> derivedDiagnostic;
+    auto state = currentState(&derivedDiagnostic);
     if (!state.hasValue()) {
         publishEditError(generation, commandId, state.error());
         return;
@@ -268,7 +418,9 @@ void EditorSessionWorker::edit(quint64 generation, quint64 commandId,
         bool requiresFullRebuild = false;
         if (request.kind == EditorEditKind::Split ||
             request.kind == EditorEditKind::TrimLeading ||
-            request.kind == EditorEditKind::TrimTrailing) {
+            request.kind == EditorEditKind::TrimTrailing ||
+            request.kind == EditorEditKind::SetVisualTransform ||
+            request.kind == EditorEditKind::SetAudioEnvelope) {
             if (!request.trackId.has_value()) {
                 publishEditError(
                     generation, commandId,
@@ -291,7 +443,9 @@ void EditorSessionWorker::edit(quint64 generation, quint64 commandId,
     emit edited(generation, commandId,
                 std::make_shared<const EditorSessionResult>(
                     EditorSessionUpdate{.state = std::move(state).value(),
-                                        .change = std::move(change)}));
+                                        .change = std::move(change),
+                                        .derivedWorkDiagnostic =
+                                            std::move(derivedDiagnostic)}));
 }
 
 void EditorSessionWorker::publishError(quint64 generation, AppError error) {
@@ -299,6 +453,7 @@ void EditorSessionWorker::publishError(quint64 generation, AppError error) {
     timelineStore_.reset();
     packageRoot_.clear();
     assets_.clear();
+    canvas_ = {};
     emit opened(generation, std::make_shared<const EditorSessionResult>(
                                 std::move(error)));
 }
@@ -309,16 +464,36 @@ void EditorSessionWorker::publishEditError(quint64 generation, quint64 commandId
                 std::make_shared<const EditorSessionResult>(std::move(error)));
 }
 
-core::Result<EditorSessionState> EditorSessionWorker::currentState() const {
+core::Result<EditorSessionState> EditorSessionWorker::currentState(
+    std::optional<AppError>* derivedWorkDiagnostic) const {
     if (!editService_.has_value() || packageRoot_.empty()) {
         return AppError{ErrorCode::InvalidState, "editor session is not open"};
     }
     auto revision = TimelineRevision::create(editService_->revision());
     if (!revision.hasValue()) return revision.error();
+    auto snapshot = edit_engine::TimelineSnapshot{
+        editService_->snapshot(), revision.value(), assets_, packageRoot_,
+        canvas_.width, canvas_.height};
+    if (auto validated = edit_engine::validateTimelineSnapshot(snapshot);
+        !validated.hasValue()) {
+        return validated.error();
+    }
+    auto generated = generatedOverlayFactory_(snapshot);
+    if (generated.hasValue()) {
+        snapshot.generatedOverlays = std::move(generated).value();
+        if (auto validated = edit_engine::validateTimelineSnapshot(snapshot);
+            !validated.hasValue()) {
+            if (derivedWorkDiagnostic != nullptr) {
+                *derivedWorkDiagnostic = validated.error();
+            }
+            snapshot.generatedOverlays.clear();
+        }
+    } else if (derivedWorkDiagnostic != nullptr) {
+        *derivedWorkDiagnostic = generated.error();
+    }
     return EditorSessionState{
         .assets = assets_,
-        .snapshot = edit_engine::TimelineSnapshot{
-            editService_->snapshot(), revision.value(), assets_, packageRoot_},
+        .snapshot = std::move(snapshot),
         .canUndo = editService_->canUndo(),
         .canRedo = editService_->canRedo(),
         .clean = editService_->isClean(),

@@ -10,20 +10,71 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
 namespace creator::edit_engine {
+
+class GeneratedOverlayDescriptor final {
+public:
+    [[nodiscard]] static core::Result<GeneratedOverlayDescriptor> create(
+        domain::ClipId ownerClipId, std::optional<domain::CueId> cueId,
+        std::filesystem::path rasterPath, domain::TimeRange timelineRange,
+        std::string resolvedFontFamily);
+
+    [[nodiscard]] const domain::ClipId& ownerClipId() const noexcept {
+        return ownerClipId_;
+    }
+    [[nodiscard]] const std::optional<domain::CueId>& cueId() const noexcept {
+        return cueId_;
+    }
+    [[nodiscard]] const std::filesystem::path& rasterPath() const noexcept {
+        return rasterPath_;
+    }
+    [[nodiscard]] const domain::TimeRange& timelineRange() const noexcept {
+        return timelineRange_;
+    }
+    [[nodiscard]] const std::string& resolvedFontFamily() const noexcept {
+        return resolvedFontFamily_;
+    }
+
+    friend bool operator==(const GeneratedOverlayDescriptor&,
+                           const GeneratedOverlayDescriptor&) = default;
+
+private:
+    GeneratedOverlayDescriptor(domain::ClipId ownerClipId,
+                               std::optional<domain::CueId> cueId,
+                               std::filesystem::path rasterPath,
+                               domain::TimeRange timelineRange,
+                               std::string resolvedFontFamily)
+        : ownerClipId_(std::move(ownerClipId)), cueId_(std::move(cueId)),
+          rasterPath_(std::move(rasterPath)), timelineRange_(timelineRange),
+          resolvedFontFamily_(std::move(resolvedFontFamily)) {}
+
+    domain::ClipId ownerClipId_;
+    std::optional<domain::CueId> cueId_;
+    std::filesystem::path rasterPath_;
+    domain::TimeRange timelineRange_;
+    std::string resolvedFontFamily_;
+};
 
 struct TimelineSnapshot final {
     domain::Timeline timeline;
     domain::TimelineRevision revision;
     std::vector<domain::MediaAsset> assets{};
     std::filesystem::path mediaRoot{};
+    std::int32_t canvasWidth{1920};
+    std::int32_t canvasHeight{1080};
+    std::vector<GeneratedOverlayDescriptor> generatedOverlays{};
 
     friend bool operator==(const TimelineSnapshot&,
                            const TimelineSnapshot&) = default;
 };
+
+[[nodiscard]] core::Result<void> validateTimelineSnapshot(
+    const TimelineSnapshot& snapshot);
 
 class TimelineChangeSet final {
 public:
