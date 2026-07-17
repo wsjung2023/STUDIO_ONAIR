@@ -1,4 +1,5 @@
 #include "app/ScreenPreviewItem.h"
+#include "app/CameraPreviewItem.h"
 #include "app/EditorPreviewItem.h"
 #include "app/MediaBinModel.h"
 #include "app/TimelineTrackModel.h"
@@ -1084,6 +1085,8 @@ int main(int argc, char** argv) {
     QGuiApplication app{argc, argv};
     qmlRegisterType<creator::app::ScreenPreviewItem>("CreatorStudio.Native", 1, 0,
                                                       "ScreenPreviewItem");
+    qmlRegisterType<creator::app::CameraPreviewItem>("CreatorStudio.Native", 1, 0,
+                                                      "CameraPreviewItem");
     qmlRegisterType<creator::app::EditorPreviewItem>("CreatorStudio.Native", 1, 0,
                                                       "EditorPreviewItem");
     ::testing::InitGoogleTest(&argc, argv);

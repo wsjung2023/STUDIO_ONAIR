@@ -1,4 +1,4 @@
-#include "app/ScreenPreviewItem.h"
+#include "app/VideoPreviewItem.h"
 
 #include "app/PreviewGeometry.h"
 #include "media/MediaTypes.h"
@@ -22,16 +22,27 @@ namespace {
 
 class MacPreviewNode final : public QSGSimpleTextureNode {
 public:
+    explicit MacPreviewNode(std::uint64_t mailboxGeneration)
+        : mailboxGeneration_(mailboxGeneration) {}
     ~MacPreviewNode() override { clearTexture(); }
 
-    [[nodiscard]] bool replaceFrame(media::VideoFrame frame, QQuickWindow* window) {
+    [[nodiscard]] std::uint64_t mailboxGeneration() const noexcept {
+        return mailboxGeneration_;
+    }
+
+    [[nodiscard]] bool replaceFrame(media::VideoFrame frame,
+                                    QQuickWindow* window) {
         if (window == nullptr ||
-            window->rendererInterface()->graphicsApi() != QSGRendererInterface::Metal ||
-            frame.pixelFormat != media::PixelFormat::Bgra8 || !frame.platformHandle) {
+            window->rendererInterface()->graphicsApi() !=
+                QSGRendererInterface::Metal ||
+            frame.pixelFormat != media::PixelFormat::Bgra8 ||
+            !frame.platformHandle) {
             return false;
         }
-        if (frame.width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
-            frame.height > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+        if (frame.width >
+                static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+            frame.height >
+                static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
             frame.contentWidth >
                 static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
             frame.contentHeight >
@@ -65,13 +76,14 @@ public:
 
         QSGTexture* wrapper = QNativeInterface::QSGMetalTexture::fromNative(
             imported, window,
-            QSize{static_cast<int>(frame.width), static_cast<int>(frame.height)},
+            QSize{static_cast<int>(frame.width),
+                  static_cast<int>(frame.height)},
             QQuickWindow::TextureHasAlphaChannel);
         if (wrapper == nullptr) return false;
 
         clearTexture();
         previewGeometry_ = previewFrameGeometry(frame);
-        retainedFrame_ = std::move(frame);
+        retainedFrame_.replace(std::move(frame));
         metalTexture_ = imported;
         wrapper_ = wrapper;
         setTexture(wrapper_);
@@ -98,29 +110,37 @@ private:
         previewGeometry_ = {};
     }
 
-    std::optional<media::VideoFrame> retainedFrame_;
+    VideoPreviewFrameRetention retainedFrame_;
     PreviewFrameGeometry previewGeometry_;
     id<MTLTexture> __strong metalTexture_{nil};
     QSGTexture* wrapper_{nullptr};
+    std::uint64_t mailboxGeneration_{0};
 };
 
 }  // namespace
 
-QSGNode* ScreenPreviewItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*) {
+QSGNode* VideoPreviewItem::updatePaintNode(QSGNode* oldNode,
+                                            UpdatePaintNodeData*) {
     auto* node = static_cast<MacPreviewNode*>(oldNode);
-    auto frameMailbox = mailbox();
+    auto snapshot = mailboxSnapshot();
+    if (node && node->mailboxGeneration() != snapshot.generation) {
+        delete node;
+        node = nullptr;
+    }
+    auto frameMailbox = std::move(snapshot.mailbox);
     if (!frameMailbox) {
         delete node;
-        postRenderState(false, tr("Start a screen preview to receive frames"));
+        postRenderState(false, tr("Start a video source to receive frames"));
         return nullptr;
     }
     if (window() == nullptr ||
-        window()->rendererInterface()->graphicsApi() != QSGRendererInterface::Metal) {
+        window()->rendererInterface()->graphicsApi() !=
+            QSGRendererInterface::Metal) {
         delete node;
         postRenderState(false, tr("Qt Quick is not using the Metal renderer"));
         return nullptr;
     }
-    if (!node) node = new MacPreviewNode;
+    if (!node) node = new MacPreviewNode{snapshot.generation};
 
     if (auto frame = frameMailbox->takeLatest()) {
         if (!node->replaceFrame(std::move(*frame), window())) {
@@ -128,15 +148,16 @@ QSGNode* ScreenPreviewItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeDat
             postRenderState(false, tr("Zero-copy IOSurface import failed"));
             return nullptr;
         }
-        postRenderState(true, tr("Metal zero-copy preview"));
+        postRenderState(true, tr("Metal zero-copy video preview"));
     }
 
     if (!node->frameSize().isEmpty()) {
         node->setRect(aspectFitRect(node->frameSize(), boundingRect()));
         node->setSourceRect(node->frameSourceRect());
-        node->setTextureCoordinatesTransform(QSGSimpleTextureNode::NoTransform);
+        node->setTextureCoordinatesTransform(
+            QSGSimpleTextureNode::NoTransform);
     } else {
-        postRenderState(false, tr("Waiting for the first ScreenCaptureKit frame"));
+        postRenderState(false, tr("Waiting for the first native video frame"));
     }
     return node;
 }

@@ -1,19 +1,19 @@
-#include "app/ScreenPreviewItem.h"
+#include "app/CameraPreviewItem.h"
 
 namespace creator::app {
 
-ScreenPreviewItem::ScreenPreviewItem(QQuickItem* parent)
+CameraPreviewItem::CameraPreviewItem(QQuickItem* parent)
     : VideoPreviewItem(parent) {}
 
-void ScreenPreviewItem::setCaptureController(QObject* controller) {
-    auto* typed = qobject_cast<ScreenCaptureController*>(controller);
+void CameraPreviewItem::setCaptureController(QObject* controller) {
+    auto* typed = qobject_cast<DeviceCaptureController*>(controller);
     if (controller_ == typed) return;
     if (controller_) disconnect(controller_, nullptr, this, nullptr);
     controller_ = typed;
     if (controller_) {
-        connect(controller_, &ScreenCaptureController::statsChanged, this,
+        connect(controller_, &DeviceCaptureController::statsChanged, this,
                 [this] { refreshMailbox(); });
-        connect(controller_, &ScreenCaptureController::captureStateChanged, this,
+        connect(controller_, &DeviceCaptureController::stateChanged, this,
                 [this] { refreshMailbox(); });
         connect(controller_, &QObject::destroyed, this,
                 [this] {
@@ -26,8 +26,8 @@ void ScreenPreviewItem::setCaptureController(QObject* controller) {
     emit captureControllerChanged();
 }
 
-void ScreenPreviewItem::refreshMailbox() {
-    setMailbox(controller_ ? controller_->previewMailbox() : nullptr);
+void CameraPreviewItem::refreshMailbox() {
+    setMailbox(controller_ ? controller_->cameraPreviewMailbox() : nullptr);
     update();
 }
 

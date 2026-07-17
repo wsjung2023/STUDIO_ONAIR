@@ -34,6 +34,10 @@ add_library(cs_app STATIC
     DeviceCaptureController.cpp
     ScreenPreviewItem.h
     ScreenPreviewItem.cpp
+    VideoPreviewItem.h
+    VideoPreviewItem.cpp
+    CameraPreviewItem.h
+    CameraPreviewItem.cpp
     RecentProjectRegistry.h
     RecentProjectRegistry.cpp
     ProjectWorker.h
@@ -82,8 +86,8 @@ if(APPLE)
     find_library(CS_APP_COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
     find_library(CS_APP_IOSURFACE_FRAMEWORK IOSurface REQUIRED)
     find_library(CS_APP_METAL_FRAMEWORK Metal REQUIRED)
-    target_sources(cs_app PRIVATE ScreenPreviewItem_macos.mm)
-    set_source_files_properties(ScreenPreviewItem_macos.mm PROPERTIES
+    target_sources(cs_app PRIVATE VideoPreviewItem_macos.mm)
+    set_source_files_properties(VideoPreviewItem_macos.mm PROPERTIES
         COMPILE_OPTIONS "-fobjc-arc"
     )
     target_link_libraries(cs_app PRIVATE
@@ -92,7 +96,7 @@ if(APPLE)
         ${CS_APP_METAL_FRAMEWORK}
     )
 else()
-    target_sources(cs_app PRIVATE ScreenPreviewItem_stub.cpp)
+    target_sources(cs_app PRIVATE VideoPreviewItem_stub.cpp)
 endif()
 add_library(CreatorStudio::cs_app ALIAS cs_app)
 

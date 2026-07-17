@@ -7,6 +7,7 @@
 #include "app/LiveRecordingEngineFactory.h"
 #include "app/ScreenCaptureController.h"
 #include "app/ScreenPreviewItem.h"
+#include "app/CameraPreviewItem.h"
 #include "app/StudioRecordingBinding.h"
 #include "app/StudioWorkflowController.h"
 #include "app/RecordingTimelineReconciler.h"
@@ -74,6 +75,8 @@ int main(int argc, char* argv[]) {
     QGuiApplication::setApplicationName(QStringLiteral("Creator Studio"));
     qmlRegisterType<creator::app::ScreenPreviewItem>("CreatorStudio.Native", 1, 0,
                                                       "ScreenPreviewItem");
+    qmlRegisterType<creator::app::CameraPreviewItem>("CreatorStudio.Native", 1, 0,
+                                                      "CameraPreviewItem");
     qmlRegisterType<creator::app::EditorPreviewItem>("CreatorStudio.Native", 1, 0,
                                                       "EditorPreviewItem");
 

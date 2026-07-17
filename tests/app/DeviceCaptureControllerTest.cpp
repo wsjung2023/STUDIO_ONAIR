@@ -1,4 +1,5 @@
 #include "app/DeviceCaptureController.h"
+#include "app/CameraPreviewItem.h"
 
 #include "capture/DeviceCaptureTypes.h"
 #include "capture/IAudioBlockSink.h"
@@ -12,6 +13,7 @@
 
 #include <QCoreApplication>
 #include <QEvent>
+#include <QSignalSpy>
 
 #include <gtest/gtest.h>
 
@@ -343,6 +345,7 @@ TEST(DeviceCaptureControllerTest, FanoutFeedsRecordingWithoutDisablingPreviewOrM
     fixture.controller->setMicrophoneRecordingSink(microphone);
     fixture.controller->setSystemAudioRecordingSink(systemAudio);
     fixture.backendRaw->cameraSource->pushVideo(video(1920, 1080));
+    auto previewFrame = fixture.controller->cameraPreviewMailbox()->takeLatest();
     fixture.backendRaw->microphoneSource->pushAudio(audio(1.0F, 0.0F));
     fixture.backendRaw->systemAudioSource->pushAudio(audio(0.5F, -0.5F));
     fixture.controller->setCameraRecordingSink({});
@@ -354,11 +357,64 @@ TEST(DeviceCaptureControllerTest, FanoutFeedsRecordingWithoutDisablingPreviewOrM
     fixture.controller->pollCapture();
 
     EXPECT_EQ(camera->frames, 1);
+    ASSERT_TRUE(previewFrame.has_value());
+    EXPECT_EQ(previewFrame->width, 1920u);
     EXPECT_EQ(microphone->blocks, 1);
     EXPECT_EQ(systemAudio->blocks, 1);
     EXPECT_EQ(fixture.controller->cameraWidth(), 1280u);
     EXPECT_EQ(fixture.controller->microphoneBlocks(), 2u);
     EXPECT_EQ(fixture.controller->systemAudioBlocks(), 2u);
+}
+
+TEST(DeviceCaptureControllerTest, HiddenCameraPreviewDoesNotStopCapture) {
+    Fixture fixture;
+    fixture.controller->initialize();
+    fixture.controller->setCameraEnabled(true);
+    creator::app::CameraPreviewItem preview;
+    preview.setCaptureController(fixture.controller.get());
+
+    preview.setVisible(false);
+    fixture.backendRaw->cameraSource->pushVideo(video());
+    fixture.controller->pollCapture();
+
+    EXPECT_TRUE(fixture.controller->cameraCapturing());
+    EXPECT_NE(fixture.controller->cameraPreviewMailbox(), nullptr);
+    EXPECT_TRUE(fixture.controller->cameraPreviewMailbox()->takeLatest().has_value());
+}
+
+TEST(DeviceCaptureControllerTest,
+     CameraPreviewReplacesAndClearsControllerMailboxLifetime) {
+    Fixture first;
+    Fixture second;
+    first.controller->initialize();
+    second.controller->initialize();
+    first.controller->setCameraEnabled(true);
+    second.controller->setCameraEnabled(true);
+    creator::app::CameraPreviewItem preview;
+    preview.setCaptureController(first.controller.get());
+    auto firstMailbox = first.controller->cameraPreviewMailbox();
+    std::weak_ptr<creator::capture::LatestVideoFrameMailbox> firstWeak{
+        firstMailbox};
+    EXPECT_EQ(preview.mailbox(), firstMailbox);
+
+    preview.setCaptureController(second.controller.get());
+    EXPECT_EQ(preview.mailbox(), second.controller->cameraPreviewMailbox());
+    firstMailbox.reset();
+    first.controller.reset();
+    EXPECT_TRUE(firstWeak.expired());
+    EXPECT_NE(preview.mailbox(), nullptr);
+
+    auto secondMailbox = second.controller->cameraPreviewMailbox();
+    std::weak_ptr<creator::capture::LatestVideoFrameMailbox> secondWeak{
+        secondMailbox};
+    QSignalSpy controllerChanged{
+        &preview,
+        &creator::app::CameraPreviewItem::captureControllerChanged};
+    secondMailbox.reset();
+    second.controller.reset();
+    EXPECT_EQ(preview.mailbox(), nullptr);
+    EXPECT_TRUE(secondWeak.expired());
+    EXPECT_EQ(controllerChanged.count(), 1);
 }
 
 TEST(DeviceCaptureControllerTest, RemainsStoppingUntilNativeCompletion) {

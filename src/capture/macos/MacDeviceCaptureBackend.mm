@@ -621,7 +621,8 @@ public:
               AVCaptureVideoDataOutput* output = [AVCaptureVideoDataOutput new];
               output.alwaysDiscardsLateVideoFrames = YES;
               output.videoSettings = @{
-                  (NSString*)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA)
+                  (NSString*)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
+                  (NSString*)kCVPixelBufferIOSurfacePropertiesKey : @{}
               };
               CSCameraCaptureBridge* bridge =
                   [[CSCameraCaptureBridge alloc] initWithState:runtime->cameraState_];

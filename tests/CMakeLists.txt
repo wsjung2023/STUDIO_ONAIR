@@ -135,6 +135,7 @@ add_executable(cs_app_tests
     app/ProjectControllerTest.cpp
     app/ScreenCaptureControllerTest.cpp
     app/PreviewGeometryTest.cpp
+    app/VideoPreviewItemTest.cpp
     app/DeviceCaptureControllerTest.cpp
     app/ProjectSegmentLifecycleSinkTest.cpp
     app/MultiTrackRecordingServiceTest.cpp

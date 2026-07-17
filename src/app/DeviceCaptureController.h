@@ -126,6 +126,10 @@ public:
         return cameraSource_ ? std::optional<creator::domain::SourceId>{cameraSource_->id()}
                              : std::nullopt;
     }
+    [[nodiscard]] std::shared_ptr<creator::capture::LatestVideoFrameMailbox>
+    cameraPreviewMailbox() const noexcept {
+        return cameraMailbox_;
+    }
     [[nodiscard]] std::optional<creator::domain::SourceId>
     activeMicrophoneSourceId() const {
         return microphoneSource_
