@@ -26,7 +26,8 @@ public:
     [[nodiscard]] static std::unique_ptr<IEditCommand> rehydrate(
         CommandId commandId, TrackId trackId, ClipId clipId,
         std::optional<AudioEnvelope> value,
-        std::optional<AudioEnvelope> previous, bool applied);
+        std::optional<AudioEnvelope> previous,
+        core::DurationNs clipDuration, bool applied);
 
 private:
     CommandId commandId_;
@@ -34,6 +35,7 @@ private:
     ClipId clipId_;
     std::optional<AudioEnvelope> value_;
     std::optional<AudioEnvelope> previous_;
+    core::DurationNs clipDuration_{};
     bool applied_{false};
 };
 

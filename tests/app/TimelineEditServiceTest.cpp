@@ -6,6 +6,9 @@
 #include "domain/MediaAsset.h"
 #include "domain/ProjectManifest.h"
 #include "domain/DeleteRangeCommand.h"
+#include "domain/GeneratedClipCommands.h"
+#include "domain/SetAudioEnvelopeCommand.h"
+#include "domain/SetVisualTransformCommand.h"
 #include "domain/SplitClipCommand.h"
 #include "domain/TrimClipCommand.h"
 #include "project_store/SqliteProjectDatabase.h"
@@ -38,19 +41,26 @@ using creator::domain::AudioAssetMetadata;
 using creator::domain::AudioEnvelope;
 using creator::domain::Clip;
 using creator::domain::ClipId;
+using creator::domain::CaptionCue;
 using creator::domain::CommandId;
+using creator::domain::CueId;
 using creator::domain::DeleteRangeCommand;
 using creator::domain::MediaAsset;
 using creator::domain::MediaKind;
 using creator::domain::ProjectId;
 using creator::domain::ProjectManifest;
+using creator::domain::RgbaColor;
+using creator::domain::SetAudioEnvelopeCommand;
+using creator::domain::SetVisualTransformCommand;
 using creator::domain::SplitClipCommand;
 using creator::domain::TimeRange;
+using creator::domain::TextAlignment;
 using creator::domain::Timeline;
 using creator::domain::TimelineId;
 using creator::domain::Track;
 using creator::domain::TrackId;
 using creator::domain::TrackKind;
+using creator::domain::TitlePayload;
 using creator::domain::TrimClipCommand;
 using creator::domain::TrimEdge;
 using creator::domain::VideoAssetMetadata;
@@ -260,6 +270,22 @@ struct SequentialIds final {
     std::uint64_t next{0};
 };
 
+TitlePayload generatedTitle(std::string text) {
+    return TitlePayload::create(
+               std::move(text), "Malgun Gothic", 0.5, 0.9,
+               RgbaColor::parse("#ffffffff").value(),
+               RgbaColor::parse("#00000080").value(),
+               TextAlignment::Center)
+        .value();
+}
+
+CaptionCue generatedCue(std::string id, std::int64_t start,
+                         std::int64_t duration, std::string text) {
+    return CaptionCue::create(CueId::create(std::move(id)).value(),
+                              DurationNs{start}, DurationNs{duration},
+                              std::move(text)).value();
+}
+
 TEST(TimelineEditServiceTest, ExposesDurableHistoryCapabilities) {
     TempProject project;
     auto storeResult = SqliteTimelineStore::open(project.path(), projectId());
@@ -292,6 +318,110 @@ TEST(TimelineEditServiceTest, ExposesDurableHistoryCapabilities) {
     EXPECT_FALSE(service.canUndo());
     EXPECT_TRUE(service.canRedo());
     EXPECT_EQ(service.historyCursor(), 0U);
+}
+
+TEST(TimelineEditServiceTest, ReopensEveryEffectAndGeneratedCommandExactly) {
+    TempProject project;
+    auto storeResult = SqliteTimelineStore::open(project.path(), projectId());
+    ASSERT_TRUE(storeResult.hasValue());
+    auto store = std::move(storeResult).value();
+    ASSERT_TRUE(store.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(store.putAsset(cameraAsset()).hasValue());
+    ASSERT_TRUE(store.putAsset(microphoneAsset()).hasValue());
+    const auto initial = recordingTimeline();
+    ASSERT_TRUE(store.createTimeline(initial).hasValue());
+    SequentialIds ids;
+    auto opened = TimelineEditService::open(
+        store, 100, [&ids] { return ids(); }, [] { return fixedUtc(); });
+    ASSERT_TRUE(opened.hasValue()) << opened.error().message();
+    auto service = std::move(opened).value();
+
+    const auto cameraTransform = VisualTransform::create(
+        0.66, 0.56, 0.30, 0.40, 1.0, 1.0, 12.0,
+        0.1, 0.0, 0.0, 0.1, 0.75, 20).value();
+    ASSERT_TRUE(service.execute(std::make_unique<SetVisualTransformCommand>(
+        CommandId::create("visual").value(),
+        TrackId::create("camera-track").value(),
+        ClipId::create("camera-clip").value(), cameraTransform)).hasValue());
+    const auto envelope = AudioEnvelope::create(
+        -6.0, DurationNs{100}, DurationNs{150}, DurationNs{1'000}).value();
+    ASSERT_TRUE(service.execute(std::make_unique<SetAudioEnvelopeCommand>(
+        CommandId::create("audio").value(),
+        TrackId::create("microphone-track").value(),
+        ClipId::create("microphone-clip").value(), envelope)).hasValue());
+
+    const auto titleTrack = TrackId::create("title-1").value();
+    ASSERT_TRUE(service.execute(std::make_unique<creator::domain::AddTitleCommand>(
+        CommandId::create("add-title-a").value(), titleTrack, "Titles",
+        Clip::createTitle(
+            ClipId::create("title-a").value(),
+            TimeRange::create(at(100), DurationNs{300}).value(), true,
+            generatedTitle("원래 제목"), std::nullopt).value())).hasValue());
+    ASSERT_TRUE(service.execute(std::make_unique<creator::domain::EditTitleCommand>(
+        CommandId::create("edit-title").value(), titleTrack,
+        ClipId::create("title-a").value(), generatedTitle("수정 제목"))).hasValue());
+    ASSERT_TRUE(service.execute(std::make_unique<creator::domain::AddTitleCommand>(
+        CommandId::create("add-title-b").value(), titleTrack, "Titles",
+        Clip::createTitle(
+            ClipId::create("title-b").value(),
+            TimeRange::create(at(500), DurationNs{200}).value(), true,
+            generatedTitle("삭제 제목"), std::nullopt).value())).hasValue());
+    ASSERT_TRUE(service.execute(
+        std::make_unique<creator::domain::RemoveGeneratedClipCommand>(
+            CommandId::create("remove-title-b").value(), titleTrack,
+            ClipId::create("title-b").value())).hasValue());
+
+    const auto captionTrack = TrackId::create("caption-1").value();
+    const auto captionClip = ClipId::create("caption-a").value();
+    const auto captionSpan = TimeRange::create(at(0), DurationNs{1'000}).value();
+    ASSERT_TRUE(service.execute(
+        std::make_unique<creator::domain::AddCaptionCueCommand>(
+            CommandId::create("add-cue-a").value(), captionTrack, "Captions",
+            captionClip, captionSpan, true, std::nullopt,
+            generatedCue("cue-a", 0, 200, "첫 자막"))).hasValue());
+    ASSERT_TRUE(service.execute(
+        std::make_unique<creator::domain::AddCaptionCueCommand>(
+            CommandId::create("add-cue-b").value(), captionTrack, "Captions",
+            captionClip, captionSpan, true, std::nullopt,
+            generatedCue("cue-b", 300, 200, "둘째 자막"))).hasValue());
+    ASSERT_TRUE(service.execute(
+        std::make_unique<creator::domain::EditCaptionCueCommand>(
+            CommandId::create("edit-cue-b").value(), captionTrack, captionClip,
+            CueId::create("cue-b").value(),
+            generatedCue("cue-b", 350, 250, "수정 자막"))).hasValue());
+    ASSERT_TRUE(service.execute(
+        std::make_unique<creator::domain::RemoveCaptionCueCommand>(
+            CommandId::create("remove-cue-a").value(), captionTrack, captionClip,
+            CueId::create("cue-a").value())).hasValue());
+    const auto final = service.snapshot();
+    EXPECT_EQ(service.historyCursor(), 10U);
+
+    auto reopenedStoreResult = SqliteTimelineStore::open(project.path(), projectId());
+    ASSERT_TRUE(reopenedStoreResult.hasValue());
+    auto reopenedStore = std::move(reopenedStoreResult).value();
+    auto reopenedResult = TimelineEditService::open(
+        reopenedStore, 100, [&ids] { return ids(); }, [] { return fixedUtc(); });
+    ASSERT_TRUE(reopenedResult.hasValue()) << reopenedResult.error().message();
+    auto reopened = std::move(reopenedResult).value();
+    EXPECT_EQ(reopened.snapshot(), final);
+    for (int index = 0; index < 10; ++index) {
+        ASSERT_TRUE(reopened.undo().hasValue()) << index;
+    }
+    EXPECT_EQ(reopened.snapshot(), initial);
+
+    auto undoneStoreResult = SqliteTimelineStore::open(project.path(), projectId());
+    ASSERT_TRUE(undoneStoreResult.hasValue());
+    auto undoneStore = std::move(undoneStoreResult).value();
+    auto undoneResult = TimelineEditService::open(
+        undoneStore, 100, [&ids] { return ids(); }, [] { return fixedUtc(); });
+    ASSERT_TRUE(undoneResult.hasValue()) << undoneResult.error().message();
+    auto undone = std::move(undoneResult).value();
+    EXPECT_EQ(undone.snapshot(), initial);
+    EXPECT_EQ(undone.historyCursor(), 0U);
+    for (int index = 0; index < 10; ++index) {
+        ASSERT_TRUE(undone.redo().hasValue()) << index;
+    }
+    EXPECT_EQ(undone.snapshot(), final);
 }
 
 TEST(EditorSessionTypesTest, EditRequestDefaultsAreClosedAndNonRipple) {

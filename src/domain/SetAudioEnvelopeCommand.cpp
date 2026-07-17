@@ -20,6 +20,7 @@ core::Result<void> SetAudioEnvelopeCommand::execute(Timeline& timeline) {
     }
     auto replacement = current->withAudioEnvelope(value_);
     if (!replacement.hasValue()) return replacement.error();
+    const auto clipDuration = current->timelineRange().duration();
     previous_ = current->audioEnvelope();
     auto replaced = timeline.replaceClip(
         trackId_, clipId_, std::move(replacement).value());
@@ -27,6 +28,7 @@ core::Result<void> SetAudioEnvelopeCommand::execute(Timeline& timeline) {
         previous_.reset();
         return replaced.error();
     }
+    clipDuration_ = clipDuration;
     applied_ = true;
     return core::ok();
 }
@@ -53,6 +55,7 @@ core::Result<void> SetAudioEnvelopeCommand::undo(Timeline& timeline) {
 EditCommandRecord SetAudioEnvelopeCommand::record() const {
     const auto payload =
         "{\"audio\":" + internal::serializeAudioEnvelope(value_) +
+        ",\"clipDurationNs\":" + std::to_string(clipDuration_.count()) +
         ",\"clipId\":" + internal::serializeJsonString(clipId_.value()) +
         ",\"trackId\":" + internal::serializeJsonString(trackId_.value()) +
         ",\"version\":1}";
@@ -68,11 +71,13 @@ std::unique_ptr<IEditCommand> SetAudioEnvelopeCommand::clone() const {
 std::unique_ptr<IEditCommand> SetAudioEnvelopeCommand::rehydrate(
     CommandId commandId, TrackId trackId, ClipId clipId,
     std::optional<AudioEnvelope> value,
-    std::optional<AudioEnvelope> previous, bool applied) {
+    std::optional<AudioEnvelope> previous,
+    core::DurationNs clipDuration, bool applied) {
     auto command = std::make_unique<SetAudioEnvelopeCommand>(
         std::move(commandId), std::move(trackId), std::move(clipId),
         std::move(value));
     command->previous_ = std::move(previous);
+    command->clipDuration_ = clipDuration;
     command->applied_ = applied;
     return command;
 }

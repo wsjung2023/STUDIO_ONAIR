@@ -3,6 +3,9 @@
 #include "core/AppError.h"
 #include "core/Timebase.h"
 #include "domain/DeleteRangeCommand.h"
+#include "domain/GeneratedClipCommands.h"
+#include "domain/SetAudioEnvelopeCommand.h"
+#include "domain/SetVisualTransformCommand.h"
 #include "domain/SplitClipCommand.h"
 #include "domain/TimelineTypes.h"
 #include "domain/TrimClipCommand.h"
@@ -31,12 +34,17 @@ using core::Result;
 using core::TimestampNs;
 using domain::AssetId;
 using domain::AudioEnvelope;
+using domain::CaptionCue;
 using domain::Clip;
 using domain::ClipId;
+using domain::CueId;
 using domain::DeleteRangeCommand;
 using domain::MediaKind;
+using domain::RgbaColor;
+using domain::TextAlignment;
 using domain::TimeRange;
 using domain::TrackId;
+using domain::TitlePayload;
 using domain::TrimEdge;
 using domain::VisualTransform;
 
@@ -182,8 +190,135 @@ Result<std::optional<AudioEnvelope>> audio(
     return std::optional<AudioEnvelope>{created.value()};
 }
 
+Result<void> versionOne(const Json& value) {
+    auto version = integerField(value, "version");
+    if (!version.hasValue()) return version.error();
+    if (version.value() != 1) return parseError("command version is unsupported");
+    return core::ok();
+}
+
+Result<TitlePayload> titlePayload(const Json& value) {
+    if (auto exact = exactObject(
+            value, {"alignment", "background", "fontFamily", "foreground",
+                    "text", "x", "y"}, "title");
+        !exact.hasValue()) return exact.error();
+    auto alignmentText = textField(value, "alignment");
+    auto backgroundText = textField(value, "background");
+    auto family = textField(value, "fontFamily");
+    auto foregroundText = textField(value, "foreground");
+    auto text = textField(value, "text");
+    auto x = numberField(value, "x");
+    auto y = numberField(value, "y");
+    if (!alignmentText.hasValue()) return alignmentText.error();
+    if (!backgroundText.hasValue()) return backgroundText.error();
+    if (!family.hasValue()) return family.error();
+    if (!foregroundText.hasValue()) return foregroundText.error();
+    if (!text.hasValue()) return text.error();
+    if (!x.hasValue()) return x.error();
+    if (!y.hasValue()) return y.error();
+    std::optional<TextAlignment> alignment;
+    if (alignmentText.value() == "LEFT") alignment = TextAlignment::Left;
+    if (alignmentText.value() == "CENTER") alignment = TextAlignment::Center;
+    if (alignmentText.value() == "RIGHT") alignment = TextAlignment::Right;
+    if (!alignment.has_value()) return parseError("title alignment is unknown");
+    auto foreground = RgbaColor::parse(std::move(foregroundText).value());
+    auto background = RgbaColor::parse(std::move(backgroundText).value());
+    if (!foreground.hasValue()) return parseError(foreground.error().message());
+    if (!background.hasValue()) return parseError(background.error().message());
+    auto created = TitlePayload::create(
+        std::move(text).value(), std::move(family).value(), x.value(), y.value(),
+        foreground.value(), background.value(), *alignment);
+    if (!created.hasValue()) return parseError(created.error().message());
+    return created;
+}
+
+Result<CaptionCue> captionCue(const Json& value) {
+    if (auto exact = exactObject(
+            value, {"durationNs", "id", "startOffsetNs", "text"}, "caption cue");
+        !exact.hasValue()) return exact.error();
+    auto id = idField<CueId>(value, "id");
+    auto start = integerField(value, "startOffsetNs");
+    auto duration = integerField(value, "durationNs");
+    auto text = textField(value, "text");
+    if (!id.hasValue()) return id.error();
+    if (!start.hasValue()) return start.error();
+    if (!duration.hasValue()) return duration.error();
+    if (!text.hasValue()) return text.error();
+    auto created = CaptionCue::create(
+        std::move(id).value(), DurationNs{start.value()},
+        DurationNs{duration.value()}, std::move(text).value());
+    if (!created.hasValue()) return parseError(created.error().message());
+    return created;
+}
+
+Result<Clip> generatedClip(const Json& value) {
+    if (auto exact = exactObject(
+            value, {"captionCues", "clipKind", "enabled", "id",
+                    "sourceDurationNs", "sourceStartNs", "timelineDurationNs",
+                    "timelineStartNs", "title", "visual"}, "generated clip");
+        !exact.hasValue()) return exact.error();
+    auto id = idField<ClipId>(value, "id");
+    auto kind = textField(value, "clipKind");
+    auto sourceStart = integerField(value, "sourceStartNs");
+    auto sourceDuration = integerField(value, "sourceDurationNs");
+    auto timelineStart = integerField(value, "timelineStartNs");
+    auto timelineDuration = integerField(value, "timelineDurationNs");
+    auto enabled = boolField(value, "enabled");
+    auto parsedVisual = visual(value.at("visual"));
+    if (!id.hasValue()) return id.error();
+    if (!kind.hasValue()) return kind.error();
+    if (!sourceStart.hasValue()) return sourceStart.error();
+    if (!sourceDuration.hasValue()) return sourceDuration.error();
+    if (!timelineStart.hasValue()) return timelineStart.error();
+    if (!timelineDuration.hasValue()) return timelineDuration.error();
+    if (!enabled.hasValue()) return enabled.error();
+    if (!parsedVisual.hasValue()) return parsedVisual.error();
+    if (sourceStart.value() != 0 ||
+        sourceDuration.value() != timelineDuration.value()) {
+        return parseError("generated clip source range is not canonical");
+    }
+    auto range = TimeRange::create(
+        TimestampNs{DurationNs{timelineStart.value()}},
+        DurationNs{timelineDuration.value()});
+    if (!range.hasValue()) return parseError(range.error().message());
+    const auto& cuesJson = value.at("captionCues");
+    if (!cuesJson.is_array()) return parseError("captionCues is not an array");
+    std::vector<CaptionCue> cues;
+    for (const auto& item : cuesJson) {
+        auto cue = captionCue(item);
+        if (!cue.hasValue()) return cue.error();
+        cues.push_back(std::move(cue).value());
+    }
+    if (kind.value() == "TITLE") {
+        if (!cues.empty() || value.at("title").is_null()) {
+            return parseError("title clip payload is contradictory");
+        }
+        auto title = titlePayload(value.at("title"));
+        if (!title.hasValue()) return title.error();
+        auto created = Clip::createTitle(
+            std::move(id).value(), range.value(), enabled.value(),
+            std::move(title).value(), std::move(parsedVisual).value());
+        if (!created.hasValue()) return parseError(created.error().message());
+        return created;
+    }
+    if (kind.value() == "CAPTION") {
+        if (!value.at("title").is_null()) {
+            return parseError("caption clip has a title payload");
+        }
+        auto created = Clip::createCaption(
+            std::move(id).value(), range.value(), enabled.value(),
+            std::move(cues), std::move(parsedVisual).value());
+        if (!created.hasValue()) return parseError(created.error().message());
+        return created;
+    }
+    return parseError("generated clip kind is unknown");
+}
+
 Result<Clip> clip(const Json& value,
                   const EditCommandCodec::AssetLoader& assetLoader) {
+    if (value.is_object() && value.contains("clipKind")) {
+        return generatedClip(value);
+    }
     if (auto exact = exactObject(
             value,
             {"assetId", "audio", "enabled", "id", "mediaKind",
@@ -340,6 +475,253 @@ Result<std::unique_ptr<domain::IEditCommand>> EditCommandCodec::decode(
                 edge.value() == "LEADING" ? TrimEdge::Leading : TrimEdge::Trailing,
                 trimAt,
                 std::move(original).value(), applied);
+        }
+        if (record.type == "SET_VISUAL_TRANSFORM") {
+            if (auto exact = exactObject(
+                    payload, {"clipId", "trackId", "version", "visual"},
+                    "visual transform payload"); !exact.hasValue()) {
+                return exact.error();
+            }
+            if (auto exact = exactObject(undo, {"previous"},
+                                         "visual transform undo");
+                !exact.hasValue()) return exact.error();
+            auto version = versionOne(payload);
+            auto trackId = idField<TrackId>(payload, "trackId");
+            auto clipId = idField<ClipId>(payload, "clipId");
+            auto value = visual(payload.at("visual"));
+            auto previous = visual(undo.at("previous"));
+            if (!version.hasValue()) return version.error();
+            if (!trackId.hasValue()) return trackId.error();
+            if (!clipId.hasValue()) return clipId.error();
+            if (!value.hasValue()) return value.error();
+            if (!previous.hasValue()) return previous.error();
+            return domain::SetVisualTransformCommand::rehydrate(
+                record.commandId, std::move(trackId).value(),
+                std::move(clipId).value(), std::move(value).value(),
+                std::move(previous).value(), applied);
+        }
+        if (record.type == "SET_AUDIO_ENVELOPE") {
+            if (auto exact = exactObject(
+                    payload, {"audio", "clipDurationNs", "clipId", "trackId",
+                              "version"}, "audio envelope payload");
+                !exact.hasValue()) return exact.error();
+            if (auto exact = exactObject(undo, {"previous"},
+                                         "audio envelope undo");
+                !exact.hasValue()) return exact.error();
+            auto version = versionOne(payload);
+            auto duration = integerField(payload, "clipDurationNs");
+            auto trackId = idField<TrackId>(payload, "trackId");
+            auto clipId = idField<ClipId>(payload, "clipId");
+            if (!version.hasValue()) return version.error();
+            if (!duration.hasValue()) return duration.error();
+            if (duration.value() <= 0) return parseError("clipDurationNs is not positive");
+            if (!trackId.hasValue()) return trackId.error();
+            if (!clipId.hasValue()) return clipId.error();
+            const DurationNs clipDuration{duration.value()};
+            auto value = audio(payload.at("audio"), clipDuration);
+            auto previous = audio(undo.at("previous"), clipDuration);
+            if (!value.hasValue()) return value.error();
+            if (!previous.hasValue()) return previous.error();
+            return domain::SetAudioEnvelopeCommand::rehydrate(
+                record.commandId, std::move(trackId).value(),
+                std::move(clipId).value(), std::move(value).value(),
+                std::move(previous).value(), clipDuration, applied);
+        }
+        if (record.type == "ADD_TITLE") {
+            if (auto exact = exactObject(
+                    payload, {"clip", "trackId", "trackName", "version"},
+                    "add title payload"); !exact.hasValue()) return exact.error();
+            if (auto exact = exactObject(undo, {"createdTrack"},
+                                         "add title undo");
+                !exact.hasValue()) return exact.error();
+            auto version = versionOne(payload);
+            auto trackId = idField<TrackId>(payload, "trackId");
+            auto trackName = textField(payload, "trackName");
+            auto titleClip = generatedClip(payload.at("clip"));
+            auto createdTrack = boolField(undo, "createdTrack");
+            if (!version.hasValue()) return version.error();
+            if (!trackId.hasValue()) return trackId.error();
+            if (!trackName.hasValue()) return trackName.error();
+            if (!titleClip.hasValue()) return titleClip.error();
+            if (!createdTrack.hasValue()) return createdTrack.error();
+            if (trackName.value().empty() ||
+                trackId.value().value() != "title-1" ||
+                titleClip.value().kind() != domain::ClipKind::Title) {
+                return parseError("add title stable identities are contradictory");
+            }
+            return domain::AddTitleCommand::rehydrate(
+                record.commandId, std::move(trackId).value(),
+                std::move(trackName).value(), std::move(titleClip).value(),
+                createdTrack.value(), applied);
+        }
+        if (record.type == "EDIT_TITLE") {
+            if (auto exact = exactObject(
+                    payload, {"clipId", "title", "trackId", "version"},
+                    "edit title payload"); !exact.hasValue()) return exact.error();
+            if (auto exact = exactObject(undo, {"previous"}, "edit title undo");
+                !exact.hasValue()) return exact.error();
+            auto version = versionOne(payload);
+            auto trackId = idField<TrackId>(payload, "trackId");
+            auto clipId = idField<ClipId>(payload, "clipId");
+            auto value = titlePayload(payload.at("title"));
+            auto previous = titlePayload(undo.at("previous"));
+            if (!version.hasValue()) return version.error();
+            if (!trackId.hasValue()) return trackId.error();
+            if (!clipId.hasValue()) return clipId.error();
+            if (!value.hasValue()) return value.error();
+            if (!previous.hasValue()) return previous.error();
+            if (trackId.value().value() != "title-1") {
+                return parseError("edit title track identity is not stable");
+            }
+            return domain::EditTitleCommand::rehydrate(
+                record.commandId, std::move(trackId).value(),
+                std::move(clipId).value(), std::move(value).value(),
+                std::move(previous).value(), applied);
+        }
+        if (record.type == "REMOVE_GENERATED_CLIP") {
+            if (auto exact = exactObject(
+                    payload, {"clipId", "trackId", "version"},
+                    "remove generated clip payload");
+                !exact.hasValue()) return exact.error();
+            if (auto exact = exactObject(undo, {"clip"},
+                                         "remove generated clip undo");
+                !exact.hasValue()) return exact.error();
+            auto version = versionOne(payload);
+            auto trackId = idField<TrackId>(payload, "trackId");
+            auto clipId = idField<ClipId>(payload, "clipId");
+            auto removed = generatedClip(undo.at("clip"));
+            if (!version.hasValue()) return version.error();
+            if (!trackId.hasValue()) return trackId.error();
+            if (!clipId.hasValue()) return clipId.error();
+            if (!removed.hasValue()) return removed.error();
+            if (removed.value().id() != clipId.value()) {
+                return parseError("removed generated clip identity contradicts payload");
+            }
+            const auto expectedTrack =
+                removed.value().kind() == domain::ClipKind::Title
+                    ? "title-1" : "caption-1";
+            if (trackId.value().value() != expectedTrack) {
+                return parseError("removed generated clip track contradicts kind");
+            }
+            return domain::RemoveGeneratedClipCommand::rehydrate(
+                record.commandId, std::move(trackId).value(),
+                std::move(clipId).value(), std::move(removed).value(), applied);
+        }
+        if (record.type == "ADD_CAPTION_CUE") {
+            if (auto exact = exactObject(
+                    payload, {"clipDurationNs", "clipId", "clipStartNs", "cue",
+                              "enabled", "trackId", "trackName", "version", "visual"},
+                    "add caption cue payload");
+                !exact.hasValue()) return exact.error();
+            if (auto exact = exactObject(
+                    undo, {"createdClip", "createdTrack"},
+                    "add caption cue undo"); !exact.hasValue()) return exact.error();
+            auto version = versionOne(payload);
+            auto trackId = idField<TrackId>(payload, "trackId");
+            auto trackName = textField(payload, "trackName");
+            auto clipId = idField<ClipId>(payload, "clipId");
+            auto start = integerField(payload, "clipStartNs");
+            auto duration = integerField(payload, "clipDurationNs");
+            auto enabled = boolField(payload, "enabled");
+            auto parsedVisual = visual(payload.at("visual"));
+            auto cue = captionCue(payload.at("cue"));
+            auto createdClip = boolField(undo, "createdClip");
+            auto createdTrack = boolField(undo, "createdTrack");
+            if (!version.hasValue()) return version.error();
+            if (!trackId.hasValue()) return trackId.error();
+            if (!trackName.hasValue()) return trackName.error();
+            if (!clipId.hasValue()) return clipId.error();
+            if (!start.hasValue()) return start.error();
+            if (!duration.hasValue()) return duration.error();
+            if (!enabled.hasValue()) return enabled.error();
+            if (!parsedVisual.hasValue()) return parsedVisual.error();
+            if (!cue.hasValue()) return cue.error();
+            if (!createdClip.hasValue()) return createdClip.error();
+            if (!createdTrack.hasValue()) return createdTrack.error();
+            auto range = TimeRange::create(
+                TimestampNs{DurationNs{start.value()}}, DurationNs{duration.value()});
+            if (!range.hasValue()) return parseError(range.error().message());
+            if (trackName.value().empty() ||
+                trackId.value().value() != "caption-1" ||
+                cue.value().endOffset() > range.value().duration() ||
+                (createdTrack.value() && !createdClip.value())) {
+                return parseError("add caption cue undo state contradicts payload");
+            }
+            return domain::AddCaptionCueCommand::rehydrate(
+                record.commandId, std::move(trackId).value(),
+                std::move(trackName).value(), std::move(clipId).value(),
+                range.value(), enabled.value(), std::move(parsedVisual).value(),
+                std::move(cue).value(), createdTrack.value(),
+                createdClip.value(), applied);
+        }
+        if (record.type == "EDIT_CAPTION_CUE") {
+            if (auto exact = exactObject(
+                    payload, {"clipId", "cueId", "replacement", "trackId", "version"},
+                    "edit caption cue payload"); !exact.hasValue()) return exact.error();
+            if (auto exact = exactObject(undo, {"previous"},
+                                         "edit caption cue undo");
+                !exact.hasValue()) return exact.error();
+            auto version = versionOne(payload);
+            auto trackId = idField<TrackId>(payload, "trackId");
+            auto clipId = idField<ClipId>(payload, "clipId");
+            auto cueId = idField<CueId>(payload, "cueId");
+            auto replacement = captionCue(payload.at("replacement"));
+            auto previous = captionCue(undo.at("previous"));
+            if (!version.hasValue()) return version.error();
+            if (!trackId.hasValue()) return trackId.error();
+            if (!clipId.hasValue()) return clipId.error();
+            if (!cueId.hasValue()) return cueId.error();
+            if (!replacement.hasValue()) return replacement.error();
+            if (!previous.hasValue()) return previous.error();
+            if (replacement.value().id() != cueId.value() ||
+                previous.value().id() != cueId.value() ||
+                trackId.value().value() != "caption-1") {
+                return parseError("edit caption cue identities contradict payload");
+            }
+            return domain::EditCaptionCueCommand::rehydrate(
+                record.commandId, std::move(trackId).value(),
+                std::move(clipId).value(), std::move(cueId).value(),
+                std::move(replacement).value(), std::move(previous).value(), applied);
+        }
+        if (record.type == "REMOVE_CAPTION_CUE") {
+            if (auto exact = exactObject(
+                    payload, {"clipId", "cueId", "trackId", "version"},
+                    "remove caption cue payload"); !exact.hasValue()) return exact.error();
+            if (auto exact = exactObject(
+                    undo, {"previous", "removedClip"},
+                    "remove caption cue undo"); !exact.hasValue()) return exact.error();
+            auto version = versionOne(payload);
+            auto trackId = idField<TrackId>(payload, "trackId");
+            auto clipId = idField<ClipId>(payload, "clipId");
+            auto cueId = idField<CueId>(payload, "cueId");
+            auto previous = captionCue(undo.at("previous"));
+            if (!version.hasValue()) return version.error();
+            if (!trackId.hasValue()) return trackId.error();
+            if (!clipId.hasValue()) return clipId.error();
+            if (!cueId.hasValue()) return cueId.error();
+            if (!previous.hasValue()) return previous.error();
+            if (previous.value().id() != cueId.value()) {
+                return parseError("removed caption cue identity contradicts payload");
+            }
+            if (trackId.value().value() != "caption-1") {
+                return parseError("remove caption cue track identity is not stable");
+            }
+            std::optional<Clip> removedClip;
+            if (!undo.at("removedClip").is_null()) {
+                auto parsed = generatedClip(undo.at("removedClip"));
+                if (!parsed.hasValue()) return parsed.error();
+                if (parsed.value().id() != clipId.value() ||
+                    parsed.value().kind() != domain::ClipKind::Caption ||
+                    parsed.value().captionCues().size() != 1 ||
+                    parsed.value().captionCues().front() != previous.value()) {
+                    return parseError("removed caption clip contradicts cue payload");
+                }
+                removedClip = std::move(parsed).value();
+            }
+            return domain::RemoveCaptionCueCommand::rehydrate(
+                record.commandId, std::move(trackId).value(),
+                std::move(clipId).value(), std::move(cueId).value(),
+                std::move(previous).value(), std::move(removedClip), applied);
         }
         if (record.type == "DELETE_RANGE") {
             if (auto exact = exactObject(

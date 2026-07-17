@@ -28,16 +28,21 @@ using domain::AudioEnvelope;
 using domain::Clip;
 using domain::ClipKind;
 using domain::ClipId;
+using domain::CaptionCue;
 using domain::CommandId;
+using domain::CueId;
 using domain::MediaAsset;
 using domain::MediaKind;
 using domain::ProjectId;
+using domain::RgbaColor;
+using domain::TextAlignment;
 using domain::TimeRange;
 using domain::Timeline;
 using domain::TimelineId;
 using domain::Track;
 using domain::TrackId;
 using domain::TrackKind;
+using domain::TitlePayload;
 using domain::VideoAssetMetadata;
 using domain::VisualTransform;
 using internal::SqliteConnection;
@@ -268,6 +273,87 @@ Result<std::optional<AudioEnvelope>> loadAudioEnvelope(
     return std::optional<AudioEnvelope>{std::move(value).value()};
 }
 
+Result<TitlePayload> loadTitlePayload(
+    SqliteConnection& connection, const ClipId& clipId) {
+    auto prepared = connection.prepare(
+        "SELECT text,font_family,x,y,foreground_rgba,background_rgba,alignment "
+        "FROM titles WHERE clip_id=?1");
+    if (!prepared.hasValue()) return prepared.error();
+    auto statement = std::move(prepared).value();
+    if (auto bound = statement.bindText(1, clipId.value()); !bound.hasValue()) {
+        return bound.error();
+    }
+    auto row = statement.step();
+    if (!row.hasValue()) return row.error();
+    if (row.value() != SqliteStep::Row) return corrupt("title payload is missing");
+    auto foreground = RgbaColor::parse(statement.columnText(4));
+    auto background = RgbaColor::parse(statement.columnText(5));
+    if (!foreground.hasValue() || !background.hasValue()) {
+        return corrupt("title color is invalid");
+    }
+    const auto alignmentText = statement.columnText(6);
+    std::optional<TextAlignment> alignment;
+    if (alignmentText == "LEFT") alignment = TextAlignment::Left;
+    if (alignmentText == "CENTER") alignment = TextAlignment::Center;
+    if (alignmentText == "RIGHT") alignment = TextAlignment::Right;
+    if (!alignment.has_value()) return corrupt("title alignment is invalid");
+    auto title = TitlePayload::create(
+        statement.columnText(0), statement.columnText(1),
+        statement.columnDouble(2), statement.columnDouble(3),
+        foreground.value(), background.value(), *alignment);
+    if (!title.hasValue()) return corrupt(title.error().message());
+    auto end = statement.step();
+    if (!end.hasValue()) return end.error();
+    if (end.value() != SqliteStep::Done) return corrupt("duplicate title payload");
+    return title;
+}
+
+Result<std::vector<CaptionCue>> loadCaptionCues(
+    SqliteConnection& connection, const ClipId& clipId) {
+    auto prepared = connection.prepare(
+        "SELECT cue_id,start_offset_ns,duration_ns,text FROM caption_cues "
+        "WHERE clip_id=?1 ORDER BY start_offset_ns,cue_id");
+    if (!prepared.hasValue()) return prepared.error();
+    auto statement = std::move(prepared).value();
+    if (auto bound = statement.bindText(1, clipId.value()); !bound.hasValue()) {
+        return bound.error();
+    }
+    std::vector<CaptionCue> cues;
+    while (true) {
+        auto row = statement.step();
+        if (!row.hasValue()) return row.error();
+        if (row.value() == SqliteStep::Done) break;
+        auto cueId = CueId::create(statement.columnText(0));
+        if (!cueId.hasValue()) return corrupt("caption cue id is empty");
+        auto cue = CaptionCue::create(
+            std::move(cueId).value(), DurationNs{statement.columnInt64(1)},
+            DurationNs{statement.columnInt64(2)}, statement.columnText(3));
+        if (!cue.hasValue()) return corrupt(cue.error().message());
+        cues.push_back(std::move(cue).value());
+    }
+    if (cues.empty()) return corrupt("caption clip has no cues");
+    return cues;
+}
+
+Result<bool> hasRowsForClip(SqliteConnection& connection,
+                            std::string_view table,
+                            const ClipId& clipId) {
+    if (table != "titles" && table != "caption_cues") {
+        return AppError{ErrorCode::InvalidArgument,
+                        "payload table is not allowlisted"};
+    }
+    auto prepared = connection.prepare(
+        "SELECT 1 FROM " + std::string{table} + " WHERE clip_id=?1 LIMIT 1");
+    if (!prepared.hasValue()) return prepared.error();
+    auto statement = std::move(prepared).value();
+    if (auto bound = statement.bindText(1, clipId.value()); !bound.hasValue()) {
+        return bound.error();
+    }
+    auto row = statement.step();
+    if (!row.hasValue()) return row.error();
+    return row.value() == SqliteStep::Row;
+}
+
 Result<void> bindNullableInt64(SqliteStatement& statement, int index,
                                std::optional<std::int64_t> value) {
     return value.has_value() ? statement.bindInt64(index, *value)
@@ -452,25 +538,31 @@ Result<void> SqliteTimelineStore::writeSnapshot(const Timeline& timeline) {
         if (auto r = expectDone(trackStatement, "insert timeline track"); !r.hasValue()) return r.error();
 
         for (const auto& clip : track.clips()) {
-            if (clip.kind() != ClipKind::Asset || !clip.assetId().has_value()) {
-                return AppError{ErrorCode::UnsupportedVersion,
-                                "generated clips are not available in R1-01"};
-            }
             auto insertedClip = connection_.prepare(
                 "INSERT INTO clips(clip_id,track_id,clip_kind,asset_id,media_kind,"
                 "source_start_ns,source_duration_ns,timeline_start_ns,"
-                "timeline_duration_ns,enabled) VALUES(?1,?2,'ASSET',?3,?4,?5,?6,?7,?8,?9)");
+                "timeline_duration_ns,enabled) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)");
             if (!insertedClip.hasValue()) return insertedClip.error();
             auto clipStatement = std::move(insertedClip).value();
             if (auto r = clipStatement.bindText(1, clip.id().value()); !r.hasValue()) return r.error();
             if (auto r = clipStatement.bindText(2, track.id().value()); !r.hasValue()) return r.error();
-            if (auto r = clipStatement.bindText(3, clip.assetId()->value()); !r.hasValue()) return r.error();
-            if (auto r = clipStatement.bindText(4, mediaKindText(clip.mediaKind())); !r.hasValue()) return r.error();
-            if (auto r = clipStatement.bindInt64(5, clip.sourceRange().start().time_since_epoch().count()); !r.hasValue()) return r.error();
-            if (auto r = clipStatement.bindInt64(6, clip.sourceRange().duration().count()); !r.hasValue()) return r.error();
-            if (auto r = clipStatement.bindInt64(7, clip.timelineRange().start().time_since_epoch().count()); !r.hasValue()) return r.error();
-            if (auto r = clipStatement.bindInt64(8, clip.timelineRange().duration().count()); !r.hasValue()) return r.error();
-            if (auto r = clipStatement.bindInt64(9, clip.enabled() ? 1 : 0); !r.hasValue()) return r.error();
+            const auto clipKind = clip.kind() == ClipKind::Asset
+                                      ? "ASSET"
+                                      : (clip.kind() == ClipKind::Title
+                                             ? "TITLE" : "CAPTION");
+            if (auto r = clipStatement.bindText(3, clipKind); !r.hasValue()) return r.error();
+            if (clip.kind() == ClipKind::Asset && clip.assetId().has_value()) {
+                if (auto r = clipStatement.bindText(4, clip.assetId()->value()); !r.hasValue()) return r.error();
+                if (auto r = clipStatement.bindText(5, mediaKindText(clip.mediaKind())); !r.hasValue()) return r.error();
+            } else {
+                if (auto r = clipStatement.bindNull(4); !r.hasValue()) return r.error();
+                if (auto r = clipStatement.bindNull(5); !r.hasValue()) return r.error();
+            }
+            if (auto r = clipStatement.bindInt64(6, clip.sourceRange().start().time_since_epoch().count()); !r.hasValue()) return r.error();
+            if (auto r = clipStatement.bindInt64(7, clip.sourceRange().duration().count()); !r.hasValue()) return r.error();
+            if (auto r = clipStatement.bindInt64(8, clip.timelineRange().start().time_since_epoch().count()); !r.hasValue()) return r.error();
+            if (auto r = clipStatement.bindInt64(9, clip.timelineRange().duration().count()); !r.hasValue()) return r.error();
+            if (auto r = clipStatement.bindInt64(10, clip.enabled() ? 1 : 0); !r.hasValue()) return r.error();
             if (auto r = expectDone(clipStatement, "insert timeline clip"); !r.hasValue()) return r.error();
 
             if (clip.visualTransform().has_value()) {
@@ -505,6 +597,42 @@ Result<void> SqliteTimelineStore::writeSnapshot(const Timeline& timeline) {
                 if (auto r = statement.bindInt64(4, a.fadeOut().count()); !r.hasValue()) return r.error();
                 if (auto r = statement.bindInt64(5, clip.timelineRange().duration().count()); !r.hasValue()) return r.error();
                 if (auto r = expectDone(statement, "insert audio envelope"); !r.hasValue()) return r.error();
+            }
+            if (clip.kind() == ClipKind::Title && clip.titlePayload().has_value()) {
+                const auto& title = *clip.titlePayload();
+                auto inserted = connection_.prepare(
+                    "INSERT INTO titles(clip_id,text,font_family,x,y,foreground_rgba,"
+                    "background_rgba,alignment) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)");
+                if (!inserted.hasValue()) return inserted.error();
+                auto statement = std::move(inserted).value();
+                if (auto r = statement.bindText(1, clip.id().value()); !r.hasValue()) return r.error();
+                if (auto r = statement.bindText(2, title.text()); !r.hasValue()) return r.error();
+                if (auto r = statement.bindText(3, title.fontFamily()); !r.hasValue()) return r.error();
+                if (auto r = statement.bindDouble(4, title.x()); !r.hasValue()) return r.error();
+                if (auto r = statement.bindDouble(5, title.y()); !r.hasValue()) return r.error();
+                if (auto r = statement.bindText(6, title.foreground().toString()); !r.hasValue()) return r.error();
+                if (auto r = statement.bindText(7, title.background().toString()); !r.hasValue()) return r.error();
+                const auto alignment = title.alignment() == TextAlignment::Left
+                                           ? "LEFT"
+                                           : (title.alignment() == TextAlignment::Center
+                                                  ? "CENTER" : "RIGHT");
+                if (auto r = statement.bindText(8, alignment); !r.hasValue()) return r.error();
+                if (auto r = expectDone(statement, "insert title payload"); !r.hasValue()) return r.error();
+            }
+            if (clip.kind() == ClipKind::Caption) {
+                for (const auto& cue : clip.captionCues()) {
+                    auto inserted = connection_.prepare(
+                        "INSERT INTO caption_cues(cue_id,clip_id,start_offset_ns,"
+                        "duration_ns,text) VALUES(?1,?2,?3,?4,?5)");
+                    if (!inserted.hasValue()) return inserted.error();
+                    auto statement = std::move(inserted).value();
+                    if (auto r = statement.bindText(1, cue.id().value()); !r.hasValue()) return r.error();
+                    if (auto r = statement.bindText(2, clip.id().value()); !r.hasValue()) return r.error();
+                    if (auto r = statement.bindInt64(3, cue.startOffset().count()); !r.hasValue()) return r.error();
+                    if (auto r = statement.bindInt64(4, cue.duration().count()); !r.hasValue()) return r.error();
+                    if (auto r = statement.bindText(5, cue.text()); !r.hasValue()) return r.error();
+                    if (auto r = expectDone(statement, "insert caption cue"); !r.hasValue()) return r.error();
+                }
             }
         }
     }
@@ -603,20 +731,8 @@ Result<PersistedTimeline> SqliteTimelineStore::loadPrimaryTimeline() {
             auto clipRow = clipStatement.step();
             if (!clipRow.hasValue()) return clipRow.error();
             if (clipRow.value() == SqliteStep::Done) break;
-            if (clipStatement.columnText(1) != "ASSET") {
-                return AppError{ErrorCode::UnsupportedVersion,
-                                "generated clips are not available in R1-01"};
-            }
             auto clipId = ClipId::create(clipStatement.columnText(0));
-            auto assetId = AssetId::create(clipStatement.columnText(2));
-            if (!clipId.hasValue() || !assetId.hasValue()) return corrupt("clip identity is empty");
-            auto mediaKind = parseMediaKind(clipStatement.columnText(3));
-            if (!mediaKind.hasValue()) return mediaKind.error();
-            auto mediaAsset = asset(assetId.value());
-            if (!mediaAsset.hasValue()) return corrupt("clip asset is missing");
-            if (mediaAsset.value().kind() != mediaKind.value()) {
-                return corrupt("clip media kind differs from asset");
-            }
+            if (!clipId.hasValue()) return corrupt("clip identity is empty");
             auto source = TimeRange::create(
                 TimestampNs{DurationNs{clipStatement.columnInt64(4)}},
                 DurationNs{clipStatement.columnInt64(5)});
@@ -628,11 +744,81 @@ Result<PersistedTimeline> SqliteTimelineStore::loadPrimaryTimeline() {
             if (!clipEnabled.hasValue()) return clipEnabled.error();
             auto visual = loadVisual(connection_, clipId.value());
             if (!visual.hasValue()) return visual.error();
-            auto envelope = loadAudioEnvelope(connection_, clipId.value(), placed.value().duration());
-            if (!envelope.hasValue()) return envelope.error();
-            auto clip = Clip::createAsset(
-                std::move(clipId).value(), mediaAsset.value(), source.value(), placed.value(),
-                clipEnabled.value(), std::move(visual).value(), std::move(envelope).value());
+            const auto clipKind = clipStatement.columnText(1);
+            Result<Clip> clip = corrupt("unknown clip kind");
+            if (clipKind == "ASSET") {
+                if (clipStatement.columnIsNull(2) ||
+                    clipStatement.columnIsNull(3)) {
+                    return corrupt("asset clip is missing asset metadata");
+                }
+                auto assetId = AssetId::create(clipStatement.columnText(2));
+                if (!assetId.hasValue()) return corrupt("asset clip id is empty");
+                auto mediaKind = parseMediaKind(clipStatement.columnText(3));
+                if (!mediaKind.hasValue()) return mediaKind.error();
+                auto mediaAsset = asset(assetId.value());
+                if (!mediaAsset.hasValue()) return corrupt("clip asset is missing");
+                if (mediaAsset.value().kind() != mediaKind.value()) {
+                    return corrupt("clip media kind differs from asset");
+                }
+                auto titleRows = hasRowsForClip(connection_, "titles", clipId.value());
+                auto cueRows = hasRowsForClip(connection_, "caption_cues", clipId.value());
+                if (!titleRows.hasValue()) return titleRows.error();
+                if (!cueRows.hasValue()) return cueRows.error();
+                if (titleRows.value() || cueRows.value()) {
+                    return corrupt("asset clip has generated payload rows");
+                }
+                auto envelope = loadAudioEnvelope(
+                    connection_, clipId.value(), placed.value().duration());
+                if (!envelope.hasValue()) return envelope.error();
+                clip = Clip::createAsset(
+                    clipId.value(), mediaAsset.value(), source.value(),
+                    placed.value(), clipEnabled.value(), visual.value(),
+                    envelope.value());
+            } else if (clipKind == "TITLE") {
+                if (!clipStatement.columnIsNull(2) ||
+                    !clipStatement.columnIsNull(3) ||
+                    source.value().start() != TimestampNs{} ||
+                    source.value().duration() != placed.value().duration()) {
+                    return corrupt("title clip storage fields are contradictory");
+                }
+                auto cueRows = hasRowsForClip(
+                    connection_, "caption_cues", clipId.value());
+                if (!cueRows.hasValue()) return cueRows.error();
+                if (cueRows.value()) return corrupt("title clip has caption cues");
+                auto title = loadTitlePayload(connection_, clipId.value());
+                if (!title.hasValue()) return title.error();
+                auto envelope = loadAudioEnvelope(
+                    connection_, clipId.value(), placed.value().duration());
+                if (!envelope.hasValue()) return envelope.error();
+                if (envelope.value().has_value()) {
+                    return corrupt("title clip has an audio envelope");
+                }
+                clip = Clip::createTitle(
+                    clipId.value(), placed.value(), clipEnabled.value(),
+                    title.value(), visual.value());
+            } else if (clipKind == "CAPTION") {
+                if (!clipStatement.columnIsNull(2) ||
+                    !clipStatement.columnIsNull(3) ||
+                    source.value().start() != TimestampNs{} ||
+                    source.value().duration() != placed.value().duration()) {
+                    return corrupt("caption clip storage fields are contradictory");
+                }
+                auto titleRows = hasRowsForClip(
+                    connection_, "titles", clipId.value());
+                if (!titleRows.hasValue()) return titleRows.error();
+                if (titleRows.value()) return corrupt("caption clip has a title payload");
+                auto cues = loadCaptionCues(connection_, clipId.value());
+                if (!cues.hasValue()) return cues.error();
+                auto envelope = loadAudioEnvelope(
+                    connection_, clipId.value(), placed.value().duration());
+                if (!envelope.hasValue()) return envelope.error();
+                if (envelope.value().has_value()) {
+                    return corrupt("caption clip has an audio envelope");
+                }
+                clip = Clip::createCaption(
+                    clipId.value(), placed.value(), clipEnabled.value(),
+                    std::move(cues).value(), visual.value());
+            }
             if (!clip.hasValue()) return corrupt(clip.error().message());
             if (auto inserted = timeline.insertClip(persistedId, std::move(clip).value());
                 !inserted.hasValue()) {

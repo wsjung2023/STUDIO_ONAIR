@@ -9,6 +9,7 @@
 #include "domain/MediaAsset.h"
 #include "domain/ProjectManifest.h"
 #include "domain/SplitClipCommand.h"
+#include "domain/SetVisualTransformCommand.h"
 #include "domain/Timeline.h"
 #include "domain/TimelineTypes.h"
 #include "project_store/ITimelineStore.h"
@@ -41,20 +42,26 @@ using creator::domain::AudioAssetMetadata;
 using creator::domain::AudioEnvelope;
 using creator::domain::Clip;
 using creator::domain::ClipId;
+using creator::domain::CaptionCue;
 using creator::domain::CommandId;
+using creator::domain::CueId;
 using creator::domain::DeleteRangeCommand;
 using creator::domain::EditCommandRecord;
 using creator::domain::MediaAsset;
 using creator::domain::MediaKind;
 using creator::domain::ProjectId;
 using creator::domain::ProjectManifest;
+using creator::domain::RgbaColor;
 using creator::domain::SplitClipCommand;
+using creator::domain::SetVisualTransformCommand;
 using creator::domain::TimeRange;
+using creator::domain::TextAlignment;
 using creator::domain::Timeline;
 using creator::domain::TimelineId;
 using creator::domain::Track;
 using creator::domain::TrackId;
 using creator::domain::TrackKind;
+using creator::domain::TitlePayload;
 using creator::domain::VideoAssetMetadata;
 using creator::domain::VisualTransform;
 using creator::project_store::EditEventKind;
@@ -150,6 +157,42 @@ Timeline populatedTimeline() {
                                     .value())
                                 .value())
                     .hasValue());
+    return timeline;
+}
+
+Timeline generatedTimeline() {
+    auto timeline = populatedTimeline();
+    const auto titleTrack = TrackId::create("title-1").value();
+    const auto captionTrack = TrackId::create("caption-1").value();
+    EXPECT_TRUE(timeline.addTrack(
+        Track::create(titleTrack, TrackKind::Title,
+                      "제목", true, false).value()).hasValue());
+    EXPECT_TRUE(timeline.addTrack(
+        Track::create(captionTrack, TrackKind::Caption,
+                      "자막", true, false).value()).hasValue());
+    const auto foreground = RgbaColor::parse("#ffffffff").value();
+    const auto background = RgbaColor::parse("#00000080").value();
+    EXPECT_TRUE(timeline.insertClip(
+        titleTrack, Clip::createTitle(
+            ClipId::create("title-clip").value(),
+            TimeRange::create(at(100), DurationNs{300}).value(), true,
+            TitlePayload::create("한글 제목", "Malgun Gothic", 0.5, 0.9,
+                                 foreground, background,
+                                 TextAlignment::Center).value(),
+            VisualTransform::create(
+                0.1, 0.1, 0.8, 0.8, 1.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.9, 5).value()).value()).hasValue());
+    EXPECT_TRUE(timeline.insertClip(
+        captionTrack, Clip::createCaption(
+            ClipId::create("caption-clip").value(),
+            TimeRange::create(at(200), DurationNs{400}).value(), true,
+            {CaptionCue::create(CueId::create("cue-1").value(),
+                                DurationNs{0}, DurationNs{100},
+                                "첫 번째 자막").value(),
+             CaptionCue::create(CueId::create("cue-2").value(),
+                                DurationNs{150}, DurationNs{200},
+                                "두 번째 자막").value()},
+            std::nullopt).value()).hasValue());
     return timeline;
 }
 
@@ -281,6 +324,95 @@ TEST_F(SqliteTimelineStoreTest, RoundTripsMultitrackSnapshotAcrossReopen) {
     ASSERT_TRUE(loaded.value().cleanCursor.has_value());
     EXPECT_EQ(*loaded.value().cleanCursor, 0U);
     EXPECT_TRUE(loaded.value().events.empty());
+}
+
+TEST_F(SqliteTimelineStoreTest, RoundTripsGeneratedUnicodeClipsAcrossReopen) {
+    const auto expected = generatedTimeline();
+    {
+        auto timelineStore = store();
+        ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+        ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+        ASSERT_TRUE(timelineStore.createTimeline(expected).hasValue());
+    }
+
+    auto reopened = store();
+    const auto loaded = reopened.loadPrimaryTimeline();
+
+    ASSERT_TRUE(loaded.hasValue()) << loaded.error().message();
+    EXPECT_EQ(loaded.value().timeline, expected);
+    EXPECT_EQ(loaded.value().revision, 0);
+}
+
+TEST_F(SqliteTimelineStoreTest, RejectsMissingGeneratedPayloadAcrossReopen) {
+    auto timelineStore = store();
+    ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.createTimeline(generatedTimeline()).hasValue());
+    auto rawResult = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(rawResult.hasValue());
+    auto raw = std::move(rawResult).value();
+    ASSERT_TRUE(raw.execute(
+        "DELETE FROM titles WHERE clip_id='title-clip';").hasValue());
+
+    const auto loaded = timelineStore.loadPrimaryTimeline();
+
+    ASSERT_FALSE(loaded.hasValue());
+    EXPECT_EQ(loaded.error().code(), ErrorCode::IoFailure);
+}
+
+TEST_F(SqliteTimelineStoreTest, RejectsOverlappingPersistedCaptionCues) {
+    auto timelineStore = store();
+    ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.createTimeline(generatedTimeline()).hasValue());
+    auto rawResult = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(rawResult.hasValue());
+    auto raw = std::move(rawResult).value();
+    ASSERT_TRUE(raw.execute(
+        "UPDATE caption_cues SET start_offset_ns=50 WHERE cue_id='cue-2';")
+                    .hasValue());
+
+    const auto loaded = timelineStore.loadPrimaryTimeline();
+
+    ASSERT_FALSE(loaded.hasValue());
+    EXPECT_EQ(loaded.error().code(), ErrorCode::IoFailure);
+}
+
+TEST_F(SqliteTimelineStoreTest, RejectsFutureEffectCommandVersion) {
+    auto timelineStore = store();
+    ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+    auto snapshot = populatedTimeline();
+    ASSERT_TRUE(timelineStore.createTimeline(snapshot).hasValue());
+    SetVisualTransformCommand command{
+        CommandId::create("future-effect").value(), TrackId::create("v1").value(),
+        ClipId::create("video-clip").value(),
+        VisualTransform::create(
+            0.2, 0.2, 0.5, 0.5, 1.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 1.0, 3).value()};
+    ASSERT_TRUE(command.execute(snapshot).hasValue());
+    auto record = command.record();
+    const auto version = record.payload.find("\"version\":1");
+    ASSERT_NE(version, std::string::npos);
+    record.payload.replace(version, std::string{"\"version\":1"}.size(),
+                           "\"version\":2");
+    ASSERT_TRUE(timelineStore.commitEdit(
+        TimelineCommit{
+            .snapshot = snapshot,
+            .expectedRevision = 0,
+            .event = EditEventRecord{
+                .eventId = "future-effect-event",
+                .kind = EditEventKind::Apply,
+                .command = std::move(record),
+                .createdAt = utc("2026-07-17T00:00:01Z")},
+            .historyCount = 1,
+            .historyCursor = 1,
+            .cleanCursor = std::size_t{0}}).hasValue());
+
+    const auto history = timelineStore.loadEditHistory(100);
+
+    ASSERT_FALSE(history.hasValue());
+    EXPECT_EQ(history.error().code(), ErrorCode::ParseFailure);
 }
 
 TEST_F(SqliteTimelineStoreTest, CommitsSnapshotEventAndCursorAtomically) {
