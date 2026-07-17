@@ -45,6 +45,7 @@ add_executable(cs_tests
     domain/DeleteRangeCommandTest.cpp
     edit_engine/EditEngineTypesTest.cpp
     mlt_adapter/MltGraphPlanTest.cpp
+    mlt_adapter/FrameEffectsTest.cpp
     domain/ProjectManifestTest.cpp
     domain/RecordingSessionTest.cpp
     media/MediaTypesTest.cpp
