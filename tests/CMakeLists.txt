@@ -299,6 +299,7 @@ if(CS_ENABLE_MLT)
     add_executable(cs_mlt_tests
         mlt_adapter/ExportEncoderProbeTest.cpp
         mlt_adapter/MltEditEngineTest.cpp
+        mlt_adapter/MltRenderJobTest.cpp
         mlt_adapter/MltRuntimeManifestTest.cpp
     )
     target_link_libraries(cs_mlt_tests PRIVATE

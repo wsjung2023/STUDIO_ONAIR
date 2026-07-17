@@ -1,10 +1,15 @@
 #include "mlt_adapter/MltEditEngine.h"
 
 #include "core/AppError.h"
+#include "core/Uuid.h"
+#include "ffmpeg_adapter/FfmpegMediaProbe.h"
+#include "mlt_adapter/ExportEncoderProbe.h"
 #include "mlt_adapter/FrameEffects.h"
 #include "mlt_adapter/MltGraphPlan.h"
+#include "mlt_adapter/MltRenderJob.h"
 #include "mlt_adapter/MltRuntimeManifest.h"
 
+#include <mlt++/MltConsumer.h>
 #include <mlt++/MltFactory.h>
 #include <mlt++/MltFilter.h>
 #include <mlt++/MltFrame.h>
@@ -23,6 +28,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cctype>
 #include <cstdlib>
 #include <limits>
@@ -30,6 +36,7 @@
 #include <new>
 #include <optional>
 #include <string>
+#include <thread>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -46,6 +53,57 @@ constexpr std::uint32_t kMaximumPreviewDimension = 8192;
 
 core::AppError stateError(std::string message) {
     return core::AppError{core::ErrorCode::InvalidState, std::move(message)};
+}
+
+core::AppError ioError(std::string message) {
+    return core::AppError{core::ErrorCode::IoFailure, std::move(message)};
+}
+
+class PartialArtifact final {
+public:
+    explicit PartialArtifact(std::filesystem::path path)
+        : path_(std::move(path)) {}
+    ~PartialArtifact() {
+        if (!published_) {
+            std::error_code ignored;
+            std::filesystem::remove(path_, ignored);
+        }
+    }
+    void published() noexcept { published_ = true; }
+
+private:
+    std::filesystem::path path_;
+    bool published_{};
+};
+
+core::Result<void> publishAtomically(
+    const std::filesystem::path& partial,
+    const std::filesystem::path& destination,
+    edit_engine::RenderOverwritePolicy overwritePolicy) {
+#ifdef _WIN32
+    DWORD flags = MOVEFILE_WRITE_THROUGH;
+    if (overwritePolicy == edit_engine::RenderOverwritePolicy::ReplaceExisting) {
+        flags |= MOVEFILE_REPLACE_EXISTING;
+    }
+    if (!MoveFileExW(partial.c_str(), destination.c_str(), flags)) {
+        const DWORD error = GetLastError();
+        if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS) {
+            return core::AppError{core::ErrorCode::AlreadyExists,
+                                  "export destination already exists"};
+        }
+        return ioError("export artifact could not be atomically published");
+    }
+#else
+    std::error_code error;
+    if (overwritePolicy == edit_engine::RenderOverwritePolicy::FailIfExists &&
+        std::filesystem::exists(destination, error)) {
+        return core::AppError{core::ErrorCode::AlreadyExists,
+                              "export destination already exists"};
+    }
+    std::filesystem::rename(partial, destination, error);
+    if (error) return ioError("export artifact could not be atomically published");
+#endif
+    return core::ok();
 }
 
 std::string utf8Path(const std::filesystem::path& path) {
@@ -687,11 +745,31 @@ class MltEditEngine::Impl final {
             }
         }
 
+        if (!audioBaseTrackIndex.has_value()) {
+            const int silentTrackIndex = trackIndex++;
+            auto silence = std::make_unique<Mlt::Producer>(
+                *graph->profile, "blank");
+            auto silentTrack =
+                std::make_unique<Mlt::Playlist>(*graph->profile);
+            silentTrack->set("hide", 1);
+            if (!silence->is_valid() ||
+                silentTrack->append(
+                    *silence, 0,
+                    static_cast<int>(graphDurationFrames) - 1) != 0 ||
+                graph->tractor->set_track(*silentTrack, silentTrackIndex) != 0) {
+                return stateError("MLT could not create the silent audio bed");
+            }
+            audioBaseTrackIndex = silentTrackIndex;
+            graph->producers.push_back(std::move(silence));
+            graph->playlists.push_back(std::move(silentTrack));
+        }
+
         const int backgroundTrackIndex = trackIndex++;
         auto background = std::make_unique<Mlt::Producer>(
             *graph->profile, "colour", "black");
         auto backgroundTrack =
             std::make_unique<Mlt::Playlist>(*graph->profile);
+        backgroundTrack->set("hide", 2);
         if (!background->is_valid() ||
             backgroundTrack->append(
                 *background, 0,
@@ -1117,10 +1195,163 @@ core::Result<std::vector<float>> MltEditEngine::requestMixedAudio(
     return stateError("MLT returned an unsupported mixed audio format");
 }
 
+core::Result<void> MltEditEngine::renderFrozen(
+    const edit_engine::RenderRequest& request, std::stop_token stopToken,
+    const std::function<bool(edit_engine::RenderJobState, double,
+                             core::TimestampNs)>& report) {
+    const auto probeRoot = std::filesystem::temp_directory_path() /
+                           ("creator-studio-export-preflight-" +
+                            core::generateUuidV4());
+    struct ProbeCleanup final {
+        std::filesystem::path path;
+        ~ProbeCleanup() {
+            std::error_code ignored;
+            std::filesystem::remove_all(path, ignored);
+        }
+    } probeCleanup{probeRoot};
+    auto encoder = ExportEncoderProbe::probe(
+        impl_->config_.runtimeRoot, probeRoot, request.preset());
+    if (!encoder.hasValue()) return encoder.error();
+    if (stopToken.stop_requested()) {
+        return stateError("export cancelled during encoder preflight");
+    }
+
+    auto loaded = load(request.snapshot());
+    if (!loaded.hasValue()) return loaded;
+    if (!impl_->graph_ || !impl_->graph_->profile || !impl_->graph_->tractor) {
+        return stateError("independent export graph was not constructed");
+    }
+
+    const auto partial = request.destination().parent_path() /
+                         (".creator-studio-" + core::generateUuidV4() +
+                          ".partial.mp4");
+    PartialArtifact artifact{partial};
+    const auto encodedPartial = utf8Path(partial);
+    {
+        Mlt::Consumer consumer(*impl_->graph_->profile, "avformat",
+                               encodedPartial.c_str());
+        if (!consumer.is_valid()) {
+            return stateError("MLT avformat export consumer is unavailable");
+        }
+        const auto& selected = encoder.value().selected;
+        consumer.set("real_time", -1);
+        consumer.set("terminate_on_pause", 1);
+        consumer.set("f", "mp4");
+        consumer.set("vcodec", selected.videoCodec.c_str());
+        consumer.set("acodec", encoder.value().audioCodec.c_str());
+        consumer.set("pix_fmt",
+                     selected.videoCodec == "h264_mf" ? "nv12" : "yuv420p");
+        consumer.set("vb",
+                     static_cast<std::int64_t>(request.preset().videoBitrate()));
+        consumer.set("ab",
+                     static_cast<std::int64_t>(request.preset().audioBitrate()));
+        consumer.set("frequency", 48'000);
+        consumer.set("channels", 2);
+        consumer.set("width", static_cast<int>(request.preset().width()));
+        consumer.set("height", static_cast<int>(request.preset().height()));
+        consumer.set("frame_rate_num",
+                     static_cast<int>(request.preset().frameRate().numerator()));
+        consumer.set("frame_rate_den",
+                     static_cast<int>(request.preset().frameRate().denominator()));
+        consumer.set("progressive", 1);
+        consumer.set("movflags", "+faststart");
+        if (selected.videoCodec == "h264_mf") {
+            consumer.set("hw_encoding",
+                         selected.forceMediaFoundationHardware ? 1 : 0);
+        }
+        if (consumer.connect(*impl_->graph_->tractor) != 0) {
+            return stateError("MLT could not connect the independent export graph");
+        }
+        if (consumer.start() != 0) {
+            return stateError("MLT export consumer could not start");
+        }
+        const auto durationFrames = std::max<std::int64_t>(
+            impl_->graph_->durationFrames, 1);
+        while (!consumer.is_stopped()) {
+            if (stopToken.stop_requested()) {
+                consumer.stop();
+                return stateError("export cancelled during encoding");
+            }
+            const auto position = std::clamp<std::int64_t>(
+                consumer.position(), 0, durationFrames);
+            const double fraction = std::min(
+                0.998, static_cast<double>(position) /
+                           static_cast<double>(durationFrames));
+            const auto through = core::frameToTimestamp(
+                position, request.snapshot().timeline.frameRate());
+            if (!report(edit_engine::RenderJobState::Running, fraction,
+                        through)) {
+                consumer.stop();
+                return stateError("export progress was rejected");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        }
+        if (consumer.stop() != 0) {
+            return stateError("MLT export consumer could not join its worker");
+        }
+    }
+    if (stopToken.stop_requested()) {
+        return stateError("export cancelled after encoding");
+    }
+
+    core::TimestampNs timelineEnd{};
+    for (const auto& track : request.snapshot().timeline.tracks()) {
+        for (const auto& clip : track.clips()) {
+            if (clip.enabled()) {
+                timelineEnd = std::max(timelineEnd, clip.timelineRange().end());
+            }
+        }
+    }
+    {
+        ffmpeg_adapter::FfmpegMediaProbe probe;
+        auto media = probe.probe(partial.parent_path(), partial.filename());
+        if (!media.hasValue()) return media.error();
+        const auto expectedRate = request.preset().frameRate();
+        if (media.value().codecName != "h264" ||
+            !media.value().video.has_value() ||
+            !media.value().audio.has_value() ||
+            media.value().video->width !=
+                static_cast<int>(request.preset().width()) ||
+            media.value().video->height !=
+                static_cast<int>(request.preset().height()) ||
+            media.value().video->frameRate != expectedRate ||
+            media.value().audio->sampleRate != 48'000 ||
+            media.value().audio->channels != 2 ||
+            std::chrono::abs(media.value().duration -
+                             timelineEnd.time_since_epoch()) >
+                std::chrono::milliseconds{100}) {
+            return stateError("exported MP4 failed H.264/AAC profile validation");
+        }
+    }
+    if (stopToken.stop_requested()) {
+        return stateError("export cancelled before publication");
+    }
+    if (!report(edit_engine::RenderJobState::Publishing, 0.999, timelineEnd)) {
+        return stateError("export publication was cancelled");
+    }
+    if (stopToken.stop_requested()) {
+        return stateError("export cancelled at publication boundary");
+    }
+    auto published = publishAtomically(partial, request.destination(),
+                                       request.overwritePolicy());
+    if (!published.hasValue()) return published;
+    artifact.published();
+    return core::ok();
+}
+
 core::Result<std::unique_ptr<edit_engine::IRenderJob>> MltEditEngine::render(
-    const edit_engine::RenderRequest&) {
-    return core::AppError{core::ErrorCode::InvalidState,
-                          "MLT render jobs are implemented in R1-05"};
+    const edit_engine::RenderRequest& request) {
+    auto config = impl_->config_;
+    config.previewWidth = request.preset().width();
+    config.previewHeight = request.preset().height();
+    return MltRenderJob::start(
+        request, [config = std::move(config)](
+                     const edit_engine::RenderRequest& frozen,
+                     std::stop_token stopToken,
+                     const MltRenderJob::ProgressReporter& report) mutable {
+            MltEditEngine independent{config};
+            return independent.renderFrozen(frozen, stopToken, report);
+        });
 }
 
 }  // namespace creator::mlt_adapter

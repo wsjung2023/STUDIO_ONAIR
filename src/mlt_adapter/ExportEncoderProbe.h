@@ -31,6 +31,7 @@ struct ExportEncoderAttempt final {
 
 struct ExportEncoderSelection final {
     ExportEncoderCandidate selected;
+    std::string audioCodec;
     std::vector<ExportEncoderAttempt> attempts;
 };
 

@@ -39,6 +39,12 @@ TEST(FfmpegCapabilityProbeTest, RequiredLgplFallbackEncodersExist) {
     ASSERT_NE(audio, nullptr);
     EXPECT_TRUE(video->available);
     EXPECT_TRUE(audio->available);
+#ifdef _WIN32
+    const auto* mediaFoundationAudio =
+        findEncoder(result.value().encoders, "aac_mf");
+    ASSERT_NE(mediaFoundationAudio, nullptr);
+    EXPECT_TRUE(mediaFoundationAudio->available);
+#endif
 }
 
 }  // namespace

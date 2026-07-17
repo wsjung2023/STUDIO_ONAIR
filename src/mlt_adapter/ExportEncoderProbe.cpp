@@ -130,7 +130,7 @@ core::Result<ExportEncoderSelection> ExportEncoderProbe::select(
         auto result = attempt(candidate, preset);
         if (result.hasValue()) {
             attempts.push_back({candidate, true, {}});
-            return ExportEncoderSelection{candidate, std::move(attempts)};
+            return ExportEncoderSelection{candidate, "aac", std::move(attempts)};
         }
         attempts.push_back({candidate, false, result.error().message()});
     }
@@ -157,7 +157,9 @@ core::Result<ExportEncoderSelection> ExportEncoderProbe::probe(
                                return value.name == name && value.available;
                            });
     };
-    if (!isAvailable("aac")) {
+    const std::string audioCodec =
+        isAvailable("aac_mf") ? "aac_mf" : "aac";
+    if (!isAvailable(audioCodec)) {
         return core::AppError{core::ErrorCode::InvalidState,
                               "audited FFmpeg runtime has no AAC encoder"};
     }
@@ -170,8 +172,8 @@ core::Result<ExportEncoderSelection> ExportEncoderProbe::probe(
     static std::mutex renderMutex;
     std::lock_guard lock(renderMutex);
     const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
-    return select(preset, [&](const ExportEncoderCandidate& candidate,
-                              const edit_engine::RenderPreset& value) {
+    auto selection = select(preset, [&](const ExportEncoderCandidate& candidate,
+                                        const edit_engine::RenderPreset& value) {
         if (!isAvailable(candidate.videoCodec)) {
             return core::Result<void>{core::AppError{
                 core::ErrorCode::InvalidState,
@@ -191,6 +193,9 @@ core::Result<ExportEncoderSelection> ExportEncoderProbe::probe(
         std::filesystem::remove(output, ignored);
         return result;
     });
+    if (!selection.hasValue()) return selection.error();
+    selection.value().audioCodec = audioCodec;
+    return selection;
 }
 
 }  // namespace creator::mlt_adapter

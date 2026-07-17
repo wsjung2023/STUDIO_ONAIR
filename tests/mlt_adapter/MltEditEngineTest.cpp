@@ -5,6 +5,7 @@
 #include "domain/MediaAsset.h"
 #include "domain/Timeline.h"
 #include "domain/TimelineRevision.h"
+#include "ffmpeg_adapter/FfmpegMediaProbe.h"
 
 #include <gtest/gtest.h>
 
@@ -17,6 +18,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -1380,6 +1382,122 @@ TEST(MltEditEngineTest, UsesExactFractionalRateSamplePositionForFade) {
     };
     EXPECT_NEAR(audio.value().front(), expected(firstSample), 0.00002F);
     EXPECT_NEAR(audio.value()[99], expected(firstSample + 99U), 0.00002F);
+}
+
+TEST(MltEditEngineTest, RendersFrozenTimelineToValidatedH264AacMp4) {
+    MltFixture fixture;
+    mlt_adapter::MltEditEngine engine{{
+        .runtimeRoot = fs::path{CS_TEST_MLT_ROOT},
+        .previewWidth = 2,
+        .previewHeight = 2}};
+    auto frozen = snapshot(fixture.root(), 31);
+    ASSERT_TRUE(engine.load(frozen).hasValue());
+    const auto destination = fixture.root() / "export.mp4";
+    auto request = edit_engine::RenderRequest::create(
+        domain::ProjectId::create("project").value(), frozen, destination,
+        edit_engine::RenderPreset::h2641080p30().value(),
+        edit_engine::RenderOverwritePolicy::FailIfExists);
+    ASSERT_TRUE(request.hasValue()) << request.error().message();
+
+    auto job = engine.render(request.value());
+    ASSERT_TRUE(job.hasValue()) << job.error().message();
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds{30};
+    edit_engine::RenderJobState state = edit_engine::RenderJobState::Pending;
+    while (std::chrono::steady_clock::now() < deadline) {
+        auto progress = job.value()->progress();
+        ASSERT_TRUE(progress.hasValue());
+        state = progress.value().state();
+        if (state == edit_engine::RenderJobState::Completed ||
+            state == edit_engine::RenderJobState::Failed ||
+            state == edit_engine::RenderJobState::Cancelled) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    ASSERT_EQ(state, edit_engine::RenderJobState::Completed);
+    ASSERT_TRUE(fs::exists(destination));
+    ffmpeg_adapter::FfmpegMediaProbe probe;
+    auto media = probe.probe(fixture.root(), destination.filename());
+    ASSERT_TRUE(media.hasValue()) << media.error().message();
+    EXPECT_EQ(media.value().codecName, "h264");
+    ASSERT_TRUE(media.value().video.has_value());
+    EXPECT_EQ(media.value().video->width, 1920);
+    EXPECT_EQ(media.value().video->height, 1080);
+    ASSERT_TRUE(media.value().audio.has_value());
+    EXPECT_EQ(media.value().audio->sampleRate, 48'000);
+    EXPECT_EQ(media.value().audio->channels, 2);
+}
+
+TEST(MltEditEngineTest, ImmediateCancellationPublishesNoDestinationOrPartial) {
+    MltFixture fixture;
+    mlt_adapter::MltEditEngine engine{{
+        .runtimeRoot = fs::path{CS_TEST_MLT_ROOT},
+        .previewWidth = 2,
+        .previewHeight = 2}};
+    auto frozen = snapshot(fixture.root(), 32);
+    const auto destination = fixture.root() / "cancelled.mp4";
+    auto request = edit_engine::RenderRequest::create(
+        domain::ProjectId::create("project").value(), frozen, destination,
+        edit_engine::RenderPreset::h2641080p30().value(),
+        edit_engine::RenderOverwritePolicy::FailIfExists);
+    ASSERT_TRUE(request.hasValue());
+    auto job = engine.render(request.value());
+    ASSERT_TRUE(job.hasValue()) << job.error().message();
+    ASSERT_TRUE(job.value()->cancel().hasValue());
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds{15};
+    edit_engine::RenderJobState state = edit_engine::RenderJobState::Pending;
+    while (std::chrono::steady_clock::now() < deadline) {
+        state = job.value()->progress().value().state();
+        if (state == edit_engine::RenderJobState::Cancelled) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    EXPECT_EQ(state, edit_engine::RenderJobState::Cancelled);
+    EXPECT_FALSE(fs::exists(destination));
+    std::size_t partialCount = 0;
+    for (const auto& entry : fs::directory_iterator(fixture.root())) {
+        if (entry.path().filename().string().find(".partial.mp4") !=
+            std::string::npos) {
+            ++partialCount;
+        }
+    }
+    EXPECT_EQ(partialCount, 0U);
+}
+
+TEST(MltEditEngineTest, RendersTwoMixedAudioTracksWithoutInvalidSamples) {
+    MltFixture fixture;
+    mlt_adapter::MltEditEngine engine{{
+        .runtimeRoot = fs::path{CS_TEST_MLT_ROOT},
+        .previewWidth = 2,
+        .previewHeight = 2}};
+    auto frozen = audioMixSnapshot(fixture.root());
+    const auto destination = fixture.root() / "mixed-audio.mp4";
+    auto request = edit_engine::RenderRequest::create(
+        domain::ProjectId::create("project").value(), frozen, destination,
+        edit_engine::RenderPreset::h2641080p30().value(),
+        edit_engine::RenderOverwritePolicy::FailIfExists);
+    ASSERT_TRUE(request.hasValue());
+    auto job = engine.render(request.value());
+    ASSERT_TRUE(job.hasValue()) << job.error().message();
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds{30};
+    edit_engine::RenderJobState state = edit_engine::RenderJobState::Pending;
+    while (std::chrono::steady_clock::now() < deadline) {
+        state = job.value()->progress().value().state();
+        if (state == edit_engine::RenderJobState::Completed ||
+            state == edit_engine::RenderJobState::Failed) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    ASSERT_EQ(state, edit_engine::RenderJobState::Completed);
+    ffmpeg_adapter::FfmpegMediaProbe probe;
+    auto media = probe.probe(fixture.root(), destination.filename());
+    ASSERT_TRUE(media.hasValue()) << media.error().message();
+    ASSERT_TRUE(media.value().audio.has_value());
+    EXPECT_EQ(media.value().audio->sampleRate, 48'000);
+    EXPECT_EQ(media.value().audio->channels, 2);
 }
 
 }  // namespace

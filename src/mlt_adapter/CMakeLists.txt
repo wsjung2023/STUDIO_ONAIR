@@ -15,6 +15,8 @@ if(CS_ENABLE_MLT)
             ExportEncoderProbe.cpp
             MltRuntimeManifest.h
             MltRuntimeManifest.cpp
+            MltRenderJob.h
+            MltRenderJob.cpp
             MltEditEngine.h
             MltEditEngine.cpp
         DEPENDS

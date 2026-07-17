@@ -33,7 +33,8 @@ core::Result<FfmpegBuildInfo> probeFfmpegCapabilities() {
     }
 
     constexpr std::array encoderNames{
-        "h264_videotoolbox", "h264_mf", "h264_nvenc", "h264_qsv", "mpeg4", "aac"};
+        "h264_videotoolbox", "h264_mf", "h264_nvenc", "h264_qsv", "mpeg4",
+        "aac_mf", "aac"};
     std::vector<EncoderCapability> encoders;
     encoders.reserve(encoderNames.size());
     for (const char* name : encoderNames) {

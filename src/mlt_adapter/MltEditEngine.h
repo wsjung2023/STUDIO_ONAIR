@@ -5,7 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <stop_token>
 #include <vector>
 
 namespace creator::mlt_adapter {
@@ -57,6 +59,10 @@ public:
         const edit_engine::RenderRequest& request) override;
 
 private:
+    [[nodiscard]] core::Result<void> renderFrozen(
+        const edit_engine::RenderRequest& request, std::stop_token stopToken,
+        const std::function<bool(edit_engine::RenderJobState, double,
+                                 core::TimestampNs)>& report);
     class Impl;
     std::unique_ptr<Impl> impl_;
 };
