@@ -415,23 +415,23 @@ Commit: `feat(editor-ui): add effects title and caption inspector`
 - Produces one dedicated physical acceptance executable using a real Unicode package, SQLite, generated cache, controller/worker, and audited MLT engine.
 - Records exact reproducible evidence and marks only R1-05 complete.
 
-- [ ] **Step 1: Implement the real reopen workflow**
+- [x] **Step 1: Implement the real reopen workflow**
 
 Through controller invokables set camera PIP with manual rotation/crop/opacity, set microphone gain/fades, add a Korean title and multiple Korean caption cues, undo/redo across effect/text commands, explicitly save, record pixels/PCM/domain state, destroy every worker/engine/store, reopen, and compare exact state plus measured preview pixels/audio samples.
 
-- [ ] **Step 2: Implement distinct injected failure workflows**
+- [x] **Step 2: Implement distinct injected failure workflows**
 
 An SQLite commit failure must leave revision/model/history/cache/engine unchanged. A cache write failure after commit must advance durable state, publish a diagnostic/stale preview, and regenerate successfully after reopen. Repeat both to catch locked files and stale callbacks.
 
-- [ ] **Step 3: Measure the correctness-first graph**
+- [x] **Step 3: Measure the correctness-first graph**
 
 Build a 30-minute representative timeline and record graph build time, frame request time, native branch/transition counts, memory, and responsiveness. If it exceeds the established R1 preview budget, implement deterministic non-overlapping visual lane packing here and repeat; do not defer a known R1 resource failure.
 
-- [ ] **Step 4: Run source and focused acceptance gates**
+- [x] **Step 4: Run source and focused acceptance gates**
 
 Run `git diff --check`, scan for TODO/FIXME/placeholders and permissive assertions, repeat the new physical acceptance five times, and run MLT manifest/bootstrap policy tests. No skipped/disabled test counts as evidence.
 
-- [ ] **Step 5: Run a fresh audited warning-clean build**
+- [x] **Step 5: Run a fresh audited warning-clean build**
 
 Delete only the verified R1-05 audit directory `build/windows-mlt-audit`, then run this exact configure/build sequence from the R1-05 worktree:
 
@@ -442,7 +442,7 @@ Delete only the verified R1-05 audit directory `build/windows-mlt-audit`, then r
 
 Expected: zero compiler warnings and complete build success.
 
-- [ ] **Step 6: Run complete sequential CTest and shipping audit**
+- [x] **Step 6: Run complete sequential CTest and shipping audit**
 
 Run the exact sequential gate with Qt/MLT runtime PATH:
 
@@ -452,7 +452,7 @@ Run the exact sequential gate with Qt/MLT runtime PATH:
 
 Expected: 100 percent pass, zero failures/skips. Launch `build/windows-mlt-audit/creator_studio.exe`, confirm `Responding=True`, and inspect the shipping link/runtime so `cs_fakes`, test objects, `melt`, and unaudited MLT modules are absent.
 
-- [ ] **Step 7: Self-review and correct every confirmed finding**
+- [x] **Step 7: Self-review and correct every confirmed finding**
 
 Use `superpowers:requesting-code-review`; because new delegation is disabled for this run, perform a fresh-diff self-review against the approved design. For every confirmed issue, add a failing regression test, fix it, and rerun focused plus full gates.
 

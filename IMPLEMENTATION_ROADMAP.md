@@ -103,8 +103,10 @@
   - Unicode package and physical tamper acceptance coverage
 - [x] R1-04 영속 split/trim/lift/ripple 편집, Undo/Redo·명시적 저장,
   선택·범위 UI와 실제 `.cstudio` 재열기/실패 원자성 검증
+- [x] R1-05 영속 화면·카메라 transform, 오디오 gain/fade, 한글 제목·기본
+  자막과 실제 MLT preview, 재열기·실패 원자성·30분 그래프 물리 검증
 - [ ] Studio 장면/source 편집과 녹화 결과의 타임라인 연결
-- [ ] 텍스트·기본 자막, preview, export와 R1 물리 검증
+- [ ] H.264 MP4 export와 30분 실제 촬영·편집·출력 R1 최종 물리 검증
 
 위 체크는 R1을 축소한 것이 아니다. R1 완료 기준은 아래 Studio, Editor,
 Export 항목과 30분 실제 촬영·편집·출력 검증을 모두 만족할 때까지 유지한다.
