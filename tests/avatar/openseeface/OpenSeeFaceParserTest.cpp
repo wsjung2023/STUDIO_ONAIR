@@ -24,6 +24,7 @@
 #include <nlohmann/json-schema.hpp>
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -235,6 +236,46 @@ TEST(OpenSeeFaceParserTest, LittleEndianByteAssemblyRoundTripsExactFloatValues) 
         EXPECT_EQ(result.value().raw.eyeOpenLeft, value)
             << "float " << value << " did not round-trip exactly through little-endian assembly";
     }
+}
+
+// The round-trip test above proves self-consistency: this file's writeFloatLe
+// and the parser's readFloatLe share the same byte-order convention, so a
+// refactor that flipped both identically would still pass while breaking
+// real decoding. This test anchors decoding to external ground truth
+// instead - literal little-endian IEEE-754 byte quartets, independently
+// verified via Python's struct.pack('<f', ...), are hand-placed directly
+// into the record at the real field offsets, bypassing every test-side and
+// parser-side float-writing helper. If readFloatLe ever read the bytes in
+// the wrong order, these literal patterns would decode to garbage and the
+// test would fail.
+TEST(OpenSeeFaceParserTest, DecodesKnownIeee754LittleEndianBytesFromGroundTruth) {
+    std::array<std::byte, kFaceRecordSizeBytes> bytes{};
+
+    // success (offset 28) must be non-zero for a face to be considered
+    // found; the fields under test here are read regardless, but set it for
+    // record realism.
+    bytes[28] = std::byte{1};
+
+    // eye_blink[1] / eyeBlinkLeft, offset 24, passed straight through to
+    // raw.eyeOpenLeft with no arithmetic (see parseFace). 0.5f as
+    // struct.pack('<f', 0.5).hex() == "0000003f".
+    bytes[24] = std::byte{0x00};
+    bytes[25] = std::byte{0x00};
+    bytes[26] = std::byte{0x00};
+    bytes[27] = std::byte{0x3F};
+
+    // features[12] / mouthOpen, offset 1777, also a raw passthrough.
+    // 0.123456f as struct.pack('<f', 0.123456).hex() == "80d6fc3d".
+    bytes[1777] = std::byte{0x80};
+    bytes[1778] = std::byte{0xD6};
+    bytes[1779] = std::byte{0xFC};
+    bytes[1780] = std::byte{0x3D};
+
+    const auto result = parseFace(bytes, TimestampNs{DurationNs{0}});
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+
+    EXPECT_EQ(result.value().raw.eyeOpenLeft, 0.5F);
+    EXPECT_EQ(result.value().raw.mouthOpen, 0.123456F);
 }
 
 // ---------------------------------------------------------------------
