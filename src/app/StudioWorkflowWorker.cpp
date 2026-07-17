@@ -155,12 +155,17 @@ void StudioWorkflowWorker::openProject(quint64 generation,
     auto pending = store_->completedUnimportedRecordings();
     if (!pending.hasValue()) {
         staged.status = pending.error().message();
+        staged.reconciliationIncomplete = true;
+        staged.reconciliationDiscoveryIncomplete = true;
     } else {
+        staged.reconciliationIncomplete = false;
+        staged.reconciliationDiscoveryIncomplete = false;
         for (const auto& recording : pending.value()) {
             auto reconciled = reconcileSession(recording.sessionId, staged);
             if (!reconciled.hasValue()) {
                 staged.status = reconciled.error().message();
                 staged.reconciliationSessionId = recording.sessionId;
+                staged.reconciliationIncomplete = true;
                 break;
             }
         }
@@ -187,6 +192,8 @@ Result<void> StudioWorkflowWorker::reconcileSession(
     emit reconciliationProgress(activeGeneration_, false);
     if (!reconciled.hasValue()) return reconciled.error();
     staged.reconciliationSessionId.reset();
+    staged.reconciliationIncomplete =
+        staged.reconciliationDiscoveryIncomplete;
     return core::ok();
 }
 

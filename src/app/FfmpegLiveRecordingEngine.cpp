@@ -355,6 +355,22 @@ std::string FfmpegLiveRecordingEngine::unavailableReason() const {
     return capabilityStatus_.hasValue() ? std::string{} : capabilityStatus_.error().message();
 }
 
+core::Result<std::vector<LiveCaptureSource>>
+FfmpegLiveRecordingEngine::sourceSnapshot() const {
+    if (!capabilityStatus_.hasValue()) return capabilityStatus_.error();
+    if (!captureBindings_) {
+        return core::AppError{core::ErrorCode::InvalidState,
+                              "Live capture bindings are unavailable"};
+    }
+    auto sources = captureBindings_->activeSources();
+    if (sources.empty()) {
+        return core::AppError{
+            core::ErrorCode::InvalidState,
+            "Start at least one capture source before recording"};
+    }
+    return sources;
+}
+
 core::Result<void> FfmpegLiveRecordingEngine::start(
     LiveRecordingStart start, Completion completion) {
     if (!capabilityStatus_.hasValue()) return capabilityStatus_.error();
@@ -378,7 +394,7 @@ core::Result<void> FfmpegLiveRecordingEngine::start(
     auto contextResult = ProjectSegmentLifecycleContext::create(
         store_, start.packagePath, std::move(session));
     if (!contextResult.hasValue()) return contextResult.error();
-    const auto sources = captureBindings_->activeSources();
+    const auto& sources = start.sources;
     if (sources.empty()) {
         return core::AppError{core::ErrorCode::InvalidState,
                               "Start at least one capture source before recording"};

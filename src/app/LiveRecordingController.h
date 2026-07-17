@@ -33,12 +33,18 @@ class LiveRecordingController final : public QObject {
     Q_PROPERTY(qulonglong diskAvailableBytes READ diskAvailableBytes NOTIFY diagnosticsChanged)
     Q_PROPERTY(QString encoderName READ encoderName NOTIFY diagnosticsChanged)
     Q_PROPERTY(QString takeDuration READ takeDuration NOTIFY diagnosticsChanged)
+    Q_PROPERTY(QString activeSessionId READ activeSessionIdString NOTIFY activeRecordingChanged)
+    Q_PROPERTY(qlonglong recordingStartedAtNs READ recordingStartedAtNs NOTIFY activeRecordingChanged)
+    Q_PROPERTY(qlonglong recordingPositionNs READ recordingPositionNs NOTIFY diagnosticsChanged)
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
 
 public:
     using PackagePathProvider =
         std::function<std::optional<std::filesystem::path>()>;
     using Clock = std::function<core::TimestampNs()>;
+    using PreparationCompletion = std::function<void(core::Result<void>)>;
+    using RecordingPreparation =
+        std::function<void(const LiveRecordingStart&, PreparationCompletion)>;
 
     LiveRecordingController(std::unique_ptr<ILiveRecordingEngine> engine,
                             IRecordingPersistence* persistence,
@@ -74,7 +80,15 @@ public:
     }
     [[nodiscard]] QString encoderName() const { return encoderName_; }
     [[nodiscard]] QString takeDuration() const { return takeDuration_; }
+    [[nodiscard]] std::optional<domain::SessionId> activeSessionId() const;
+    [[nodiscard]] std::optional<core::TimestampNs> recordingStartedAt() const;
+    [[nodiscard]] std::optional<core::TimestampNs> recordingPosition() const;
+    [[nodiscard]] QString activeSessionIdString() const;
+    [[nodiscard]] qlonglong recordingStartedAtNs() const noexcept;
+    [[nodiscard]] qlonglong recordingPositionNs() const noexcept;
     [[nodiscard]] QString statusMessage() const { return statusMessage_; }
+
+    void setRecordingPreparation(RecordingPreparation preparation);
 
     Q_INVOKABLE void startRecording();
     Q_INVOKABLE void stopRecording();
@@ -86,12 +100,23 @@ signals:
     void operationStateChanged();
     void recordingChanged();
     void diagnosticsChanged();
+    void activeRecordingChanged();
+    void recordingCommitted(QString sessionId);
+    void recordingAborted(QString sessionId);
     void statusMessageChanged();
 
 private:
-    void handleBeginFinished(core::Result<void> result);
-    void handleEngineFinished(core::Result<LiveRecordingCompletion> result);
-    void handlePersistenceComplete(core::Result<void> result);
+    void handleBeginFinished(quint64 generation, domain::SessionId sessionId,
+                             core::Result<void> result);
+    void handlePreparationFinished(quint64 generation,
+                                   domain::SessionId sessionId,
+                                   core::Result<void> result);
+    void startEngine();
+    void handleEngineFinished(quint64 generation, domain::SessionId sessionId,
+                              core::Result<LiveRecordingCompletion> result);
+    void handlePersistenceComplete(quint64 generation,
+                                   domain::SessionId sessionId,
+                                   core::Result<void> result);
     void abortStartedSession(core::AppError error);
     void setOperationState(LiveRecordingOperationState state);
     void setStatusMessage(QString message);
@@ -101,11 +126,13 @@ private:
     IRecordingPersistence* persistence_{};
     PackagePathProvider packagePathProvider_;
     Clock clock_;
+    RecordingPreparation recordingPreparation_;
     QTimer diagnosticsTimer_;
     LiveRecordingOperationState operationState_{LiveRecordingOperationState::Idle};
     std::optional<LiveRecordingStart> pendingStart_;
     std::optional<LiveRecordingCompletion> pendingCompletion_;
     std::optional<core::AppError> pendingTerminalError_;
+    quint64 generation_{0};
     int segmentCount_{0};
     int trackCount_{0};
     qulonglong queuedItems_{0};

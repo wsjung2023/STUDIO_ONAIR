@@ -22,6 +22,11 @@ public:
         return core::AppError{core::ErrorCode::UnsupportedVersion,
                               unavailableReason()};
     }
+    [[nodiscard]] core::Result<std::vector<LiveCaptureSource>>
+    sourceSnapshot() const override {
+        return core::AppError{core::ErrorCode::UnsupportedVersion,
+                              unavailableReason()};
+    }
     void stopAsync(core::TimestampNs) override {}
     [[nodiscard]] LiveRecordingEngineSnapshot snapshot() const override {
         return {};

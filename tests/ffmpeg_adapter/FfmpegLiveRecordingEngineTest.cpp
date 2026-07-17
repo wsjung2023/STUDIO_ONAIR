@@ -134,7 +134,8 @@ TEST(FfmpegLiveRecordingEngineTest, RecordsAttachedScreenAndMicrophoneToReadyFil
     const auto engineStarted = engine.start(
                           LiveRecordingStart{.sessionId = sessionId,
                                              .packagePath = packagePath,
-                                             .startedAt = {}},
+                                             .startedAt = {},
+                                             .sources = bindings->sources},
                           [promise](auto result) { promise->set_value(std::move(result)); });
     ASSERT_TRUE(engineStarted.hasValue()) << engineStarted.error().message();
     ASSERT_TRUE(bindings->video);
@@ -206,7 +207,8 @@ TEST(FfmpegLiveRecordingEngineTest, ValidatesEveryTrackBeforeAttachingAnySink) {
     const auto result = engine.start(
         LiveRecordingStart{.sessionId = SessionId::create("duplicate-session").value(),
                            .packagePath = "missing.cstudio",
-                           .startedAt = {}},
+                           .startedAt = {},
+                           .sources = bindings->sources},
         [](auto) {});
 
     ASSERT_FALSE(result.hasValue());

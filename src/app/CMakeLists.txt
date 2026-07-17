@@ -22,6 +22,8 @@ add_library(cs_app STATIC
     LiveRecordingEngineFactory.cpp
     LiveRecordingController.h
     LiveRecordingController.cpp
+    StudioRecordingBinding.h
+    StudioRecordingBinding.cpp
     StudioController.h
     StudioController.cpp
     ScreenCaptureController.h

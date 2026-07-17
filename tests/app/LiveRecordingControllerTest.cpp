@@ -7,12 +7,17 @@
 
 #include <gtest/gtest.h>
 
+#include <QSignalSpy>
+#include <QCoreApplication>
+#include <QEventLoop>
+
 #include <chrono>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace {
@@ -96,6 +101,10 @@ public:
         completion_ = std::move(completion);
         return creator::core::ok();
     }
+    [[nodiscard]] Result<std::vector<creator::app::LiveCaptureSource>>
+    sourceSnapshot() const override {
+        return sources;
+    }
     void stopAsync(TimestampNs stoppedAt) override {
         ++stopCalls;
         stopAt = stoppedAt;
@@ -126,6 +135,9 @@ public:
     Completion completion_;
     TimestampNs stopAt{};
     LiveRecordingEngineSnapshot liveSnapshot;
+    std::vector<creator::app::LiveCaptureSource> sources{
+        {.sourceId = creator::domain::SourceId::create("screen-source").value(),
+         .role = creator::recorder::TrackRole::Screen}};
 };
 
 struct Fixture final {
@@ -143,6 +155,102 @@ struct Fixture final {
     TimestampNs now{std::chrono::seconds{10}};
     std::unique_ptr<LiveRecordingController> controller;
 };
+
+TEST(LiveRecordingControllerTest,
+     PreparesStudioAfterDurableBeginAndBeforeEngineStart) {
+    Fixture fixture;
+    std::optional<LiveRecordingController::PreparationCompletion> prepared;
+    fixture.controller->setRecordingPreparation(
+        [&](const LiveRecordingStart& start,
+            LiveRecordingController::PreparationCompletion completion) {
+            EXPECT_EQ(start.sessionId.value(), fixture.persistence.lastSessionId);
+            EXPECT_EQ(fixture.persistence.beginCalls, 1);
+            EXPECT_EQ(fixture.engineRaw->startCalls, 0);
+            prepared = std::move(completion);
+        });
+
+    fixture.controller->startRecording();
+    EXPECT_FALSE(prepared.has_value());
+    fixture.persistence.finishBegin();
+
+    ASSERT_TRUE(prepared.has_value());
+    EXPECT_EQ(fixture.engineRaw->startCalls, 0);
+    auto completion = std::move(*prepared);
+    prepared.reset();
+    completion(creator::core::ok());
+    EXPECT_EQ(fixture.engineRaw->startCalls, 1);
+    EXPECT_TRUE(fixture.controller->isRecording());
+}
+
+TEST(LiveRecordingControllerTest,
+     PreparationFailureSkipsEngineAndAbortsDurableSession) {
+    Fixture fixture;
+    fixture.controller->setRecordingPreparation(
+        [](const LiveRecordingStart&,
+           LiveRecordingController::PreparationCompletion completion) {
+            completion(AppError{ErrorCode::IoFailure,
+                                "studio preparation failed"});
+        });
+
+    fixture.controller->startRecording();
+    fixture.persistence.finishBegin();
+
+    EXPECT_EQ(fixture.engineRaw->startCalls, 0);
+    ASSERT_EQ(fixture.persistence.abortCalls, 1);
+    EXPECT_EQ(fixture.persistence.abortReason, "studio preparation failed");
+    fixture.persistence.finishAbort();
+    EXPECT_EQ(fixture.controller->operationState(),
+              LiveRecordingOperationState::Idle);
+    EXPECT_EQ(fixture.controller->statusMessage(),
+              QStringLiteral("studio preparation failed"));
+}
+
+TEST(LiveRecordingControllerTest,
+     ExposesActiveIdentityAndEmitsCommittedOnlyAfterProjectComplete) {
+    Fixture fixture;
+    QSignalSpy committed{fixture.controller.get(),
+                         &LiveRecordingController::recordingCommitted};
+
+    fixture.controller->startRecording();
+    ASSERT_TRUE(fixture.controller->activeSessionId().has_value());
+    EXPECT_EQ(fixture.controller->recordingStartedAt(), fixture.now);
+    fixture.persistence.finishBegin();
+    fixture.now = TimestampNs{std::chrono::seconds{13}};
+    EXPECT_EQ(fixture.controller->recordingPosition(),
+              TimestampNs{std::chrono::seconds{3}});
+    fixture.controller->stopRecording();
+    fixture.engineRaw->finish(fixture.now);
+    EXPECT_EQ(committed.count(), 0);
+
+    const auto expectedSession = fixture.persistence.lastSessionId;
+    fixture.persistence.finishComplete();
+
+    ASSERT_EQ(committed.count(), 1);
+    EXPECT_EQ(committed.front().front().toString(),
+              QString::fromStdString(expectedSession));
+    EXPECT_FALSE(fixture.controller->activeSessionId().has_value());
+}
+
+TEST(LiveRecordingControllerTest,
+     PersistenceCompletionReturnsToOwnerThreadBeforeMutatingState) {
+    Fixture fixture;
+    fixture.controller->startRecording();
+
+    std::thread persistenceThread{
+        [&] { fixture.persistence.finishBegin(); }};
+    persistenceThread.join();
+
+    EXPECT_EQ(fixture.engineRaw->startCalls, 0);
+    EXPECT_EQ(fixture.controller->operationState(),
+              LiveRecordingOperationState::Preparing);
+    for (int attempt = 0;
+         attempt < 100 && fixture.engineRaw->startCalls == 0; ++attempt) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    EXPECT_EQ(fixture.engineRaw->startCalls, 1);
+    EXPECT_TRUE(fixture.controller->isRecording());
+}
 
 TEST(LiveRecordingControllerTest, RejectsUnavailableEngineBeforeCreatingDatabaseSession) {
     Fixture fixture;

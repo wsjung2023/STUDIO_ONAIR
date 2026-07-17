@@ -2,6 +2,7 @@
 
 #include "core/Result.h"
 #include "core/Timebase.h"
+#include "app/ILiveCaptureBindings.h"
 #include "domain/Identifiers.h"
 #include "domain/RecordingSession.h"
 
@@ -11,6 +12,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace creator::app {
 
@@ -18,6 +20,7 @@ struct LiveRecordingStart final {
     domain::SessionId sessionId;
     std::filesystem::path packagePath;
     core::TimestampNs startedAt{};
+    std::vector<LiveCaptureSource> sources;
 };
 
 struct LiveRecordingEngineSnapshot final {
@@ -58,6 +61,8 @@ public:
     [[nodiscard]] virtual std::string unavailableReason() const = 0;
     [[nodiscard]] virtual core::Result<void> start(
         LiveRecordingStart start, Completion completion) = 0;
+    [[nodiscard]] virtual core::Result<std::vector<LiveCaptureSource>>
+        sourceSnapshot() const = 0;
     virtual void stopAsync(core::TimestampNs stoppedAt) = 0;
     [[nodiscard]] virtual LiveRecordingEngineSnapshot snapshot() const = 0;
 

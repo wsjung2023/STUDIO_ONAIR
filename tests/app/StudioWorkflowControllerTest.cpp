@@ -123,6 +123,7 @@ struct SharedStoreState final {
     bool fail{false};
     bool seedFailure{false};
     bool markerFailure{false};
+    bool discoveryFailure{false};
     bool deferLoad{false};
     bool loadReleased{false};
     bool loadEntered{false};
@@ -220,6 +221,10 @@ public:
     Result<std::vector<UnimportedRecording>> completedUnimportedRecordings()
         override {
         std::scoped_lock lock{state_->mutex};
+        if (state_->discoveryFailure) {
+            return AppError{ErrorCode::IoFailure,
+                            "injected reconciliation discovery failure"};
+        }
         return state_->unimported;
     }
     Result<void> putRecordingImport(const RecordingImportRecord&) override {
@@ -483,6 +488,38 @@ TEST(StudioWorkflowControllerTest,
         std::scoped_lock lock{reconciler->mutex};
         EXPECT_EQ(reconciler->calls, 3U);
     }
+}
+
+TEST(StudioWorkflowControllerTest,
+     ReconciliationDiscoveryFailureDoesNotPublishOpenSuccess) {
+    auto state = std::make_shared<SharedStoreState>();
+    state->discoveryFailure = true;
+    auto controller = makeController(state);
+    std::optional<Result<void>> opened;
+
+    controller.openProject(
+        QUrl::fromLocalFile(QStringLiteral("C:/project")),
+        [&](Result<void> result) { opened = std::move(result); });
+
+    ASSERT_TRUE(waitUntil([&] { return opened.has_value(); }));
+    EXPECT_FALSE(opened->hasValue());
+    EXPECT_EQ(controller.sceneModel()->rowCount(), 3);
+    EXPECT_TRUE(controller.statusMessage().contains(
+        QStringLiteral("reconciliation discovery failure")));
+
+    const QVariantList sources{QVariantMap{
+        {QStringLiteral("sourceId"), QStringLiteral("screen")},
+        {QStringLiteral("role"), QStringLiteral("screen")}}};
+    controller.prepareRecording(QStringLiteral("new-session"), sources, 0);
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    std::optional<Result<void>> completed;
+    controller.completeRecording(
+        [&](Result<void> result) { completed = std::move(result); });
+    ASSERT_TRUE(waitUntil([&] { return completed.has_value(); }));
+    EXPECT_FALSE(completed->hasValue());
+    EXPECT_NE(completed->error().message().find(
+                  "reconciliation remains pending"),
+              std::string::npos);
 }
 
 TEST(StudioWorkflowControllerTest,

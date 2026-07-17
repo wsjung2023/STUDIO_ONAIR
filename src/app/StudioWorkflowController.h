@@ -12,6 +12,7 @@
 
 #include <memory>
 #include <optional>
+#include <functional>
 
 namespace creator::app {
 
@@ -34,6 +35,8 @@ class StudioWorkflowController final : public QObject {
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
 
 public:
+    using Completion = std::function<void(core::Result<void>)>;
+
     StudioWorkflowController(
         StudioStoreOpenFactory storeFactory,
         std::unique_ptr<IRecordingTimelineReconciler> reconciler,
@@ -85,6 +88,15 @@ public:
     Q_INVOKABLE void addMarker(QString label, qlonglong positionNs);
     Q_INVOKABLE void retryReconciliation();
 
+    void openProject(QUrl packageUrl, Completion completion);
+    void prepareRecording(domain::SessionId sessionId,
+                          std::vector<project_store::RecordingSourceRole> sources,
+                          core::TimestampNs position,
+                          Completion completion);
+    void abortRecording(Completion completion);
+    void completeRecording(Completion completion);
+    void retryReconciliation(Completion completion);
+
 signals:
     void busyChanged();
     void recordingChanged();
@@ -95,7 +107,7 @@ signals:
     void statusMessageChanged();
 
 private:
-    void submit(StudioWorkflowRequest request);
+    void submit(StudioWorkflowRequest request, Completion completion = {});
     void handleCompleted(quint64 generation, quint64 commandId,
                          StudioWorkflowResultPtr result);
     void handleReconciliationProgress(quint64 generation, bool active);
@@ -111,6 +123,8 @@ private:
     StudioSourceModel sourceModel_;
     std::optional<StudioWorkflowState> state_;
     std::optional<StudioWorkflowOperation> pendingOperation_;
+    Completion pendingCompletion_;
+    Completion openCompletion_;
     QUrl packageUrl_;
     QString statusMessage_;
     quint64 generation_{0};

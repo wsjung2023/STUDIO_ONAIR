@@ -50,6 +50,7 @@ LiveRecordingController::LiveRecordingController(
 }
 
 LiveRecordingController::~LiveRecordingController() {
+    ++generation_;
     diagnosticsTimer_.stop();
     if (engine_ && (isRecording() ||
                     operationState_ == LiveRecordingOperationState::Finalizing)) {
@@ -70,6 +71,49 @@ bool LiveRecordingController::recordingAvailable() const noexcept {
     return engine_ && engine_->available();
 }
 
+std::optional<domain::SessionId>
+LiveRecordingController::activeSessionId() const {
+    return pendingStart_.has_value()
+               ? std::optional<domain::SessionId>{pendingStart_->sessionId}
+               : std::nullopt;
+}
+
+std::optional<core::TimestampNs>
+LiveRecordingController::recordingStartedAt() const {
+    return pendingStart_.has_value()
+               ? std::optional<core::TimestampNs>{pendingStart_->startedAt}
+               : std::nullopt;
+}
+
+std::optional<core::TimestampNs>
+LiveRecordingController::recordingPosition() const {
+    if (!pendingStart_) return std::nullopt;
+    return core::TimestampNs{
+        std::max(core::DurationNs::zero(), clock_() - pendingStart_->startedAt)};
+}
+
+QString LiveRecordingController::activeSessionIdString() const {
+    const auto session = activeSessionId();
+    return session.has_value() ? fromUtf8(session->value()) : QString{};
+}
+
+qlonglong LiveRecordingController::recordingStartedAtNs() const noexcept {
+    return pendingStart_.has_value()
+               ? pendingStart_->startedAt.time_since_epoch().count()
+               : 0;
+}
+
+qlonglong LiveRecordingController::recordingPositionNs() const noexcept {
+    const auto position = recordingPosition();
+    return position.has_value() ? position->time_since_epoch().count() : 0;
+}
+
+void LiveRecordingController::setRecordingPreparation(
+    RecordingPreparation preparation) {
+    if (preparation && operationState_ != LiveRecordingOperationState::Idle) return;
+    recordingPreparation_ = std::move(preparation);
+}
+
 void LiveRecordingController::startRecording() {
     if (operationState_ != LiveRecordingOperationState::Idle) return;
     if (!engine_ || !engine_->available()) {
@@ -86,46 +130,134 @@ void LiveRecordingController::startRecording() {
         setStatusMessage(tr("Open a local project before recording"));
         return;
     }
+    auto sources = engine_->sourceSnapshot();
+    if (!sources.hasValue()) {
+        setStatusMessage(fromUtf8(sources.error().message()));
+        return;
+    }
     auto sessionId = domain::SessionId::create(core::generateUuidV4());
     if (!sessionId.hasValue()) {
         setStatusMessage(fromUtf8(sessionId.error().message()));
         return;
     }
 
+    ++generation_;
     resetDiagnostics();
     pendingStart_ = LiveRecordingStart{.sessionId = std::move(sessionId).value(),
                                        .packagePath = std::move(*packagePath),
-                                       .startedAt = clock_()};
+                                       .startedAt = clock_(),
+                                       .sources = std::move(sources).value()};
+    emit activeRecordingChanged();
     setOperationState(LiveRecordingOperationState::Preparing);
     setStatusMessage(tr("Preparing recording"));
     QPointer<LiveRecordingController> self{this};
+    const auto generation = generation_;
+    const auto activeSessionId = pendingStart_->sessionId;
     persistence_->begin(
         pendingStart_->sessionId, pendingStart_->startedAt,
-        [self](core::Result<void> result) mutable {
-            if (self) self->handleBeginFinished(std::move(result));
+        [self, generation,
+         activeSessionId](core::Result<void> result) mutable {
+            if (!self) return;
+            auto dispatch = [self, generation, activeSessionId,
+                             result = std::move(result)]() mutable {
+                if (self) {
+                    self->handleBeginFinished(generation, activeSessionId,
+                                              std::move(result));
+                }
+            };
+            if (self->thread() == QThread::currentThread()) {
+                dispatch();
+            } else {
+                QMetaObject::invokeMethod(self, std::move(dispatch),
+                                          Qt::QueuedConnection);
+            }
         });
 }
 
-void LiveRecordingController::handleBeginFinished(core::Result<void> result) {
-    if (operationState_ != LiveRecordingOperationState::Preparing || !pendingStart_) return;
+void LiveRecordingController::handleBeginFinished(
+    quint64 generation, domain::SessionId sessionId,
+    core::Result<void> result) {
+    if (generation != generation_ ||
+        operationState_ != LiveRecordingOperationState::Preparing ||
+        !pendingStart_ || pendingStart_->sessionId != sessionId) return;
     if (!result.hasValue()) {
         pendingStart_.reset();
+        emit activeRecordingChanged();
         setOperationState(LiveRecordingOperationState::Idle);
         setStatusMessage(fromUtf8(result.error().message()));
         return;
     }
 
+    if (recordingPreparation_) {
+        const auto activeGeneration = generation_;
+        const auto preparedSessionId = pendingStart_->sessionId;
+        QPointer<LiveRecordingController> self{this};
+        recordingPreparation_(
+            *pendingStart_,
+            [self, activeGeneration, preparedSessionId](
+                core::Result<void> prepared) mutable {
+                if (!self) return;
+                auto dispatch =
+                    [self, activeGeneration, preparedSessionId,
+                     prepared = std::move(prepared)]() mutable {
+                        if (self) {
+                            self->handlePreparationFinished(
+                                activeGeneration, preparedSessionId,
+                                std::move(prepared));
+                        }
+                    };
+                if (self->thread() == QThread::currentThread()) {
+                    dispatch();
+                } else {
+                    QMetaObject::invokeMethod(self, std::move(dispatch),
+                                              Qt::QueuedConnection);
+                }
+            });
+        return;
+    }
+    startEngine();
+}
+
+void LiveRecordingController::handlePreparationFinished(
+    quint64 generation, domain::SessionId sessionId,
+    core::Result<void> result) {
+    if (generation != generation_ ||
+        operationState_ != LiveRecordingOperationState::Preparing ||
+        !pendingStart_ || pendingStart_->sessionId != sessionId) {
+        return;
+    }
+    if (!result.hasValue()) {
+        abortStartedSession(result.error());
+        return;
+    }
+    startEngine();
+}
+
+void LiveRecordingController::startEngine() {
+    if (operationState_ != LiveRecordingOperationState::Preparing ||
+        !pendingStart_) {
+        return;
+    }
+
     QPointer<LiveRecordingController> self{this};
-    auto completion = [self](core::Result<LiveRecordingCompletion> completed) mutable {
+    const auto generation = generation_;
+    const auto sessionId = pendingStart_->sessionId;
+    auto completion = [self, generation, sessionId](
+                          core::Result<LiveRecordingCompletion> completed) mutable {
         if (!self) return;
         if (self->thread() == QThread::currentThread()) {
-            self->handleEngineFinished(std::move(completed));
+            self->handleEngineFinished(generation, sessionId,
+                                       std::move(completed));
             return;
         }
         QMetaObject::invokeMethod(
             self,
-            [self, completed = std::move(completed)]() mutable {
-                if (self) self->handleEngineFinished(std::move(completed));
+            [self, generation, sessionId,
+             completed = std::move(completed)]() mutable {
+                if (self) {
+                    self->handleEngineFinished(generation, sessionId,
+                                               std::move(completed));
+                }
             },
             Qt::QueuedConnection);
     };
@@ -148,17 +280,38 @@ void LiveRecordingController::abortStartedSession(core::AppError error) {
         return;
     }
     const auto sessionId = pendingStart_->sessionId;
+    const auto generation = generation_;
     const auto reason = error.message();
     QPointer<LiveRecordingController> self{this};
     persistence_->abort(
         sessionId, reason,
-        [self, error = std::move(error)](core::Result<void> aborted) mutable {
+        [self, generation, sessionId,
+         error = std::move(error)](core::Result<void> aborted) mutable {
             if (!self) return;
-            self->pendingStart_.reset();
-            self->setOperationState(LiveRecordingOperationState::Idle);
-            self->setStatusMessage(fromUtf8(aborted.hasValue()
-                                                ? error.message()
-                                                : aborted.error().message()));
+            auto dispatch = [self, generation, sessionId,
+                             error = std::move(error),
+                             aborted = std::move(aborted)]() mutable {
+                if (!self || generation != self->generation_ ||
+                    !self->pendingStart_ ||
+                    self->pendingStart_->sessionId != sessionId) {
+                    return;
+                }
+                self->pendingStart_.reset();
+                emit self->activeRecordingChanged();
+                self->setOperationState(LiveRecordingOperationState::Idle);
+                self->setStatusMessage(fromUtf8(
+                    aborted.hasValue() ? error.message()
+                                       : aborted.error().message()));
+                if (aborted.hasValue()) {
+                    emit self->recordingAborted(fromUtf8(sessionId.value()));
+                }
+            };
+            if (self->thread() == QThread::currentThread()) {
+                dispatch();
+            } else {
+                QMetaObject::invokeMethod(self, std::move(dispatch),
+                                          Qt::QueuedConnection);
+            }
         });
 }
 
@@ -177,7 +330,10 @@ void LiveRecordingController::stopRecording() {
 }
 
 void LiveRecordingController::handleEngineFinished(
+    quint64 generation, domain::SessionId sessionId,
     core::Result<LiveRecordingCompletion> result) {
+    if (generation != generation_ || !pendingStart_ ||
+        pendingStart_->sessionId != sessionId) return;
     if (operationState_ != LiveRecordingOperationState::Recording &&
         operationState_ != LiveRecordingOperationState::Finalizing) {
         return;
@@ -202,14 +358,31 @@ void LiveRecordingController::handleEngineFinished(
     QPointer<LiveRecordingController> self{this};
     persistence_->complete(
         pendingCompletion_->session,
-        [self](core::Result<void> completed) mutable {
-            if (self) self->handlePersistenceComplete(std::move(completed));
+        [self, generation, sessionId](core::Result<void> completed) mutable {
+            if (!self) return;
+            auto dispatch = [self, generation, sessionId,
+                             completed = std::move(completed)]() mutable {
+                if (self) {
+                    self->handlePersistenceComplete(generation, sessionId,
+                                                    std::move(completed));
+                }
+            };
+            if (self->thread() == QThread::currentThread()) {
+                dispatch();
+            } else {
+                QMetaObject::invokeMethod(self, std::move(dispatch),
+                                          Qt::QueuedConnection);
+            }
         });
 }
 
-void LiveRecordingController::handlePersistenceComplete(core::Result<void> result) {
-    if (operationState_ != LiveRecordingOperationState::Finalizing ||
-        !pendingCompletion_) {
+void LiveRecordingController::handlePersistenceComplete(
+    quint64 generation, domain::SessionId sessionId,
+    core::Result<void> result) {
+    if (generation != generation_ ||
+        operationState_ != LiveRecordingOperationState::Finalizing ||
+        !pendingStart_ || pendingStart_->sessionId != sessionId ||
+        !pendingCompletion_ || pendingCompletion_->session.id() != sessionId) {
         return;
     }
     const auto finalMessage = !result.hasValue()
@@ -217,11 +390,16 @@ void LiveRecordingController::handlePersistenceComplete(core::Result<void> resul
                                   : pendingTerminalError_
                                         ? fromUtf8(pendingTerminalError_->message())
                                         : tr("Stopped");
+    const auto committedSessionId = pendingCompletion_->session.id();
     pendingCompletion_.reset();
     pendingTerminalError_.reset();
     pendingStart_.reset();
+    emit activeRecordingChanged();
     setOperationState(LiveRecordingOperationState::Idle);
     setStatusMessage(finalMessage);
+    if (result.hasValue()) {
+        emit recordingCommitted(fromUtf8(committedSessionId.value()));
+    }
 }
 
 void LiveRecordingController::pollDiagnostics() {

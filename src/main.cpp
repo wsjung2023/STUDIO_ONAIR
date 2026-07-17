@@ -7,6 +7,12 @@
 #include "app/LiveRecordingEngineFactory.h"
 #include "app/ScreenCaptureController.h"
 #include "app/ScreenPreviewItem.h"
+#include "app/StudioRecordingBinding.h"
+#include "app/StudioWorkflowController.h"
+#include "app/RecordingTimelineReconciler.h"
+#include "core/AppError.h"
+#include "core/Uuid.h"
+#include "core/Utc.h"
 #include "capture/UnsupportedScreenCaptureBackend.h"
 #include "capture/UnsupportedDeviceCaptureBackend.h"
 #if defined(__APPLE__)
@@ -14,6 +20,10 @@
 #include "capture/macos/MacDeviceCaptureBackend.h"
 #endif
 #include "project_store/ProjectPackageStore.h"
+#include "project_store/SqliteStudioStore.h"
+#if defined(CS_APP_ENABLE_FFMPEG)
+#include "ffmpeg_adapter/FfmpegMediaProbe.h"
+#endif
 #include "edit_engine/UnavailableEditEngine.h"
 #if defined(CS_APP_ENABLE_MLT)
 #include "mlt_adapter/MltEditEngine.h"
@@ -28,6 +38,18 @@
 #include <memory>
 
 namespace {
+
+class UnavailableRecordingTimelineReconciler final
+    : public creator::app::IRecordingTimelineReconciler {
+public:
+    [[nodiscard]] creator::core::Result<creator::app::RecordingReconcileResult>
+    reconcile(const std::filesystem::path&,
+              const creator::domain::SessionId&) override {
+        return creator::core::AppError{
+            creator::core::ErrorCode::InvalidState,
+            "FFmpeg media inspection is unavailable in this build"};
+    }
+};
 
 #if defined(CS_APP_ENABLE_MLT)
 std::filesystem::path stagedMltRuntimeRoot() {
@@ -80,6 +102,44 @@ int main(int argc, char* argv[]) {
         std::move(recordingEngine), &projectController,
         [&projectController] { return projectController.recordingPackagePath(); },
         [] { return creator::core::ProjectClock::now(); }, &app};
+    auto studioPackageStore =
+        std::make_shared<creator::project_store::ProjectPackageStore>();
+#if defined(CS_APP_ENABLE_FFMPEG)
+    creator::ffmpeg_adapter::FfmpegMediaProbe studioMediaProbe;
+    std::unique_ptr<creator::app::IRecordingTimelineReconciler>
+        recordingReconciler =
+            std::make_unique<creator::app::RecordingTimelineReconciler>(
+                studioMediaProbe,
+                [] { return creator::core::generateUuidV4(); },
+                [] { return creator::core::Utc::now(); });
+#else
+    std::unique_ptr<creator::app::IRecordingTimelineReconciler>
+        recordingReconciler =
+            std::make_unique<UnavailableRecordingTimelineReconciler>();
+#endif
+    creator::app::StudioWorkflowController studioWorkflowController{
+        [studioPackageStore](const std::filesystem::path& packageRoot)
+            -> creator::core::Result<std::unique_ptr<
+                creator::project_store::IStudioStore>> {
+            auto opened = studioPackageStore->open(packageRoot);
+            if (!opened.hasValue()) return opened.error();
+            const auto lease = opened.value().databaseIdentityLease;
+            if (!lease) {
+                return creator::core::AppError{
+                    creator::core::ErrorCode::IoFailure,
+                    "validated Studio database identity is missing"};
+            }
+            auto store = creator::project_store::SqliteStudioStore::open(
+                opened.value().databasePath,
+                opened.value().package.manifest.projectId,
+                [lease] { return lease->verifyCurrentIdentity(); });
+            if (!store.hasValue()) return store.error();
+            return std::unique_ptr<creator::project_store::IStudioStore>{
+                new creator::project_store::SqliteStudioStore{
+                    std::move(store).value()}};
+        },
+        std::move(recordingReconciler),
+        [] { return creator::core::generateUuidV4(); }, &app};
 #if defined(CS_APP_ENABLE_MLT)
     const auto mltRuntimeRoot = stagedMltRuntimeRoot();
     std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
@@ -91,12 +151,19 @@ int main(int argc, char* argv[]) {
         std::make_unique<creator::edit_engine::UnavailableEditEngine>();
 #endif
     creator::app::EditorController editorController{std::move(editEngine), &app};
+    creator::app::StudioRecordingBinding studioRecordingBinding{
+        studioController, studioWorkflowController,
+        [&projectController] { return projectController.projectUrl(); }, &app};
     static_cast<void>(
-        creator::app::bindProjectEditor(projectController, editorController));
+        creator::app::bindProjectEditor(projectController, editorController,
+                                        studioRecordingBinding));
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
                                              &studioController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("studioWorkflowController"),
+        &studioWorkflowController);
     engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
                                              &projectController);
     engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),

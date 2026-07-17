@@ -62,6 +62,8 @@ struct StudioWorkflowState final {
     bool reconciling{false};
     std::optional<domain::SessionId> activeSessionId;
     std::optional<domain::SessionId> reconciliationSessionId;
+    bool reconciliationIncomplete{false};
+    bool reconciliationDiscoveryIncomplete{false};
     core::TimestampNs recordingPosition{};
     std::uint64_t nextSceneEventSequence{1};
     std::size_t markerCount{0};

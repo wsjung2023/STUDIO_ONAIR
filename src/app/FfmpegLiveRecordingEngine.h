@@ -23,6 +23,8 @@ public:
     [[nodiscard]] std::string unavailableReason() const override;
     [[nodiscard]] core::Result<void> start(
         LiveRecordingStart start, Completion completion) override;
+    [[nodiscard]] core::Result<std::vector<LiveCaptureSource>>
+        sourceSnapshot() const override;
     void stopAsync(core::TimestampNs stoppedAt) override;
     [[nodiscard]] LiveRecordingEngineSnapshot snapshot() const override;
 

@@ -138,13 +138,28 @@ void StudioWorkflowController::setStatus(QString status) {
 }
 
 void StudioWorkflowController::openProject(QUrl packageUrl) {
+    openProject(std::move(packageUrl), {});
+}
+
+void StudioWorkflowController::openProject(QUrl packageUrl,
+                                           Completion completion) {
     if (!packageUrl.isLocalFile() || packageUrl.toLocalFile().isEmpty()) {
-        setStatus(QStringLiteral("Studio project URL must be a local path"));
+        const auto message = QStringLiteral("Studio project URL must be a local path");
+        setStatus(message);
+        if (completion) {
+            completion(core::AppError{core::ErrorCode::InvalidArgument,
+                                      toStd(message)});
+        }
         return;
     }
     if (recording() || pendingOperation_.has_value()) {
-        setStatus(QStringLiteral(
-            "Stop the active Studio operation before opening another project"));
+        const auto message = QStringLiteral(
+            "Stop the active Studio operation before opening another project");
+        setStatus(message);
+        if (completion) {
+            completion(core::AppError{core::ErrorCode::InvalidState,
+                                      toStd(message)});
+        }
         return;
     }
     packageUrl_ = std::move(packageUrl);
@@ -166,6 +181,8 @@ void StudioWorkflowController::openProject(QUrl packageUrl) {
     if (hadActiveScene) emit activeSceneChanged();
     if (hadRecordingState) emit recordingStateChanged();
     pendingOperation_.reset();
+    pendingCompletion_ = {};
+    openCompletion_ = std::move(completion);
     if (workerReconciling_) {
         workerReconciling_ = false;
         emit reconcilingChanged();
@@ -192,17 +209,29 @@ void StudioWorkflowController::reopenProject() {
     openProject(packageUrl_);
 }
 
-void StudioWorkflowController::submit(StudioWorkflowRequest request) {
+void StudioWorkflowController::submit(StudioWorkflowRequest request,
+                                      Completion completion) {
     if (!state_.has_value()) {
-        setStatus(QStringLiteral("Studio project is not ready"));
+        const auto message = QStringLiteral("Studio project is not ready");
+        setStatus(message);
+        if (completion) {
+            completion(core::AppError{core::ErrorCode::InvalidState,
+                                      toStd(message)});
+        }
         return;
     }
     if (busy_) {
-        setStatus(QStringLiteral("Studio operation is already in progress"));
+        const auto message = QStringLiteral("Studio operation is already in progress");
+        setStatus(message);
+        if (completion) {
+            completion(core::AppError{core::ErrorCode::InvalidState,
+                                      toStd(message)});
+        }
         return;
     }
     busy_ = true;
     pendingOperation_ = request.operation;
+    pendingCompletion_ = std::move(completion);
     commandSelectionVersion_ = selectionVersion_;
     emit busyChanged();
     if (isReconciliationOperation(request.operation)) emit reconcilingChanged();
@@ -222,14 +251,20 @@ void StudioWorkflowController::handleCompleted(
     if (generation != generation_ || !result) return;
     const bool wasReconciling = reconciling();
     const auto completedOperation = pendingOperation_;
+    auto completion = completedOperation.has_value()
+                          ? std::move(pendingCompletion_)
+                          : std::move(openCompletion_);
     const bool selectionChangedDuringCommand =
         selectionVersion_ != commandSelectionVersion_;
     busy_ = false;
     pendingOperation_.reset();
+    pendingCompletion_ = {};
+    openCompletion_ = {};
     emit busyChanged();
     if (!result->hasValue()) {
         setStatus(fromStd(result->error().message()));
         if (wasReconciling) emit reconcilingChanged();
+        if (completion) completion(result->error());
         return;
     }
     auto next = result->value();
@@ -258,6 +293,22 @@ void StudioWorkflowController::handleCompleted(
     }
     publishState(std::move(next));
     if (wasReconciling != reconciling()) emit reconcilingChanged();
+    if (completion) {
+        const bool reconciliationFailed =
+            (!completedOperation.has_value() ||
+             isReconciliationOperation(*completedOperation)) &&
+            (state_->reconciliationIncomplete ||
+             state_->reconciliationSessionId.has_value());
+        if (reconciliationFailed) {
+            completion(core::AppError{
+                core::ErrorCode::IoFailure,
+                state_->status.empty()
+                    ? std::string{"timeline reconciliation remains pending"}
+                    : state_->status});
+        } else {
+            completion(core::ok());
+        }
+    }
 }
 
 void StudioWorkflowController::handleReconciliationProgress(
@@ -504,14 +555,38 @@ void StudioWorkflowController::prepareRecording(QString sessionId,
         .position = core::TimestampNs{core::DurationNs{positionNs}}});
 }
 
+void StudioWorkflowController::prepareRecording(
+    domain::SessionId sessionId,
+    std::vector<project_store::RecordingSourceRole> sources,
+    core::TimestampNs position, Completion completion) {
+    submit(StudioWorkflowRequest{
+               .operation = StudioWorkflowOperation::PrepareRecording,
+               .sessionId = std::move(sessionId),
+               .recordingSources = std::move(sources),
+               .position = position},
+           std::move(completion));
+}
+
 void StudioWorkflowController::abortRecording() {
     submit(StudioWorkflowRequest{
         .operation = StudioWorkflowOperation::AbortRecording});
 }
 
+void StudioWorkflowController::abortRecording(Completion completion) {
+    submit(StudioWorkflowRequest{
+               .operation = StudioWorkflowOperation::AbortRecording},
+           std::move(completion));
+}
+
 void StudioWorkflowController::completeRecording() {
     submit(StudioWorkflowRequest{
         .operation = StudioWorkflowOperation::CompleteRecording});
+}
+
+void StudioWorkflowController::completeRecording(Completion completion) {
+    submit(StudioWorkflowRequest{
+               .operation = StudioWorkflowOperation::CompleteRecording},
+           std::move(completion));
 }
 
 void StudioWorkflowController::addMarker(QString label,
@@ -525,6 +600,12 @@ void StudioWorkflowController::addMarker(QString label,
 void StudioWorkflowController::retryReconciliation() {
     submit(StudioWorkflowRequest{
         .operation = StudioWorkflowOperation::RetryReconciliation});
+}
+
+void StudioWorkflowController::retryReconciliation(Completion completion) {
+    submit(StudioWorkflowRequest{
+               .operation = StudioWorkflowOperation::RetryReconciliation},
+           std::move(completion));
 }
 
 }  // namespace creator::app
