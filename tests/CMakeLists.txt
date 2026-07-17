@@ -118,6 +118,7 @@ gtest_discover_tests(cs_tests)
 add_executable(cs_app_tests
     app/EditorModelsTest.cpp
     app/EditorControllerTest.cpp
+    app/EditorSessionWorkerTest.cpp
     app/StudioControllerTest.cpp
     app/LiveRecordingControllerTest.cpp
     app/ProjectControllerTest.cpp
@@ -152,6 +153,25 @@ target_compile_definitions(cs_app_tests PRIVATE
 gtest_discover_tests(cs_app_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+add_executable(cs_r1_durable_edit_acceptance_tests
+    acceptance/R1DurableEditAcceptanceTest.cpp
+)
+target_link_libraries(cs_r1_durable_edit_acceptance_tests PRIVATE
+    cs_app
+    cs_fakes
+    Qt6::Quick
+    Qt6::Test
+    GTest::gtest
+)
+cs_apply_warnings(cs_r1_durable_edit_acceptance_tests)
+gtest_discover_tests(cs_r1_durable_edit_acceptance_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
 )
 
 if(WIN32)

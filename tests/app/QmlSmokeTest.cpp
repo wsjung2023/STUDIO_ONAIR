@@ -275,6 +275,17 @@ class FakeEditorController final : public QObject {
     Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
     Q_PROPERTY(QImage previewImage READ previewImage CONSTANT)
     Q_PROPERTY(bool hasPreviewFrame READ hasPreviewFrame CONSTANT)
+    Q_PROPERTY(bool sessionBusy READ sessionBusy CONSTANT)
+    Q_PROPERTY(QString selectedTrackId READ selectedTrackId NOTIFY editStateChanged)
+    Q_PROPERTY(QString selectedClipId READ selectedClipId NOTIFY editStateChanged)
+    Q_PROPERTY(qlonglong selectedClipStartNs READ selectedClipStartNs NOTIFY editStateChanged)
+    Q_PROPERTY(qlonglong selectedClipEndNs READ selectedClipEndNs NOTIFY editStateChanged)
+    Q_PROPERTY(qlonglong rangeInNs READ rangeInNs CONSTANT)
+    Q_PROPERTY(qlonglong rangeOutNs READ rangeOutNs CONSTANT)
+    Q_PROPERTY(bool hasMarkedRange READ hasMarkedRange CONSTANT)
+    Q_PROPERTY(bool canUndo READ canUndo CONSTANT)
+    Q_PROPERTY(bool canRedo READ canRedo CONSTANT)
+    Q_PROPERTY(bool clean READ clean CONSTANT)
 
 public:
     explicit FakeEditorController(QObject* parent = nullptr) : QObject(parent) {
@@ -339,14 +350,74 @@ public:
         return image;
     }
     [[nodiscard]] bool hasPreviewFrame() const noexcept { return true; }
+    [[nodiscard]] bool sessionBusy() const noexcept { return false; }
+    [[nodiscard]] QString selectedTrackId() const { return selectedTrackId_; }
+    [[nodiscard]] QString selectedClipId() const { return selectedClipId_; }
+    [[nodiscard]] qlonglong selectedClipStartNs() const noexcept {
+        return selectedClipId_.isEmpty() ? -1 : 1'000'000'000;
+    }
+    [[nodiscard]] qlonglong selectedClipEndNs() const noexcept {
+        return selectedClipId_.isEmpty() ? -1 : 3'000'000'000;
+    }
+    [[nodiscard]] qlonglong rangeInNs() const noexcept { return 1'100'000'000; }
+    [[nodiscard]] qlonglong rangeOutNs() const noexcept { return 1'900'000'000; }
+    [[nodiscard]] bool hasMarkedRange() const noexcept { return true; }
+    [[nodiscard]] bool canUndo() const noexcept { return true; }
+    [[nodiscard]] bool canRedo() const noexcept { return true; }
+    [[nodiscard]] bool clean() const noexcept { return false; }
     Q_INVOKABLE void play() {}
     Q_INVOKABLE void pause() {}
     Q_INVOKABLE void seek(qlonglong position) { lastSeekNs_ = position; }
+    Q_INVOKABLE void selectClip(const QString& trackId, const QString& clipId) {
+        selectedTrackId_ = trackId;
+        selectedClipId_ = clipId;
+        ++selectCalls_;
+        emit editStateChanged();
+    }
+    Q_INVOKABLE void splitSelected() { ++splitCalls_; }
+    Q_INVOKABLE void trimSelectedStart() { ++trimStartCalls_; }
+    Q_INVOKABLE void trimSelectedEnd() { ++trimEndCalls_; }
+    Q_INVOKABLE void markRangeIn() { ++markInCalls_; }
+    Q_INVOKABLE void markRangeOut() { ++markOutCalls_; }
+    Q_INVOKABLE void deleteMarkedRange(bool ripple) {
+        ripple ? ++rippleCalls_ : ++liftCalls_;
+    }
+    Q_INVOKABLE void undo() { ++undoCalls_; }
+    Q_INVOKABLE void redo() { ++redoCalls_; }
+    Q_INVOKABLE void save() { ++saveCalls_; }
+
+    [[nodiscard]] int selectCalls() const noexcept { return selectCalls_; }
+    [[nodiscard]] int splitCalls() const noexcept { return splitCalls_; }
+    [[nodiscard]] int trimStartCalls() const noexcept { return trimStartCalls_; }
+    [[nodiscard]] int trimEndCalls() const noexcept { return trimEndCalls_; }
+    [[nodiscard]] int markInCalls() const noexcept { return markInCalls_; }
+    [[nodiscard]] int markOutCalls() const noexcept { return markOutCalls_; }
+    [[nodiscard]] int liftCalls() const noexcept { return liftCalls_; }
+    [[nodiscard]] int rippleCalls() const noexcept { return rippleCalls_; }
+    [[nodiscard]] int undoCalls() const noexcept { return undoCalls_; }
+    [[nodiscard]] int redoCalls() const noexcept { return redoCalls_; }
+    [[nodiscard]] int saveCalls() const noexcept { return saveCalls_; }
+
+signals:
+    void editStateChanged();
 
 private:
     creator::app::MediaBinModel mediaBin_;
     creator::app::TimelineTrackModel tracks_;
     qlonglong lastSeekNs_{-1};
+    QString selectedTrackId_;
+    QString selectedClipId_;
+    int selectCalls_{0};
+    int splitCalls_{0};
+    int trimStartCalls_{0};
+    int trimEndCalls_{0};
+    int markInCalls_{0};
+    int markOutCalls_{0};
+    int liftCalls_{0};
+    int rippleCalls_{0};
+    int undoCalls_{0};
+    int redoCalls_{0};
+    int saveCalls_{0};
 };
 
 TEST(QmlSmokeTest, RecoveryPageLoadsWithProjectControllerContract) {
@@ -451,6 +522,102 @@ TEST(QmlSmokeTest, EditorPageRendersTypedModelsAndPreviewState) {
     seekSlider->setProperty("value", 1'500'000'000);
     ASSERT_TRUE(QMetaObject::invokeMethod(seekSlider, "moved"));
     EXPECT_EQ(controller.lastSeekNs(), 1'500'000'000);
+}
+
+TEST(QmlSmokeTest, EditorPageProvidesDurableEditControls) {
+    QQmlEngine engine;
+    FakeEditorController controller;
+    QQmlComponent component{
+        &engine,
+        QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/EditorPage.qml"))};
+    QVariantMap initialProperties{
+        {QStringLiteral("controller"),
+         QVariant::fromValue(static_cast<QObject*>(&controller))},
+        {QStringLiteral("width"), 1200},
+        {QStringLiteral("height"), 720}};
+    QQuickWindow window;
+    window.setGeometry(0, 0, 1200, 720);
+    std::unique_ptr<QObject> object{
+        component.createWithInitialProperties(initialProperties)};
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    auto* rootItem = qobject_cast<QQuickItem*>(object.get());
+    ASSERT_NE(rootItem, nullptr);
+    rootItem->setParentItem(window.contentItem());
+    window.show();
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(2);
+    }
+
+    const QStringList buttons{
+        QStringLiteral("editorSplitButton"),
+        QStringLiteral("editorTrimStartButton"),
+        QStringLiteral("editorTrimEndButton"),
+        QStringLiteral("editorUndoButton"),
+        QStringLiteral("editorRedoButton"),
+        QStringLiteral("editorSaveButton"),
+        QStringLiteral("editorMarkInButton"),
+        QStringLiteral("editorMarkOutButton"),
+        QStringLiteral("editorLiftButton"),
+        QStringLiteral("editorRippleDeleteButton"),
+    };
+    for (const auto& name : buttons) {
+        auto* button = object->findChild<QObject*>(name);
+        ASSERT_NE(button, nullptr) << name.toStdString();
+        ASSERT_TRUE(QMetaObject::invokeMethod(button, "clicked"));
+    }
+
+    auto* clip = findVisualItem(rootItem, QStringLiteral("timelineClip-clip-1"));
+    ASSERT_NE(clip, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(clip, "activateSelection"));
+    EXPECT_EQ(controller.selectCalls(), 1);
+    EXPECT_EQ(controller.selectedTrackId(), QStringLiteral("v1"));
+    EXPECT_EQ(controller.selectedClipId(), QStringLiteral("clip-1"));
+
+    const QStringList shortcuts{
+        QStringLiteral("editorSplitShortcut"),
+        QStringLiteral("editorMarkInShortcut"),
+        QStringLiteral("editorMarkOutShortcut"),
+        QStringLiteral("editorLiftShortcut"),
+        QStringLiteral("editorRippleDeleteShortcut"),
+        QStringLiteral("editorUndoShortcut"),
+        QStringLiteral("editorRedoShortcut"),
+        QStringLiteral("editorSaveShortcut"),
+    };
+    for (const auto& name : shortcuts) {
+        auto* shortcut = object->findChild<QObject*>(name);
+        ASSERT_NE(shortcut, nullptr) << name.toStdString();
+        ASSERT_TRUE(QMetaObject::invokeMethod(shortcut, "activated"));
+    }
+
+    EXPECT_EQ(controller.splitCalls(), 2);
+    EXPECT_EQ(controller.trimStartCalls(), 1);
+    EXPECT_EQ(controller.trimEndCalls(), 1);
+    EXPECT_EQ(controller.markInCalls(), 2);
+    EXPECT_EQ(controller.markOutCalls(), 2);
+    EXPECT_EQ(controller.liftCalls(), 2);
+    EXPECT_EQ(controller.rippleCalls(), 2);
+    EXPECT_EQ(controller.undoCalls(), 2);
+    EXPECT_EQ(controller.redoCalls(), 2);
+    EXPECT_EQ(controller.saveCalls(), 2);
+    ASSERT_NE(object->findChild<QObject*>(QStringLiteral("editorMarkedRangeLabel")),
+              nullptr);
+    ASSERT_NE(object->findChild<QObject*>(QStringLiteral("editorSelectionLabel")),
+              nullptr);
+    auto* bounds = object->findChild<QObject*>(
+        QStringLiteral("editorSelectedClipBoundsLabel"));
+    ASSERT_NE(bounds, nullptr);
+    EXPECT_TRUE(bounds->property("text").toString().contains(
+        QStringLiteral("1.00 s")));
+    EXPECT_TRUE(bounds->property("text").toString().contains(
+        QStringLiteral("3.00 s")));
+    auto* range = object->findChild<QObject*>(
+        QStringLiteral("editorMarkedRangeLabel"));
+    ASSERT_NE(range, nullptr);
+    EXPECT_TRUE(range->property("text").toString().contains(
+        QString::fromUtf8("→")));
+    EXPECT_FALSE(range->property("text").toString().contains(
+        QStringLiteral("??")));
 }
 
 TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {

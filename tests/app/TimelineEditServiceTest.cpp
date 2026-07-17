@@ -1,4 +1,5 @@
 #include "app/TimelineEditService.h"
+#include "app/EditorSessionTypes.h"
 
 #include "core/Timebase.h"
 #include "core/Utc.h"
@@ -25,6 +26,8 @@ namespace {
 namespace fs = std::filesystem;
 
 using creator::app::TimelineEditService;
+using creator::app::EditorEditKind;
+using creator::app::EditorEditRequest;
 using creator::core::DurationNs;
 using creator::core::FrameRate;
 using creator::core::TimestampNs;
@@ -256,6 +259,50 @@ struct SequentialIds final {
     std::string operator()() { return "event-" + std::to_string(++next); }
     std::uint64_t next{0};
 };
+
+TEST(TimelineEditServiceTest, ExposesDurableHistoryCapabilities) {
+    TempProject project;
+    auto storeResult = SqliteTimelineStore::open(project.path(), projectId());
+    ASSERT_TRUE(storeResult.hasValue());
+    auto store = std::move(storeResult).value();
+    ASSERT_TRUE(store.putAsset(videoAsset()).hasValue());
+    ASSERT_TRUE(store.createTimeline(initialTimeline()).hasValue());
+
+    SequentialIds ids;
+    auto serviceResult = TimelineEditService::open(
+        store, 100, [&ids] { return ids(); }, [] { return fixedUtc(); });
+    ASSERT_TRUE(serviceResult.hasValue()) << serviceResult.error().message();
+    auto service = std::move(serviceResult).value();
+
+    EXPECT_FALSE(service.canUndo());
+    EXPECT_FALSE(service.canRedo());
+    EXPECT_EQ(service.historyCursor(), 0U);
+
+    ASSERT_TRUE(service.execute(std::make_unique<SplitClipCommand>(
+                                    CommandId::create("split-capability").value(),
+                                    TrackId::create("screen-track").value(),
+                                    ClipId::create("screen-clip").value(),
+                                    ClipId::create("screen-right").value(), at(250)))
+                    .hasValue());
+    EXPECT_TRUE(service.canUndo());
+    EXPECT_FALSE(service.canRedo());
+    EXPECT_EQ(service.historyCursor(), 1U);
+
+    ASSERT_TRUE(service.undo().hasValue());
+    EXPECT_FALSE(service.canUndo());
+    EXPECT_TRUE(service.canRedo());
+    EXPECT_EQ(service.historyCursor(), 0U);
+}
+
+TEST(EditorSessionTypesTest, EditRequestDefaultsAreClosedAndNonRipple) {
+    const EditorEditRequest request{.kind = EditorEditKind::Split};
+
+    EXPECT_FALSE(request.trackId.has_value());
+    EXPECT_FALSE(request.clipId.has_value());
+    EXPECT_EQ(request.position, TimestampNs{});
+    EXPECT_FALSE(request.range.has_value());
+    EXPECT_FALSE(request.ripple);
+}
 
 TEST(TimelineEditServiceTest, ReopensAtEveryCursorAndKeepsUndoRedoAndCleanState) {
     TempProject project;

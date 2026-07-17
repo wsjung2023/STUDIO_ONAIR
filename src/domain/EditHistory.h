@@ -31,6 +31,10 @@ public:
 
     [[nodiscard]] std::size_t size() const noexcept { return commands_.size(); }
     [[nodiscard]] std::size_t cursor() const noexcept { return cursor_; }
+    [[nodiscard]] bool canUndo() const noexcept { return cursor_ > 0; }
+    [[nodiscard]] bool canRedo() const noexcept {
+        return cursor_ < commands_.size();
+    }
     [[nodiscard]] std::optional<std::size_t> cleanCursor() const noexcept {
         return cleanCursor_;
     }

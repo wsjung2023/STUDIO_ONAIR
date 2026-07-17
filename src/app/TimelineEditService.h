@@ -43,6 +43,11 @@ public:
     [[nodiscard]] std::int64_t revision() const noexcept {
         return revision_.value();
     }
+    [[nodiscard]] bool canUndo() const noexcept { return history_.canUndo(); }
+    [[nodiscard]] bool canRedo() const noexcept { return history_.canRedo(); }
+    [[nodiscard]] std::size_t historyCursor() const noexcept {
+        return history_.cursor();
+    }
     [[nodiscard]] bool isClean() const noexcept { return history_.isClean(); }
 
 private:

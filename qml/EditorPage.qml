@@ -8,6 +8,11 @@ Item {
 
     required property var controller
     readonly property real nanosecondsPerPixel: 10000000
+    readonly property bool editingReady: controller.timelineRevision >= 0
+                                         && !controller.busy
+                                         && !controller.sessionBusy
+    readonly property bool hasSelection: controller.selectedTrackId.length > 0
+                                         && controller.selectedClipId.length > 0
     implicitWidth: 1200
     implicitHeight: 720
 
@@ -58,7 +63,7 @@ Item {
                 }
                 Item { Layout.fillWidth: true }
                 BusyIndicator {
-                    running: root.controller.busy
+                    running: root.controller.busy || root.controller.sessionBusy
                     visible: running
                     implicitWidth: 24
                     implicitHeight: 24
@@ -67,6 +72,79 @@ Item {
                     text: qsTr("Revision %1").arg(root.controller.timelineRevision)
                     color: "#aeb7c5"
                 }
+            }
+        }
+
+        ToolBar {
+            Layout.fillWidth: true
+
+            RowLayout {
+                anchors.fill: parent
+                spacing: 4
+
+                ToolButton {
+                    objectName: "editorSplitButton"
+                    text: qsTr("Split")
+                    enabled: root.editingReady && root.hasSelection
+                    onClicked: root.controller.splitSelected()
+                }
+                ToolButton {
+                    objectName: "editorTrimStartButton"
+                    text: qsTr("Trim start")
+                    enabled: root.editingReady && root.hasSelection
+                    onClicked: root.controller.trimSelectedStart()
+                }
+                ToolButton {
+                    objectName: "editorTrimEndButton"
+                    text: qsTr("Trim end")
+                    enabled: root.editingReady && root.hasSelection
+                    onClicked: root.controller.trimSelectedEnd()
+                }
+                ToolSeparator {}
+                ToolButton {
+                    objectName: "editorMarkInButton"
+                    text: qsTr("Mark in")
+                    enabled: root.editingReady
+                    onClicked: root.controller.markRangeIn()
+                }
+                ToolButton {
+                    objectName: "editorMarkOutButton"
+                    text: qsTr("Mark out")
+                    enabled: root.editingReady
+                    onClicked: root.controller.markRangeOut()
+                }
+                ToolButton {
+                    objectName: "editorLiftButton"
+                    text: qsTr("Lift")
+                    enabled: root.editingReady && root.controller.hasMarkedRange
+                    onClicked: root.controller.deleteMarkedRange(false)
+                }
+                ToolButton {
+                    objectName: "editorRippleDeleteButton"
+                    text: qsTr("Ripple delete")
+                    enabled: root.editingReady && root.controller.hasMarkedRange
+                    onClicked: root.controller.deleteMarkedRange(true)
+                }
+                ToolSeparator {}
+                ToolButton {
+                    objectName: "editorUndoButton"
+                    text: qsTr("Undo")
+                    enabled: root.editingReady && root.controller.canUndo
+                    onClicked: root.controller.undo()
+                }
+                ToolButton {
+                    objectName: "editorRedoButton"
+                    text: qsTr("Redo")
+                    enabled: root.editingReady && root.controller.canRedo
+                    onClicked: root.controller.redo()
+                }
+                ToolButton {
+                    objectName: "editorSaveButton"
+                    text: root.controller.clean ? qsTr("Saved") : qsTr("Save")
+                    enabled: root.editingReady && !root.controller.clean
+                    onClicked: root.controller.save()
+                }
+                Item { Layout.fillWidth: true }
             }
         }
 
@@ -178,6 +256,45 @@ Item {
                 ColumnLayout {
                     anchors.fill: parent
                     Label { text: qsTr("Inspector"); font.bold: true }
+                    Label {
+                        objectName: "editorSelectionLabel"
+                        Layout.fillWidth: true
+                        text: root.hasSelection
+                              ? qsTr("Selected %1 / %2")
+                                .arg(root.controller.selectedTrackId)
+                                .arg(root.controller.selectedClipId)
+                              : qsTr("No clip selected")
+                        elide: Text.ElideMiddle
+                    }
+                    Label {
+                        objectName: "editorSelectedClipBoundsLabel"
+                        Layout.fillWidth: true
+                        visible: root.hasSelection
+                        text: root.hasSelection
+                              ? qsTr("Clip %1 s → %2 s (%3 s)")
+                                .arg((root.controller.selectedClipStartNs /
+                                      1000000000).toFixed(2))
+                                .arg((root.controller.selectedClipEndNs /
+                                      1000000000).toFixed(2))
+                                .arg(((root.controller.selectedClipEndNs
+                                       - root.controller.selectedClipStartNs) /
+                                      1000000000).toFixed(2))
+                              : ""
+                        wrapMode: Text.Wrap
+                    }
+                    Label {
+                        objectName: "editorMarkedRangeLabel"
+                        Layout.fillWidth: true
+                        text: root.controller.hasMarkedRange
+                              ? qsTr("Range %1 s → %2 s (%3 s)")
+                                .arg((root.controller.rangeInNs / 1000000000).toFixed(2))
+                                .arg((root.controller.rangeOutNs / 1000000000).toFixed(2))
+                                .arg(((root.controller.rangeOutNs
+                                       - root.controller.rangeInNs) / 1000000000)
+                                     .toFixed(2))
+                              : qsTr("No range marked")
+                        wrapMode: Text.Wrap
+                    }
                     Label { text: qsTr("Effects"); font.bold: true }
                     Item { Layout.fillHeight: true }
                     Label {
@@ -213,6 +330,7 @@ Item {
                         model: root.controller.timelineTrackModel
 
                         delegate: Rectangle {
+                            id: trackRow
                             required property string trackId
                             required property string name
                             required property string kind
@@ -256,7 +374,13 @@ Item {
                                     model: clips
 
                                     delegate: Rectangle {
+                                        id: clipDelegate
                                         required property var modelData
+
+                                        function activateSelection() {
+                                            root.controller.selectClip(
+                                                trackRow.trackId, modelData.id)
+                                        }
 
                                         objectName: "timelineClip-" + modelData.id
                                         x: modelData.timelineStartNs /
@@ -267,7 +391,16 @@ Item {
                                         height: clipLane.height - 14
                                         radius: 3
                                         color: modelData.enabled ? "#4c86d9" : "#4d5664"
-                                        border.color: "#8bb8f6"
+                                        border.width: root.controller.selectedTrackId
+                                                      === trackRow.trackId
+                                                      && root.controller.selectedClipId
+                                                      === modelData.id ? 3 : 1
+                                        border.color: border.width > 1
+                                                      ? "#ffffff" : "#8bb8f6"
+
+                                        TapHandler {
+                                            onTapped: clipDelegate.activateSelection()
+                                        }
 
                                         Label {
                                             anchors.fill: parent
@@ -285,5 +418,63 @@ Item {
                 }
             }
         }
+    }
+
+    Shortcut {
+        objectName: "editorPlayShortcut"
+        sequence: "Space"
+        enabled: root.controller.timelineRevision >= 0
+                 && !root.controller.busy
+                 && !root.controller.previewStale
+        onActivated: root.controller.playing
+                     ? root.controller.pause() : root.controller.play()
+    }
+    Shortcut {
+        objectName: "editorSplitShortcut"
+        sequence: "S"
+        enabled: root.editingReady && root.hasSelection
+        onActivated: root.controller.splitSelected()
+    }
+    Shortcut {
+        objectName: "editorMarkInShortcut"
+        sequence: "["
+        enabled: root.editingReady
+        onActivated: root.controller.markRangeIn()
+    }
+    Shortcut {
+        objectName: "editorMarkOutShortcut"
+        sequence: "]"
+        enabled: root.editingReady
+        onActivated: root.controller.markRangeOut()
+    }
+    Shortcut {
+        objectName: "editorLiftShortcut"
+        sequence: "Delete"
+        enabled: root.editingReady && root.controller.hasMarkedRange
+        onActivated: root.controller.deleteMarkedRange(false)
+    }
+    Shortcut {
+        objectName: "editorRippleDeleteShortcut"
+        sequence: "Shift+Delete"
+        enabled: root.editingReady && root.controller.hasMarkedRange
+        onActivated: root.controller.deleteMarkedRange(true)
+    }
+    Shortcut {
+        objectName: "editorUndoShortcut"
+        sequence: "Ctrl+Z"
+        enabled: root.editingReady && root.controller.canUndo
+        onActivated: root.controller.undo()
+    }
+    Shortcut {
+        objectName: "editorRedoShortcut"
+        sequence: "Ctrl+Shift+Z"
+        enabled: root.editingReady && root.controller.canRedo
+        onActivated: root.controller.redo()
+    }
+    Shortcut {
+        objectName: "editorSaveShortcut"
+        sequence: "Ctrl+S"
+        enabled: root.editingReady && !root.controller.clean
+        onActivated: root.controller.save()
     }
 }

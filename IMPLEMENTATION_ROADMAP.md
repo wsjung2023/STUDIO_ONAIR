@@ -101,6 +101,8 @@
   - MLT 7.40.0 core/avformat runtime-only staging and SHA-256 verification
   - real multitrack composite/audio-mix graph, seek, bounded async playback
   - Unicode package and physical tamper acceptance coverage
+- [x] R1-04 영속 split/trim/lift/ripple 편집, Undo/Redo·명시적 저장,
+  선택·범위 UI와 실제 `.cstudio` 재열기/실패 원자성 검증
 - [ ] Studio 장면/source 편집과 녹화 결과의 타임라인 연결
 - [ ] 텍스트·기본 자막, preview, export와 R1 물리 검증
 
