@@ -96,7 +96,8 @@ public:
     DurablePackage() {
         root_ = fs::temp_directory_path() /
                 (fs::path{L"creator-studio-R1-재열기-"} /
-                 std::to_wstring(++nextId_));
+                 (std::to_wstring(QCoreApplication::applicationPid()) + L"-" +
+                  std::to_wstring(++nextId_)));
         package_ = root_ / fs::path{L"승인-편집.cstudio"};
         std::error_code error;
         fs::remove_all(root_, error);

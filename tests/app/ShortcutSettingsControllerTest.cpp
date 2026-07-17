@@ -34,7 +34,8 @@ class ShortcutSettingsControllerTest : public ::testing::Test {
 protected:
     void SetUp() override {
         root_ = fs::temp_directory_path() /
-                fs::path{u8"creator-studio-단축키-설정"};
+                (fs::path{u8"creator-studio-단축키-설정-"} /
+                 std::to_wstring(QCoreApplication::applicationPid()));
         std::error_code ec;
         fs::remove_all(root_, ec);
         fs::create_directories(root_);

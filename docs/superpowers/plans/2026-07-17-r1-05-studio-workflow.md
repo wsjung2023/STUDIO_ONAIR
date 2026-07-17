@@ -929,13 +929,13 @@ Use `superpowers:requesting-code-review`, fix every confirmed finding with a
 regression test, rerun focused plus complete gates, write exact evidence and
 platform/license limits, and mark only R1-05 complete.
 
-- [ ] **Step 7: Commit and integrate**
+- [x] **Step 7: Commit and integrate**
 
 ```powershell
 git add tests/acceptance tests/CMakeLists.txt IMPLEMENTATION_ROADMAP.md `
-        docs/superpowers/plans/2026-07-17-r1-06-studio-workflow.md `
-        docs/superpowers/reports/2026-07-17-r1-06-verification.md
-git commit -m "docs(r1-06): record studio workflow verification"
+        docs/superpowers/plans/2026-07-17-r1-05-studio-workflow.md `
+        docs/superpowers/reports/2026-07-17-r1-05-studio-workflow-verification.md
+git commit -m "docs(r1-05): record studio workflow verification"
 ```
 
 Use `superpowers:finishing-a-development-branch` to fast-forward into

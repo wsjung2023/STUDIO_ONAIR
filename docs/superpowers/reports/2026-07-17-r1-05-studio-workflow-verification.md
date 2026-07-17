@@ -77,6 +77,10 @@ tests:
   the physical mixed-stream regression was red before and green after.
 - Parallel generated-overlay tests shared PID-less temporary paths. PID-qualified
   roots passed 40/40 focused parallel repetitions.
+- The integrated parallel gate exposed the same process-collision class in the
+  durable Editor acceptance and shortcut-settings tests. Their roots now include
+  the process ID; the three previously failing tests passed 15/15 focused
+  parallel repetitions before the complete gate passed.
 
 ## Build and complete gates
 
@@ -85,6 +89,8 @@ tests:
 - Complete sequential CTest: **717/717 passed**, zero failed, in 320.88 seconds.
 - Complete parallel CTest (`-j4`): **717/717 passed**, zero failed, in 114.09
   seconds.
+- Integrated parent-branch audited CTest (`-j4`): **717/717 passed**, zero
+  failed, in 139.00 seconds with FFmpeg and MLT enabled.
 - Hidden application launch: `creator_studio`, `Responding=True`, alive at the
   three-second probe point, then stopped by the verification harness.
 - `git diff --check`: clean.
