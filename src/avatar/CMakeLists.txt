@@ -8,6 +8,8 @@ cs_add_qtfree_library(cs_avatar
         CalibrationProfile.cpp
         ExpressionNormalizer.h
         ExpressionNormalizer.cpp
+        ExpressionSmoother.h
+        ExpressionSmoother.cpp
         AvatarMotionSample.h
         AvatarMotionSerializer.h
         AvatarMotionSerializer.cpp
