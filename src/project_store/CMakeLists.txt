@@ -3,6 +3,7 @@ cs_add_qtfree_library(cs_project_store
         IProjectStore.h
         ITimelineStore.h
         IProjectPackageStore.h
+        IStudioStore.h
         JsonProjectStore.h
         JsonProjectStore.cpp
         ManifestSchemaValidator.h
@@ -16,8 +17,11 @@ cs_add_qtfree_library(cs_project_store
         SqliteProjectDatabase.cpp
         SqliteTimelineStore.h
         SqliteTimelineStore.cpp
+        SqliteStudioStore.h
+        SqliteStudioStore.cpp
         migrations/001_initial.sql
         migrations/002_timeline_editing.sql
+        migrations/003_studio_workflow.sql
         internal/SqliteConnection.h
         internal/SqliteConnection.cpp
         internal/EditCommandCodec.h

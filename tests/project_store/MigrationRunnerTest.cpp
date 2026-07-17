@@ -52,7 +52,7 @@ TEST_F(MigrationRunnerTest, AppliesAllMigrationsExactlyOnce) {
     ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
     ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
 
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 2);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
     EXPECT_EQ(connection.scalarInt64(
                   "SELECT count(*) FROM schema_migrations WHERE version=1")
                   .value(),
@@ -73,19 +73,29 @@ TEST_F(MigrationRunnerTest, AppliesAllMigrationsExactlyOnce) {
                   "SELECT count(*) FROM schema_migrations WHERE version=2")
                   .value(),
               1);
+    EXPECT_EQ(connection.scalarInt64(
+                  "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN "
+                  "('scenes','scene_sources','studio_state','recording_sources',"
+                  "'recording_scene_events','recording_markers','recording_imports')")
+                  .value(),
+              7);
+    EXPECT_EQ(connection.scalarInt64(
+                  "SELECT count(*) FROM schema_migrations WHERE version=3")
+                  .value(),
+              1);
 }
 
 TEST_F(MigrationRunnerTest, RejectsFutureDatabaseWithoutChangingVersion) {
     auto opened = SqliteConnection::open(databasePath());
     ASSERT_TRUE(opened.hasValue()) << opened.error().message();
     auto connection = std::move(opened).value();
-    ASSERT_TRUE(connection.execute("PRAGMA user_version=3").hasValue());
+    ASSERT_TRUE(connection.execute("PRAGMA user_version=4").hasValue());
 
     const auto result = MigrationRunner::apply(connection);
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::UnsupportedVersion);
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 4);
     EXPECT_EQ(connection.scalarInt64(
                   "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='projects'")
                   .value(),
@@ -105,7 +115,7 @@ TEST_F(MigrationRunnerTest, RejectsChangedChecksum) {
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 2);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
 }
 
 TEST_F(MigrationRunnerTest, RejectsChangedSecondMigrationChecksum) {
@@ -121,7 +131,23 @@ TEST_F(MigrationRunnerTest, RejectsChangedSecondMigrationChecksum) {
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 2);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
+}
+
+TEST_F(MigrationRunnerTest, RejectsChangedStudioMigrationChecksum) {
+    auto opened = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(opened.hasValue()) << opened.error().message();
+    auto connection = std::move(opened).value();
+    ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
+    ASSERT_TRUE(connection.execute(
+        "UPDATE schema_migrations SET checksum='wrong' WHERE version=3")
+                    .hasValue());
+
+    const auto result = MigrationRunner::apply(connection);
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
 }
 
 TEST_F(MigrationRunnerTest, UpgradesVersionOneWithoutLosingExistingRows) {
@@ -129,7 +155,7 @@ TEST_F(MigrationRunnerTest, UpgradesVersionOneWithoutLosingExistingRows) {
     ASSERT_TRUE(opened.hasValue()) << opened.error().message();
     auto connection = std::move(opened).value();
     const auto migrations = defaultMigrations();
-    ASSERT_EQ(migrations.size(), 2U);
+    ASSERT_EQ(migrations.size(), 3U);
     ASSERT_TRUE(applyMigrations(connection, migrations.first(1)).hasValue());
     ASSERT_TRUE(connection.execute(
         "INSERT INTO projects VALUES("
@@ -143,10 +169,122 @@ TEST_F(MigrationRunnerTest, UpgradesVersionOneWithoutLosingExistingRows) {
 
     ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
 
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 2);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
     EXPECT_EQ(connection.scalarInt64("SELECT count(*) FROM projects").value(), 1);
     EXPECT_EQ(connection.scalarInt64("SELECT count(*) FROM recording_sessions").value(), 1);
     EXPECT_EQ(connection.scalarInt64("SELECT count(*) FROM segments").value(), 1);
+}
+
+TEST_F(MigrationRunnerTest, UpgradesVersionTwoWithoutChangingExistingRows) {
+    auto opened = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(opened.hasValue()) << opened.error().message();
+    auto connection = std::move(opened).value();
+    const auto migrations = defaultMigrations();
+    ASSERT_EQ(migrations.size(), 3U);
+    ASSERT_TRUE(applyMigrations(connection, migrations.first(2)).hasValue());
+    ASSERT_TRUE(connection.execute(
+        "INSERT INTO projects VALUES("
+        "'project-1','Existing',1,'2026-07-16T09:30:00Z','2026-07-16T09:30:00Z');"
+        "INSERT INTO timelines(timeline_id,project_id,name,frame_rate_numerator,"
+        "frame_rate_denominator,revision,is_primary) "
+        "VALUES('timeline','project-1','Main',60,1,7,1);")
+                    .hasValue());
+
+    ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
+
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
+    EXPECT_EQ(connection.scalarInt64(
+                  "SELECT revision FROM timelines WHERE timeline_id='timeline'")
+                  .value(),
+              7);
+}
+
+TEST_F(MigrationRunnerTest, StudioSchemaRejectsInvalidRolesTransformsAndOrder) {
+    auto opened = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(opened.hasValue()) << opened.error().message();
+    auto connection = std::move(opened).value();
+    ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
+    ASSERT_TRUE(connection.execute(
+        "INSERT INTO projects VALUES("
+        "'project','Studio',1,'2026-07-17T00:00:00Z','2026-07-17T00:00:00Z');"
+        "INSERT INTO scenes VALUES("
+        "'scene','project','Scene',0,'2026-07-17T00:00:00Z');"
+        "INSERT INTO scene_sources(scene_id,source_id,role,name,position,enabled,"
+        "transform_x,transform_y,transform_width,transform_height,scale_x,scale_y,"
+        "rotation_degrees,crop_left,crop_top,crop_right,crop_bottom,opacity,z_order) "
+        "VALUES('scene','screen','screen','Screen',0,1,0,0,1,1,1,1,0,0,0,0,0,1,0);")
+                    .hasValue());
+
+    EXPECT_FALSE(connection.execute(
+        "INSERT INTO scene_sources(scene_id,source_id,role,name,position,enabled) "
+        "VALUES('scene','avatar','avatar','Avatar',1,1)")
+                     .hasValue());
+    EXPECT_FALSE(connection.execute(
+        "INSERT INTO scene_sources(scene_id,source_id,role,name,position,enabled,"
+        "transform_x,transform_y,transform_width,transform_height,scale_x,scale_y,"
+        "rotation_degrees,crop_left,crop_top,crop_right,crop_bottom,opacity,z_order) "
+        "VALUES('scene','camera','camera','Camera',1,1,0,0,1,1,1,1,0,0.6,0,0.4,0,1,1)")
+                     .hasValue());
+    EXPECT_FALSE(connection.execute(
+        "INSERT INTO scene_sources(scene_id,source_id,role,name,position,enabled,"
+        "transform_x,transform_y,transform_width,transform_height,scale_x,scale_y,"
+        "rotation_degrees,crop_left,crop_top,crop_right,crop_bottom,opacity,z_order) "
+        "VALUES('scene','partial','camera','Partial',1,1,0,0,1,1,1,1,0,"
+        "NULL,0,0,0,1,1)")
+                     .hasValue());
+    EXPECT_FALSE(connection.execute(
+        "INSERT INTO scenes VALUES("
+        "'duplicate-order','project','Other',0,'2026-07-17T00:00:00Z')")
+                     .hasValue());
+    ASSERT_TRUE(connection.execute(
+        "INSERT INTO scenes VALUES("
+        "'large-transform','project','Large',1,'2026-07-17T00:00:00Z');"
+        "INSERT INTO scene_sources(scene_id,source_id,role,name,position,enabled,"
+        "transform_x,transform_y,transform_width,transform_height,scale_x,scale_y,"
+        "rotation_degrees,crop_left,crop_top,crop_right,crop_bottom,opacity,z_order) "
+        "VALUES('large-transform','camera','camera','Camera',0,1,0,0,1,1,"
+        "1001,1001,1000001,0,0,0,0,1,1)")
+                    .hasValue())
+        << "SQLite must accept every finite transform the domain accepts";
+}
+
+TEST_F(MigrationRunnerTest, StudioEventsRejectCrossProjectAndSequenceGaps) {
+    auto opened = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(opened.hasValue()) << opened.error().message();
+    auto connection = std::move(opened).value();
+    ASSERT_TRUE(MigrationRunner::apply(connection).hasValue());
+    ASSERT_TRUE(connection.execute(
+        "INSERT INTO projects VALUES"
+        "('one','One',1,'2026-07-17T00:00:00Z','2026-07-17T00:00:00Z'),"
+        "('two','Two',1,'2026-07-17T00:00:00Z','2026-07-17T00:00:00Z');"
+        "INSERT INTO scenes VALUES"
+        "('scene-one','one','One',0,'2026-07-17T00:00:00Z'),"
+        "('scene-two','two','Two',0,'2026-07-17T00:00:00Z');"
+        "INSERT INTO recording_sessions VALUES("
+        "'session','one','RECORDING',0,NULL,'2026-07-17T00:00:00Z',NULL,NULL);")
+                    .hasValue());
+
+    EXPECT_FALSE(connection.execute(
+        "INSERT INTO recording_scene_events VALUES("
+        "'session',0,'scene-two',0)")
+                     .hasValue());
+    EXPECT_FALSE(connection.execute(
+        "INSERT INTO recording_scene_events VALUES("
+        "'session',1,'scene-one',1)")
+                     .hasValue());
+    ASSERT_TRUE(connection.execute(
+        "INSERT INTO recording_scene_events VALUES("
+        "'session',0,'scene-one',0)")
+                    .hasValue());
+    EXPECT_FALSE(connection.execute(
+        "INSERT INTO recording_scene_events VALUES("
+        "'session',0,'scene-one',1)")
+                     .hasValue());
+    EXPECT_TRUE(connection.execute(
+        "INSERT INTO recording_scene_events VALUES("
+        "'session',1,'scene-one',0)")
+                    .hasValue())
+        << "sequence, not timestamp, is the event identity";
 }
 
 TEST_F(MigrationRunnerTest, TimelineSchemaRejectsOrphansAndInvalidRanges) {
@@ -252,7 +390,7 @@ TEST_F(MigrationRunnerTest, RejectsMissingMigrationMetadataAtCurrentVersion) {
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 2);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
 }
 
 TEST_F(MigrationRunnerTest, RejectsExtraMigrationMetadataAtCurrentVersion) {
@@ -269,7 +407,7 @@ TEST_F(MigrationRunnerTest, RejectsExtraMigrationMetadataAtCurrentVersion) {
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
-    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 2);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 3);
 }
 
 TEST_F(MigrationRunnerTest, InvalidMigrationRollsBackSchemaAndVersion) {
@@ -322,6 +460,32 @@ TEST_F(MigrationRunnerTest, InvalidSecondMigrationKeepsCommittedVersionOne) {
               1);
     EXPECT_EQ(connection.scalarInt64(
                   "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='partial'")
+                  .value(),
+              0);
+}
+
+TEST_F(MigrationRunnerTest, InvalidThirdMigrationKeepsCommittedVersionTwo) {
+    auto opened = SqliteConnection::open(databasePath());
+    ASSERT_TRUE(opened.hasValue()) << opened.error().message();
+    auto connection = std::move(opened).value();
+    const auto defaults = defaultMigrations();
+    const std::array migrations{
+        defaults[0],
+        defaults[1],
+        MigrationDescriptor{.version = 3,
+                            .name = "003_broken",
+                            .checksum = "three",
+                            .sql = "CREATE TABLE partial_studio(value INTEGER); "
+                                   "NOT VALID SQL;"}};
+
+    const auto result = applyMigrations(connection, migrations);
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
+    EXPECT_EQ(connection.scalarInt64("PRAGMA user_version").value(), 2);
+    EXPECT_EQ(connection.scalarInt64(
+                  "SELECT count(*) FROM sqlite_master WHERE type='table' "
+                  "AND name='partial_studio'")
                   .value(),
               0);
 }

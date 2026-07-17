@@ -78,6 +78,7 @@ add_executable(cs_tests
     project_store/MigrationRunnerTest.cpp
     project_store/SqliteProjectDatabaseTest.cpp
     project_store/SqliteTimelineStoreTest.cpp
+    project_store/SqliteStudioStoreTest.cpp
     project_store/SegmentPersistenceTest.cpp
     project_store/RecoveryTest.cpp
     project_store/ProjectPackageStoreTest.cpp

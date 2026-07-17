@@ -27,7 +27,7 @@ namespace creator::project_store {
 
 class MigrationRunner final {
 public:
-    static constexpr std::int32_t kLatestVersion = 2;
+    static constexpr std::int32_t kLatestVersion = 3;
 
     [[nodiscard]] static core::Result<void> apply(internal::SqliteConnection& connection);
 };
