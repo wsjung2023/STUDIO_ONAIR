@@ -77,6 +77,7 @@ using creator::domain::VideoAssetMetadata;
 using creator::domain::VisualTransform;
 using creator::edit_engine::IEditEngine;
 using creator::edit_engine::IRenderJob;
+using creator::edit_engine::GeneratedOverlayDescriptor;
 using creator::edit_engine::PreviewFrame;
 using creator::edit_engine::RenderRequest;
 using creator::edit_engine::TimelineChangeSet;
@@ -246,9 +247,16 @@ TimelineSnapshot snapshotWithInspectorValues(std::int64_t revision,
                                 TrackId::create("v1").value(), true)
                         .hasValue());
     }
-    return TimelineSnapshot{std::move(timeline),
-                            TimelineRevision::create(revision).value(),
-                            {std::move(video), std::move(audio)}};
+    auto snapshot = TimelineSnapshot{
+        std::move(timeline), TimelineRevision::create(revision).value(),
+        {std::move(video), std::move(audio)}};
+    snapshot.generatedOverlays.push_back(
+        GeneratedOverlayDescriptor::create(
+            ClipId::create("title").value(), std::nullopt,
+            fs::path{"cache/generated/title.png"}, range,
+            "Noto Sans CJK KR")
+            .value());
+    return snapshot;
 }
 
 class DurableControllerPackage final {
@@ -397,6 +405,8 @@ TEST(EditorControllerDurableTest,
                   .value(QStringLiteral("text"))
                   .toString(),
               QStringLiteral("Inspector title"));
+    EXPECT_EQ(controller.selectedResolvedFontFamily(),
+              QStringLiteral("Noto Sans CJK KR"));
 
     controller.selectClip(QStringLiteral("caption-1"),
                           QStringLiteral("caption"));
@@ -416,6 +426,7 @@ TEST(EditorControllerDurableTest,
     EXPECT_FALSE(controller.selectedVisualCompatible());
     EXPECT_TRUE(controller.selectedVisualTransform().isEmpty());
     EXPECT_TRUE(controller.selectedCaptionCues().isEmpty());
+    EXPECT_TRUE(controller.selectedResolvedFontFamily().isEmpty());
 }
 
 TEST(EditorControllerDurableTest,

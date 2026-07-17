@@ -295,6 +295,19 @@ QString EditorController::selectedPipPreset() const {
         canvasAspect));
 }
 
+QString EditorController::selectedResolvedFontFamily() const {
+    const auto* clip = selectedClip();
+    if (clip == nullptr || !snapshot_.has_value()) return {};
+    const auto found = std::find_if(
+        snapshot_->generatedOverlays.begin(), snapshot_->generatedOverlays.end(),
+        [clip](const edit_engine::GeneratedOverlayDescriptor& descriptor) {
+            return descriptor.ownerClipId() == clip->id();
+        });
+    return found == snapshot_->generatedOverlays.end()
+               ? QString{}
+               : QString::fromUtf8(found->resolvedFontFamily());
+}
+
 void EditorController::openSession(
     std::vector<domain::MediaAsset> assets,
     edit_engine::TimelineSnapshot snapshot) {

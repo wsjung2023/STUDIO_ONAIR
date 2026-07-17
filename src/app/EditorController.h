@@ -55,6 +55,7 @@ class EditorController final : public QObject {
     Q_PROPERTY(QVariantMap selectedTitlePayload READ selectedTitlePayload NOTIFY selectionChanged)
     Q_PROPERTY(QVariantList selectedCaptionCues READ selectedCaptionCues NOTIFY selectionChanged)
     Q_PROPERTY(QString selectedPipPreset READ selectedPipPreset NOTIFY selectionChanged)
+    Q_PROPERTY(QString selectedResolvedFontFamily READ selectedResolvedFontFamily NOTIFY selectionChanged)
     Q_PROPERTY(qlonglong selectedClipStartNs READ selectedClipStartNs NOTIFY selectionChanged)
     Q_PROPERTY(qlonglong selectedClipEndNs READ selectedClipEndNs NOTIFY selectionChanged)
     Q_PROPERTY(qlonglong rangeInNs READ rangeInNs NOTIFY markedRangeChanged)
@@ -99,6 +100,7 @@ public:
     [[nodiscard]] QVariantMap selectedTitlePayload() const;
     [[nodiscard]] QVariantList selectedCaptionCues() const;
     [[nodiscard]] QString selectedPipPreset() const;
+    [[nodiscard]] QString selectedResolvedFontFamily() const;
     [[nodiscard]] qlonglong selectedClipStartNs() const noexcept;
     [[nodiscard]] qlonglong selectedClipEndNs() const noexcept;
     [[nodiscard]] qlonglong rangeInNs() const noexcept {

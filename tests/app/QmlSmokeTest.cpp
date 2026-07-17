@@ -11,6 +11,7 @@
 #include "domain/TimelineTypes.h"
 
 #include <QGuiApplication>
+#include <QAccessible>
 #include <QImage>
 #include <QCoreApplication>
 #include <QQmlComponent>
@@ -266,7 +267,7 @@ class FakeEditorController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QAbstractItemModel* mediaBinModel READ mediaBinModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel* timelineTrackModel READ timelineTrackModel CONSTANT)
-    Q_PROPERTY(bool busy READ busy CONSTANT)
+    Q_PROPERTY(bool busy READ busy NOTIFY editStateChanged)
     Q_PROPERTY(bool previewStale READ previewStale CONSTANT)
     Q_PROPERTY(bool playing READ playing CONSTANT)
     Q_PROPERTY(qlonglong playheadNs READ playheadNs CONSTANT)
@@ -275,9 +276,18 @@ class FakeEditorController final : public QObject {
     Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
     Q_PROPERTY(QImage previewImage READ previewImage CONSTANT)
     Q_PROPERTY(bool hasPreviewFrame READ hasPreviewFrame CONSTANT)
-    Q_PROPERTY(bool sessionBusy READ sessionBusy CONSTANT)
+    Q_PROPERTY(bool sessionBusy READ sessionBusy NOTIFY editStateChanged)
     Q_PROPERTY(QString selectedTrackId READ selectedTrackId NOTIFY editStateChanged)
     Q_PROPERTY(QString selectedClipId READ selectedClipId NOTIFY editStateChanged)
+    Q_PROPERTY(QString selectedClipKind READ selectedClipKind NOTIFY editStateChanged)
+    Q_PROPERTY(bool selectedVisualCompatible READ selectedVisualCompatible NOTIFY editStateChanged)
+    Q_PROPERTY(bool selectedAudioCompatible READ selectedAudioCompatible NOTIFY editStateChanged)
+    Q_PROPERTY(QVariantMap selectedVisualTransform READ selectedVisualTransform NOTIFY editStateChanged)
+    Q_PROPERTY(QVariantMap selectedAudioEnvelope READ selectedAudioEnvelope NOTIFY editStateChanged)
+    Q_PROPERTY(QVariantMap selectedTitlePayload READ selectedTitlePayload NOTIFY editStateChanged)
+    Q_PROPERTY(QVariantList selectedCaptionCues READ selectedCaptionCues NOTIFY editStateChanged)
+    Q_PROPERTY(QString selectedPipPreset READ selectedPipPreset NOTIFY editStateChanged)
+    Q_PROPERTY(QString selectedResolvedFontFamily READ selectedResolvedFontFamily NOTIFY editStateChanged)
     Q_PROPERTY(qlonglong selectedClipStartNs READ selectedClipStartNs NOTIFY editStateChanged)
     Q_PROPERTY(qlonglong selectedClipEndNs READ selectedClipEndNs NOTIFY editStateChanged)
     Q_PROPERTY(qlonglong rangeInNs READ rangeInNs CONSTANT)
@@ -323,6 +333,39 @@ public:
                                       media, source, placed, true, std::nullopt,
                                       std::nullopt)
                 .value()));
+        static_cast<void>(timeline.addTrack(
+            domain::Track::create(domain::TrackId::create("title-1").value(),
+                                  domain::TrackKind::Title, "Titles", true,
+                                  false)
+                .value()));
+        const auto title = domain::TitlePayload::create(
+                               "강의 제목", "Noto Sans", 0.2, 0.1,
+                               domain::RgbaColor::parse("#ffffffff").value(),
+                               domain::RgbaColor::parse("#00000080").value(),
+                               domain::TextAlignment::Center)
+                               .value();
+        static_cast<void>(timeline.insertClip(
+            domain::TrackId::create("title-1").value(),
+            domain::Clip::createTitle(
+                domain::ClipId::create("title-ui").value(), placed, true,
+                title, std::nullopt)
+                .value()));
+        static_cast<void>(timeline.addTrack(
+            domain::Track::create(
+                domain::TrackId::create("caption-1").value(),
+                domain::TrackKind::Caption, "Captions", true, false)
+                .value()));
+        const auto cue = domain::CaptionCue::create(
+                             domain::CueId::create("cue-ui").value(),
+                             core::DurationNs{100'000'000},
+                             core::DurationNs{500'000'000}, "첫 자막")
+                             .value();
+        static_cast<void>(timeline.insertClip(
+            domain::TrackId::create("caption-1").value(),
+            domain::Clip::createCaption(
+                domain::ClipId::create("caption-ui").value(), placed, true,
+                {cue}, std::nullopt)
+                .value()));
         tracks_.setTimeline(std::move(timeline));
     }
 
@@ -332,7 +375,7 @@ public:
     [[nodiscard]] QAbstractItemModel* timelineTrackModel() noexcept {
         return &tracks_;
     }
-    [[nodiscard]] bool busy() const noexcept { return false; }
+    [[nodiscard]] bool busy() const noexcept { return busy_; }
     [[nodiscard]] bool previewStale() const noexcept { return true; }
     [[nodiscard]] bool playing() const noexcept { return false; }
     [[nodiscard]] qlonglong playheadNs() const noexcept { return 1'000'000'000; }
@@ -350,9 +393,72 @@ public:
         return image;
     }
     [[nodiscard]] bool hasPreviewFrame() const noexcept { return true; }
-    [[nodiscard]] bool sessionBusy() const noexcept { return false; }
+    [[nodiscard]] bool sessionBusy() const noexcept { return sessionBusy_; }
     [[nodiscard]] QString selectedTrackId() const { return selectedTrackId_; }
     [[nodiscard]] QString selectedClipId() const { return selectedClipId_; }
+    [[nodiscard]] QString selectedClipKind() const {
+        if (selectedClipId_.isEmpty()) return {};
+        if (selectedTrackId_ == QStringLiteral("title-1")) {
+            return QStringLiteral("title");
+        }
+        if (selectedTrackId_ == QStringLiteral("caption-1")) {
+            return QStringLiteral("caption");
+        }
+        return QStringLiteral("asset");
+    }
+    [[nodiscard]] bool selectedVisualCompatible() const noexcept {
+        return !selectedClipId_.isEmpty()
+               && selectedTrackId_ != QStringLiteral("a1");
+    }
+    [[nodiscard]] bool selectedAudioCompatible() const noexcept {
+        return selectedClipKind() == QStringLiteral("asset");
+    }
+    [[nodiscard]] QVariantMap selectedVisualTransform() const {
+        return {{QStringLiteral("x"), 0.1},
+                {QStringLiteral("y"), 0.2},
+                {QStringLiteral("width"), 0.3},
+                {QStringLiteral("height"), 0.4},
+                {QStringLiteral("scaleX"), 1.0},
+                {QStringLiteral("scaleY"), 1.0},
+                {QStringLiteral("rotationDegrees"), 5.0},
+                {QStringLiteral("cropLeft"), 0.0},
+                {QStringLiteral("cropTop"), 0.0},
+                {QStringLiteral("cropRight"), 0.0},
+                {QStringLiteral("cropBottom"), 0.0},
+                {QStringLiteral("opacity"), 0.8},
+                {QStringLiteral("zOrder"), 2}};
+    }
+    [[nodiscard]] QVariantMap selectedAudioEnvelope() const {
+        return {{QStringLiteral("gainDb"), -3.0},
+                {QStringLiteral("fadeInNs"), 100'000'000LL},
+                {QStringLiteral("fadeOutNs"), 200'000'000LL}};
+    }
+    [[nodiscard]] QVariantMap selectedTitlePayload() const {
+        if (selectedClipKind() != QStringLiteral("title")) return {};
+        return {{QStringLiteral("text"), QString::fromUtf8("강의 제목")},
+                {QStringLiteral("fontFamily"), QStringLiteral("Noto Sans")},
+                {QStringLiteral("x"), 0.2},
+                {QStringLiteral("y"), 0.1},
+                {QStringLiteral("foreground"), QStringLiteral("#ffffffff")},
+                {QStringLiteral("background"), QStringLiteral("#00000080")},
+                {QStringLiteral("alignment"), QStringLiteral("center")}};
+    }
+    [[nodiscard]] QVariantList selectedCaptionCues() const {
+        if (selectedClipKind() != QStringLiteral("caption")) return {};
+        return {QVariantMap{{QStringLiteral("cueId"), QStringLiteral("cue-ui")},
+                            {QStringLiteral("startOffsetNs"), 100'000'000LL},
+                            {QStringLiteral("durationNs"), 500'000'000LL},
+                            {QStringLiteral("text"),
+                             QString::fromUtf8("첫 자막")}}};
+    }
+    [[nodiscard]] QString selectedPipPreset() const {
+        return QStringLiteral("custom");
+    }
+    [[nodiscard]] QString selectedResolvedFontFamily() const {
+        return selectedClipKind() == QStringLiteral("title")
+                   ? QStringLiteral("Noto Sans CJK KR")
+                   : QString{};
+    }
     [[nodiscard]] qlonglong selectedClipStartNs() const noexcept {
         return selectedClipId_.isEmpty() ? -1 : 1'000'000'000;
     }
@@ -373,6 +479,21 @@ public:
         selectedClipId_ = clipId;
         ++selectCalls_;
         emit editStateChanged();
+        emit selectionChanged();
+    }
+    void clearSelection() {
+        selectedTrackId_.clear();
+        selectedClipId_.clear();
+        emit editStateChanged();
+        emit selectionChanged();
+    }
+    void setBusy(bool busy) {
+        busy_ = busy;
+        emit editStateChanged();
+    }
+    void setSessionBusy(bool busy) {
+        sessionBusy_ = busy;
+        emit editStateChanged();
     }
     Q_INVOKABLE void splitSelected() { ++splitCalls_; }
     Q_INVOKABLE void trimSelectedStart() { ++trimStartCalls_; }
@@ -385,6 +506,39 @@ public:
     Q_INVOKABLE void undo() { ++undoCalls_; }
     Q_INVOKABLE void redo() { ++redoCalls_; }
     Q_INVOKABLE void save() { ++saveCalls_; }
+    Q_INVOKABLE void applySelectedVisualTransform(
+        double, double, double, double, double, double, double, double, double,
+        double, double, double, int) {
+        ++visualApplyCalls_;
+    }
+    Q_INVOKABLE void applySelectedPipPreset(const QString&) {
+        ++pipPresetCalls_;
+    }
+    Q_INVOKABLE void resetSelectedVisualTransform() { ++visualResetCalls_; }
+    Q_INVOKABLE void applySelectedAudioEnvelope(double, qlonglong, qlonglong) {
+        ++audioApplyCalls_;
+    }
+    Q_INVOKABLE void resetSelectedAudioEnvelope() { ++audioResetCalls_; }
+    Q_INVOKABLE void addTitle(const QString&, const QString&, double, double,
+                              const QString&, const QString&, const QString&) {
+        ++titleAddCalls_;
+    }
+    Q_INVOKABLE void editSelectedTitle(
+        const QString&, const QString&, double, double, const QString&,
+        const QString&, const QString&) {
+        ++titleEditCalls_;
+    }
+    Q_INVOKABLE void removeSelectedTitle() { ++titleRemoveCalls_; }
+    Q_INVOKABLE void addCaptionCue(qlonglong, qlonglong, const QString&) {
+        ++captionAddCalls_;
+    }
+    Q_INVOKABLE void editCaptionCue(const QString&, qlonglong, qlonglong,
+                                    const QString&) {
+        ++captionEditCalls_;
+    }
+    Q_INVOKABLE void removeCaptionCue(const QString&) {
+        ++captionRemoveCalls_;
+    }
 
     [[nodiscard]] int selectCalls() const noexcept { return selectCalls_; }
     [[nodiscard]] int splitCalls() const noexcept { return splitCalls_; }
@@ -397,9 +551,31 @@ public:
     [[nodiscard]] int undoCalls() const noexcept { return undoCalls_; }
     [[nodiscard]] int redoCalls() const noexcept { return redoCalls_; }
     [[nodiscard]] int saveCalls() const noexcept { return saveCalls_; }
+    [[nodiscard]] int visualApplyCalls() const noexcept {
+        return visualApplyCalls_;
+    }
+    [[nodiscard]] int pipPresetCalls() const noexcept { return pipPresetCalls_; }
+    [[nodiscard]] int audioApplyCalls() const noexcept {
+        return audioApplyCalls_;
+    }
+    [[nodiscard]] int titleAddCalls() const noexcept { return titleAddCalls_; }
+    [[nodiscard]] int titleEditCalls() const noexcept { return titleEditCalls_; }
+    [[nodiscard]] int titleRemoveCalls() const noexcept {
+        return titleRemoveCalls_;
+    }
+    [[nodiscard]] int captionAddCalls() const noexcept {
+        return captionAddCalls_;
+    }
+    [[nodiscard]] int captionEditCalls() const noexcept {
+        return captionEditCalls_;
+    }
+    [[nodiscard]] int captionRemoveCalls() const noexcept {
+        return captionRemoveCalls_;
+    }
 
 signals:
     void editStateChanged();
+    void selectionChanged();
 
 private:
     creator::app::MediaBinModel mediaBin_;
@@ -407,6 +583,8 @@ private:
     qlonglong lastSeekNs_{-1};
     QString selectedTrackId_;
     QString selectedClipId_;
+    bool busy_{false};
+    bool sessionBusy_{false};
     int selectCalls_{0};
     int splitCalls_{0};
     int trimStartCalls_{0};
@@ -418,6 +596,17 @@ private:
     int undoCalls_{0};
     int redoCalls_{0};
     int saveCalls_{0};
+    int visualApplyCalls_{0};
+    int pipPresetCalls_{0};
+    int visualResetCalls_{0};
+    int audioApplyCalls_{0};
+    int audioResetCalls_{0};
+    int titleAddCalls_{0};
+    int titleEditCalls_{0};
+    int titleRemoveCalls_{0};
+    int captionAddCalls_{0};
+    int captionEditCalls_{0};
+    int captionRemoveCalls_{0};
 };
 
 TEST(QmlSmokeTest, RecoveryPageLoadsWithProjectControllerContract) {
@@ -618,6 +807,224 @@ TEST(QmlSmokeTest, EditorPageProvidesDurableEditControls) {
         QString::fromUtf8("→")));
     EXPECT_FALSE(range->property("text").toString().contains(
         QStringLiteral("??")));
+}
+
+TEST(QmlSmokeTest, EditorPageProvidesCompleteAccessibleInspectorControls) {
+    QQmlEngine engine;
+    FakeEditorController controller;
+    QQmlComponent component{
+        &engine,
+        QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/EditorPage.qml"))};
+    QVariantMap initialProperties{
+        {QStringLiteral("controller"),
+         QVariant::fromValue(static_cast<QObject*>(&controller))},
+        {QStringLiteral("width"), 1200},
+        {QStringLiteral("height"), 900}};
+    QQuickWindow window;
+    window.setGeometry(0, 0, 1200, 900);
+    std::unique_ptr<QObject> object{
+        component.createWithInitialProperties(initialProperties)};
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    auto* rootItem = qobject_cast<QQuickItem*>(object.get());
+    ASSERT_NE(rootItem, nullptr);
+    rootItem->setParentItem(window.contentItem());
+    window.show();
+    for (int attempt = 0; attempt < 30; ++attempt) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(2);
+    }
+    const QStringList controls{
+        QStringLiteral("editorVisualXField"),
+        QStringLiteral("editorVisualYField"),
+        QStringLiteral("editorVisualWidthField"),
+        QStringLiteral("editorVisualHeightField"),
+        QStringLiteral("editorVisualScaleXField"),
+        QStringLiteral("editorVisualScaleYField"),
+        QStringLiteral("editorVisualRotationField"),
+        QStringLiteral("editorVisualCropLeftField"),
+        QStringLiteral("editorVisualCropTopField"),
+        QStringLiteral("editorVisualCropRightField"),
+        QStringLiteral("editorVisualCropBottomField"),
+        QStringLiteral("editorVisualOpacityField"),
+        QStringLiteral("editorVisualZOrderField"),
+        QStringLiteral("editorVisualApplyButton"),
+        QStringLiteral("editorVisualResetButton"),
+        QStringLiteral("editorPipFullFrameButton"),
+        QStringLiteral("editorPipTopLeftButton"),
+        QStringLiteral("editorPipTopRightButton"),
+        QStringLiteral("editorPipBottomLeftButton"),
+        QStringLiteral("editorPipBottomRightButton"),
+        QStringLiteral("editorPipStateLabel"),
+        QStringLiteral("editorAudioGainField"),
+        QStringLiteral("editorAudioFadeInField"),
+        QStringLiteral("editorAudioFadeOutField"),
+        QStringLiteral("editorAudioApplyButton"),
+        QStringLiteral("editorAudioResetButton"),
+        QStringLiteral("editorTitleTextField"),
+        QStringLiteral("editorTitleFontField"),
+        QStringLiteral("editorTitleResolvedFontLabel"),
+        QStringLiteral("editorTitleXField"),
+        QStringLiteral("editorTitleYField"),
+        QStringLiteral("editorTitleForegroundField"),
+        QStringLiteral("editorTitleBackgroundField"),
+        QStringLiteral("editorTitleAlignmentBox"),
+        QStringLiteral("editorTitleAddButton"),
+        QStringLiteral("editorTitleApplyButton"),
+        QStringLiteral("editorTitleRemoveButton"),
+        QStringLiteral("editorCaptionCueList"),
+        QStringLiteral("editorCaptionStartField"),
+        QStringLiteral("editorCaptionDurationField"),
+        QStringLiteral("editorCaptionTextField"),
+        QStringLiteral("editorCaptionAddButton"),
+        QStringLiteral("editorCaptionApplyButton"),
+        QStringLiteral("editorCaptionRemoveButton"),
+    };
+    for (const auto& name : controls) {
+        auto* control = object->findChild<QObject*>(name);
+        ASSERT_NE(control, nullptr) << name.toStdString();
+        auto* accessible = QAccessible::queryAccessibleInterface(control);
+        ASSERT_NE(accessible, nullptr) << name.toStdString();
+        EXPECT_FALSE(accessible->text(QAccessible::Name).isEmpty())
+            << name.toStdString();
+    }
+    auto* visualApply =
+        object->findChild<QObject*>(QStringLiteral("editorVisualApplyButton"));
+    auto* audioApply =
+        object->findChild<QObject*>(QStringLiteral("editorAudioApplyButton"));
+    auto* titleApply =
+        object->findChild<QObject*>(QStringLiteral("editorTitleApplyButton"));
+    auto* captionApply =
+        object->findChild<QObject*>(QStringLiteral("editorCaptionApplyButton"));
+    EXPECT_FALSE(visualApply->property("enabled").toBool());
+    EXPECT_FALSE(audioApply->property("enabled").toBool());
+    EXPECT_FALSE(titleApply->property("enabled").toBool());
+    EXPECT_FALSE(captionApply->property("enabled").toBool());
+
+    auto* videoClip =
+        findVisualItem(rootItem, QStringLiteral("timelineClip-clip-1"));
+    ASSERT_NE(videoClip, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(videoClip, "activateSelection"));
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(visualApply->property("enabled").toBool());
+    EXPECT_TRUE(audioApply->property("enabled").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(visualApply, "clicked"));
+    for (const auto& name : {QStringLiteral("editorPipFullFrameButton"),
+                             QStringLiteral("editorPipTopLeftButton"),
+                             QStringLiteral("editorPipTopRightButton"),
+                             QStringLiteral("editorPipBottomLeftButton"),
+                             QStringLiteral("editorPipBottomRightButton")}) {
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            object->findChild<QObject*>(name), "clicked"));
+    }
+    ASSERT_TRUE(QMetaObject::invokeMethod(audioApply, "clicked"));
+
+    controller.selectClip(QStringLiteral("title-1"), QStringLiteral("title-ui"));
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(audioApply->property("enabled").toBool());
+    EXPECT_TRUE(titleApply->property("enabled").toBool());
+    for (const auto& name : {QStringLiteral("editorTitleAddButton"),
+                             QStringLiteral("editorTitleApplyButton"),
+                             QStringLiteral("editorTitleRemoveButton")}) {
+        auto* button = object->findChild<QObject*>(name);
+        ASSERT_TRUE(button->property("enabled").toBool()) << name.toStdString();
+        ASSERT_TRUE(QMetaObject::invokeMethod(button, "clicked"));
+    }
+
+    controller.selectClip(QStringLiteral("caption-1"),
+                          QStringLiteral("caption-ui"));
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(captionApply->property("enabled").toBool());
+    for (const auto& name : {QStringLiteral("editorCaptionAddButton"),
+                             QStringLiteral("editorCaptionApplyButton"),
+                             QStringLiteral("editorCaptionRemoveButton")}) {
+        auto* button = object->findChild<QObject*>(name);
+        ASSERT_TRUE(button->property("enabled").toBool()) << name.toStdString();
+        ASSERT_TRUE(QMetaObject::invokeMethod(button, "clicked"));
+    }
+    EXPECT_EQ(controller.visualApplyCalls(), 1);
+    EXPECT_EQ(controller.pipPresetCalls(), 5);
+    EXPECT_EQ(controller.audioApplyCalls(), 1);
+    EXPECT_EQ(controller.titleAddCalls(), 1);
+    EXPECT_EQ(controller.titleEditCalls(), 1);
+    EXPECT_EQ(controller.titleRemoveCalls(), 1);
+    EXPECT_EQ(controller.captionAddCalls(), 1);
+    EXPECT_EQ(controller.captionEditCalls(), 1);
+    EXPECT_EQ(controller.captionRemoveCalls(), 1);
+
+    auto* captionStart = object->findChild<QObject*>(
+        QStringLiteral("editorCaptionStartField"));
+    ASSERT_TRUE(captionStart->setProperty("text", QStringLiteral("abc")));
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(captionApply->property("enabled").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(captionApply, "clicked"));
+    EXPECT_EQ(controller.captionEditCalls(), 1);
+
+    auto* titleLabel = findVisualItem(
+        rootItem, QStringLiteral("timelineClipLabel-title-ui"));
+    auto* captionLabel = findVisualItem(
+        rootItem, QStringLiteral("timelineClipLabel-caption-ui"));
+    ASSERT_NE(titleLabel, nullptr);
+    ASSERT_NE(captionLabel, nullptr);
+    EXPECT_TRUE(titleLabel->property("text").toString().contains(
+        QStringLiteral("TITLE")));
+    EXPECT_TRUE(titleLabel->property("text").toString().contains(
+        QString::fromUtf8("강의 제목")));
+    EXPECT_TRUE(captionLabel->property("text").toString().contains(
+        QStringLiteral("CAPTION")));
+    auto* captionText = object->findChild<QObject*>(
+        QStringLiteral("editorCaptionTextField"));
+    ASSERT_NE(captionText, nullptr);
+    EXPECT_EQ(captionText->property("text").toString(),
+              QString::fromUtf8("첫 자막"));
+    controller.selectClip(QStringLiteral("title-1"), QStringLiteral("title-ui"));
+    QCoreApplication::processEvents();
+    auto* resolvedFont = object->findChild<QObject*>(
+        QStringLiteral("editorTitleResolvedFontLabel"));
+    ASSERT_NE(resolvedFont, nullptr);
+    EXPECT_TRUE(resolvedFont->property("text").toString().contains(
+        QStringLiteral("Noto Sans CJK KR")));
+
+    auto* xField =
+        object->findChild<QObject*>(QStringLiteral("editorVisualXField"));
+    controller.selectClip(QStringLiteral("v1"), QStringLiteral("clip-1"));
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(xField->setProperty("text", QString{}));
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(visualApply->property("enabled").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(visualApply, "clicked"));
+    EXPECT_EQ(controller.visualApplyCalls(), 1);
+
+    controller.setBusy(true);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(visualApply->property("enabled").toBool());
+    EXPECT_FALSE(object->findChild<QObject*>(
+        QStringLiteral("editorTitleAddButton"))->property("enabled").toBool());
+    EXPECT_FALSE(object->findChild<QObject*>(
+        QStringLiteral("editorCaptionAddButton"))->property("enabled").toBool());
+    controller.setBusy(false);
+    controller.setSessionBusy(true);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(visualApply->property("enabled").toBool());
+    EXPECT_FALSE(object->findChild<QObject*>(
+        QStringLiteral("editorTitleAddButton"))->property("enabled").toBool());
+    controller.setSessionBusy(false);
+    controller.selectClip(QStringLiteral("a1"), QStringLiteral("audio-ui"));
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(visualApply->property("enabled").toBool());
+    EXPECT_TRUE(audioApply->property("enabled").toBool());
+    controller.clearSelection();
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(visualApply->property("enabled").toBool());
+    EXPECT_FALSE(audioApply->property("enabled").toBool());
+
+    controller.selectClip(QStringLiteral("v1"), QStringLiteral("clip-1"));
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(QMetaObject::invokeMethod(xField, "forceActiveFocus"));
+    QCoreApplication::processEvents();
+    auto* splitShortcut =
+        object->findChild<QObject*>(QStringLiteral("editorSplitShortcut"));
+    ASSERT_NE(splitShortcut, nullptr);
+    EXPECT_FALSE(splitShortcut->property("enabled").toBool());
 }
 
 TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
