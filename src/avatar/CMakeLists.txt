@@ -2,13 +2,18 @@ cs_add_qtfree_library(cs_avatar
     SOURCES
         ExpressionParameters.h
         TrackingResult.h
+        AvatarProviderId.h
         ITrackingProvider.h
         CalibrationProfile.h
         CalibrationProfile.cpp
         ExpressionNormalizer.h
         ExpressionNormalizer.cpp
+        AvatarMotionSample.h
+        AvatarMotionSerializer.h
+        AvatarMotionSerializer.cpp
     DEPENDS
         cs_core
         cs_media
         cs_domain
+        nlohmann_json::nlohmann_json
 )

@@ -1,18 +1,11 @@
 #pragma once
 
+#include "avatar/AvatarProviderId.h"
 #include "avatar/TrackingResult.h"
 #include "core/Result.h"
-#include "domain/Identifiers.h"
 #include "media/MediaTypes.h"
 
 namespace creator::avatar {
-
-struct AvatarProviderTag;
-/// Typed identity for a tracking engine (e.g. "mediapipe", "openseeface", the
-/// deterministic fake) — "매직 문자열 대신 typed ID/value object 사용"
-/// (CLAUDE.md 4) applies to provider identity the same way it does to source
-/// and project ids.
-using AvatarProviderId = domain::Identifier<AvatarProviderTag>;
 
 /// Port for a facial-expression tracking engine.
 ///

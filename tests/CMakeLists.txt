@@ -74,6 +74,7 @@ add_executable(cs_tests
     avatar/TrackingPortContractTest.cpp
     avatar/CalibrationProfileTest.cpp
     avatar/ExpressionNormalizerTest.cpp
+    avatar/AvatarMotionSerializerTest.cpp
     recorder/RecordingTrackTest.cpp
     recorder/DiskSpaceMonitorTest.cpp
     recorder/DurableSegmentPublisherTest.cpp
@@ -113,11 +114,17 @@ target_link_libraries(cs_tests
         cs_mlt_graph_plan
         cs_fakes
         nlohmann_json::nlohmann_json
+        nlohmann_json_schema_validator::validator
         GTest::gtest_main
 )
 
 target_compile_definitions(cs_tests PRIVATE
     CS_CRASH_FIXTURE_PATH="$<TARGET_FILE:cs_crash_recovery_fixture>"
+    # Read directly rather than embedded at compile time (unlike
+    # cs_project_store's ProjectSchema.h.in): this schema only needs to be
+    # loaded by this test binary, not shipped in a production library, so a
+    # source-tree path is simpler than adding another configure_file() step.
+    CS_EVENT_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/event.schema.json"
 )
 add_dependencies(cs_tests cs_crash_recovery_fixture)
 
