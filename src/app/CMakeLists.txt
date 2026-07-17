@@ -5,6 +5,8 @@
 # AUTOMOC comes from qt_standard_project_setup() in the root CMakeLists, so
 # Q_OBJECT works without extra wiring.
 add_library(cs_app STATIC
+    RecordingImportPlanner.h
+    RecordingImportPlanner.cpp
     IRecordingPersistence.h
     ProjectSegmentLifecycleSink.h
     ProjectSegmentLifecycleSink.cpp
