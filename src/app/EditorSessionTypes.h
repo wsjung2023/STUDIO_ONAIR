@@ -1,12 +1,15 @@
 #pragma once
 
 #include "core/Timebase.h"
+#include "core/Result.h"
 #include "domain/Identifiers.h"
 #include "domain/MediaAsset.h"
 #include "domain/Timeline.h"
 #include "edit_engine/EditEngineTypes.h"
 
 #include <optional>
+#include <memory>
+#include <cstddef>
 #include <vector>
 
 namespace creator::app {
@@ -36,6 +39,15 @@ struct EditorSessionState final {
     bool canUndo{false};
     bool canRedo{false};
     bool clean{true};
+    std::size_t historyCursor{0};
 };
+
+struct EditorSessionUpdate final {
+    EditorSessionState state;
+    std::optional<edit_engine::TimelineChangeSet> change{};
+};
+
+using EditorSessionResult = core::Result<EditorSessionUpdate>;
+using EditorSessionResultPtr = std::shared_ptr<const EditorSessionResult>;
 
 }  // namespace creator::app

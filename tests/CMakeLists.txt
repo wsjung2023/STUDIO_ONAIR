@@ -118,6 +118,7 @@ gtest_discover_tests(cs_tests)
 add_executable(cs_app_tests
     app/EditorModelsTest.cpp
     app/EditorControllerTest.cpp
+    app/EditorSessionWorkerTest.cpp
     app/StudioControllerTest.cpp
     app/LiveRecordingControllerTest.cpp
     app/ProjectControllerTest.cpp
