@@ -148,6 +148,14 @@ qt_add_executable(creator_studio
     src/main.cpp
 )
 
+# Qt 6.8.3 generates unreachable C++ for EditorPage's intentionally dynamic
+# controller boundary, which fails the MSVC /WX gate inside Qt headers. Isolate
+# that single page as source/JIT while preserving native AOT compilation for
+# every other QML file in the shipping module.
+set_source_files_properties(qml/EditorPage.qml PROPERTIES
+    QT_QML_SKIP_CACHEGEN TRUE
+)
+
 qt_add_qml_module(creator_studio
     URI CreatorStudio
     VERSION 1.0

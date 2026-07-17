@@ -186,6 +186,24 @@ TEST(GeneratedOverlayCacheTest, RendersUnicodeDeterministicallyAndReusesPaths) {
     EXPECT_EQ(secondImage, firstImage);
 }
 
+TEST(GeneratedOverlayCacheTest, FitsUnicodeInsideMinimumAspectCanvas) {
+    TempDirectory package;
+    GeneratedOverlayCache cache;
+
+    auto rendered = cache.synchronize(package.path(), generatedTimeline(), 64,
+                                      36, FrameRate::create(60, 1).value());
+
+    ASSERT_TRUE(rendered.hasValue()) << rendered.error().message();
+    ASSERT_EQ(rendered.value().descriptors.size(), 2U);
+    for (const auto& descriptor : rendered.value().descriptors) {
+        QImage image{QString::fromStdWString(
+            (package.path() / descriptor.rasterPath()).wstring())};
+        ASSERT_FALSE(image.isNull());
+        EXPECT_EQ(image.size(), QSize(64, 36));
+        EXPECT_TRUE(hasVisiblePixel(image));
+    }
+}
+
 TEST(GeneratedOverlayCacheTest, CanonicalKeyCoversIdentityContentTimingAndFormat) {
     TempDirectory package;
     GeneratedOverlayCache cache;

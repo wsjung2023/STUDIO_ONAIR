@@ -104,19 +104,19 @@ Item {
         controller.removeCaptionCue(selectedCueId())
     }
 
-    function fieldsAcceptable(fields) {
-        for (const field of fields) {
-            if (!field.acceptableInput)
-                return false
-        }
-        return true
-    }
     function visualInputsAcceptable() {
-        if (!fieldsAcceptable([
-            visualXField, visualYField, visualWidthField, visualHeightField,
-            visualScaleXField, visualScaleYField, visualRotationField,
-            visualCropLeftField, visualCropTopField, visualCropRightField,
-            visualCropBottomField, visualOpacityField, visualZOrderField])) {
+        if (!visualXField.acceptableInput || !visualYField.acceptableInput
+                || !visualWidthField.acceptableInput
+                || !visualHeightField.acceptableInput
+                || !visualScaleXField.acceptableInput
+                || !visualScaleYField.acceptableInput
+                || !visualRotationField.acceptableInput
+                || !visualCropLeftField.acceptableInput
+                || !visualCropTopField.acceptableInput
+                || !visualCropRightField.acceptableInput
+                || !visualCropBottomField.acceptableInput
+                || !visualOpacityField.acceptableInput
+                || !visualZOrderField.acceptableInput) {
             return false
         }
         return Number(visualWidthField.text) > 0
@@ -129,19 +129,22 @@ Item {
                   + Number(visualCropBottomField.text) < 1
     }
     function audioInputsAcceptable() {
-        return fieldsAcceptable(
-            [audioGainField, audioFadeInField, audioFadeOutField])
+        return audioGainField.acceptableInput
+               && audioFadeInField.acceptableInput
+               && audioFadeOutField.acceptableInput
     }
     function titleInputsAcceptable() {
         return titleTextField.text.trim().length > 0
                && titleFontField.text.trim().length > 0
-               && fieldsAcceptable([
-                   titleXField, titleYField, titleForegroundField,
-                   titleBackgroundField])
+               && titleXField.acceptableInput
+               && titleYField.acceptableInput
+               && titleForegroundField.acceptableInput
+               && titleBackgroundField.acceptableInput
     }
     function captionInputsAcceptable() {
         return captionTextField.text.trim().length > 0
-               && fieldsAcceptable([captionStartField, captionDurationField])
+               && captionStartField.acceptableInput
+               && captionDurationField.acceptableInput
     }
 
     function loadSelectedCueValues() {

@@ -293,4 +293,42 @@ if(CS_ENABLE_MLT)
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
+
+    add_executable(cs_r1_effects_text_acceptance_tests
+        acceptance/R1EffectsTextAcceptanceTest.cpp
+    )
+    target_link_libraries(cs_r1_effects_text_acceptance_tests PRIVATE
+        cs_app
+        cs_fakes
+        cs_mlt_adapter
+        Qt6::Quick
+        Qt6::Test
+        GTest::gtest
+    )
+    target_compile_definitions(cs_r1_effects_text_acceptance_tests PRIVATE
+        CS_TEST_STAGED_MLT_ROOT="$<TARGET_FILE_DIR:creator_studio>/mlt-runtime"
+    )
+    if(WIN32 AND MSVC)
+        target_link_libraries(cs_r1_effects_text_acceptance_tests PRIVATE
+            delayimp
+            psapi
+        )
+        target_link_options(cs_r1_effects_text_acceptance_tests PRIVATE
+            "/DELAYLOAD:mlt++-7.dll"
+            "/DELAYLOAD:mlt-7.dll"
+        )
+    endif()
+    add_dependencies(cs_r1_effects_text_acceptance_tests creator_studio)
+    cs_apply_warnings(cs_r1_effects_text_acceptance_tests)
+    set_property(TARGET cs_r1_effects_text_acceptance_tests PROPERTY TEST_LAUNCHER
+        "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;--"
+    )
+    gtest_discover_tests(cs_r1_effects_text_acceptance_tests
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES
+            TIMEOUT 45
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+    )
 endif()

@@ -360,13 +360,17 @@ QImage renderTitle(const domain::TitlePayload& title, std::int32_t width,
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
     QFont font{QString::fromUtf8(resolvedFamily)};
-    font.setPixelSize(std::max(12, static_cast<int>(height * 0.09)));
+    font.setPixelSize(std::max(6, static_cast<int>(height * 0.09)));
     const qreal boxWidth = width * 0.82;
     const qreal boxHeight = height * 0.34;
+    const qreal horizontalMargin = std::min(8.0, (width - boxWidth) / 2.0);
+    const qreal verticalMargin = std::min(8.0, (height - boxHeight) / 2.0);
     const qreal left = std::clamp(title.x() * width - boxWidth / 2.0,
-                                  8.0, width - boxWidth - 8.0);
+                                  horizontalMargin,
+                                  width - boxWidth - horizontalMargin);
     const qreal top = std::clamp(title.y() * height - boxHeight / 2.0,
-                                 8.0, height - boxHeight - 8.0);
+                                 verticalMargin,
+                                 height - boxHeight - verticalMargin);
     drawLaidOutText(
         painter, QString::fromUtf8(title.text()), font,
         QRectF{left, top, boxWidth, boxHeight}, alignment(title.alignment()),
@@ -384,7 +388,7 @@ QImage renderCaption(const domain::CaptionCue& cue, std::int32_t width,
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
     QFont font{QString::fromUtf8(resolvedFamily)};
-    font.setPixelSize(std::max(12, static_cast<int>(height * 0.065)));
+    font.setPixelSize(std::max(6, static_cast<int>(height * 0.065)));
     const qreal boxWidth = width * 0.88;
     const qreal boxHeight = height * 0.22;
     drawLaidOutText(
@@ -400,7 +404,7 @@ QByteArray titleKey(const domain::Clip& clip,
                     const std::string& resolvedFamily, std::int32_t width,
                     std::int32_t height, core::FrameRate frameRate) {
     QByteArray payload;
-    appendBytes(payload, "creator-overlay-title-v1");
+    appendBytes(payload, "creator-overlay-title-v2");
     appendBytes(payload, clip.id().value());
     appendSigned(payload,
                  clip.timelineRange().start().time_since_epoch().count());
@@ -425,7 +429,7 @@ QByteArray captionKey(const domain::Clip& clip, const domain::CaptionCue& cue,
                       const std::string& resolvedFamily, std::int32_t width,
                       std::int32_t height, core::FrameRate frameRate) {
     QByteArray payload;
-    appendBytes(payload, "creator-overlay-caption-v1");
+    appendBytes(payload, "creator-overlay-caption-v2");
     appendBytes(payload, clip.id().value());
     appendBytes(payload, cue.id().value());
     appendSigned(payload,
