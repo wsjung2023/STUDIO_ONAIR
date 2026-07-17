@@ -2,6 +2,8 @@
 
 #include "core/AppError.h"
 
+#include <array>
+#include <cmath>
 #include <exception>
 #include <fstream>
 #include <ios>
@@ -26,12 +28,34 @@ Result<void> AvatarMotionNdjsonSink::append(const AvatarMotionSample& sample) {
     // producer bug). This is the write boundary, so it is the one place a
     // schema-invalid line can be stopped before it ever reaches disk. A full
     // per-line schema validation pass is not needed here: the serializer's
-    // output shape is fixed, so tNs is the only data-dependent constraint the
-    // schema imposes.
+    // output shape is fixed, and this plus the non-finite-parameter check
+    // below are the only two data-dependent constraints the schema imposes.
     if (sample.timestamp.time_since_epoch().count() < 0) {
         return AppError{ErrorCode::InvalidArgument,
                         "avatar.motion sample has a negative timestamp; "
                         "the event schema requires tNs >= 0"};
+    }
+
+    // A NaN/Inf parameter field is in-range for `float` and so passes right
+    // through the type system, but nlohmann's default dump() serializes a
+    // non-finite float as JSON `null` - which violates the avatar.motion
+    // schema's `parameters: additionalProperties {type: number}`. Like the
+    // negative-tNs check above, this is the write boundary where such a
+    // schema-invalid line would otherwise reach disk, so it is rejected here,
+    // before any file touch.
+    const std::array<float, 9> parameterFields{
+        sample.parameters.eyeOpenLeft,  sample.parameters.eyeOpenRight,
+        sample.parameters.browUpLeft,   sample.parameters.browUpRight,
+        sample.parameters.mouthOpen,    sample.parameters.mouthWide,
+        sample.parameters.headYaw,      sample.parameters.headPitch,
+        sample.parameters.headRoll,
+    };
+    for (const float value : parameterFields) {
+        if (!std::isfinite(value)) {
+            return AppError{ErrorCode::InvalidArgument,
+                            "avatar.motion sample has a non-finite parameter value; "
+                            "the event schema requires every parameter to be a JSON number"};
+        }
     }
 
     std::string line;

@@ -42,17 +42,22 @@ public:
     /// returning — so a caller that receives ok() knows the line has left
     /// process memory and reached the OS.
     ///
-    /// Rejects a sample whose timestamp is negative with
-    /// `AppError{InvalidArgument}` *before* writing anything. The
-    /// `avatar.motion` schema (schemas/event.schema.json) requires
-    /// `tNs >= 0`, and AvatarMotionSerializer documents that it will not
-    /// silently clamp a negative timestamp — doing so would hide a real
-    /// producer bug (CLAUDE.md 9). This sink is the boundary where such an
-    /// invalid document would otherwise reach disk, so this is the one place
-    /// a targeted, cheap non-negative check belongs: full per-line schema
+    /// Rejects a sample with `AppError{InvalidArgument}` *before* writing
+    /// anything, for either of the two ways an in-range-typed sample can
+    /// still produce a schema-invalid document: a negative timestamp, or a
+    /// non-finite (NaN/Inf) `parameters` field. The `avatar.motion` schema
+    /// (schemas/event.schema.json) requires `tNs >= 0`, and
+    /// AvatarMotionSerializer documents that it will not silently clamp a
+    /// negative timestamp — doing so would hide a real producer bug
+    /// (CLAUDE.md 9). Separately, a NaN/Inf `float` parameter is in-range for
+    /// the type but serializes to JSON `null` under nlohmann's default
+    /// `dump()`, which violates the schema's `parameters:
+    /// additionalProperties {type: number}`. This sink is the boundary where
+    /// either invalid document would otherwise reach disk, so this is the
+    /// one place both targeted, cheap checks belong: full per-line schema
     /// validation is not needed on this write path because the serializer's
-    /// output shape is fixed and `tNs` is the only data-dependent schema
-    /// constraint.
+    /// output shape is fixed and these are the only two data-dependent
+    /// schema constraints.
     ///
     /// No exception crosses this boundary: filesystem and stream failures
     /// (missing parent directory, path that is a file, permission denial,

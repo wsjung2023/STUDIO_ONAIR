@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -236,6 +237,26 @@ TEST_F(AvatarMotionNdjsonSinkTest, NegativeTimestampAfterValidAppendsDoesNotExte
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
     const std::vector<std::string> lines = readLines(ndjsonFile());
     EXPECT_EQ(lines.size(), 2U) << "a rejected negative-tNs sample must not extend the file";
+}
+
+// A NaN/Inf parameter field is in-range for the float type but serializes to
+// JSON `null` under nlohmann's default dump(), which violates the
+// avatar.motion schema's `parameters: additionalProperties {type: number}`.
+// The sink is the write boundary, so it must reject this the same way it
+// rejects a negative tNs: before any file touch, not after a schema-invalid
+// line has already reached disk.
+TEST_F(AvatarMotionNdjsonSinkTest, NonFiniteParameterRejectedAndWritesNothing) {
+    AvatarMotionNdjsonSink sink{telemetryDir_};
+
+    AvatarMotionSample sample = makeSample(10);
+    sample.parameters.mouthOpen = std::numeric_limits<float>::quiet_NaN();
+
+    const auto result = sink.append(sample);
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    EXPECT_FALSE(fs::exists(ndjsonFile()))
+        << "a non-finite-parameter sample must not create the NDJSON file at all";
 }
 
 }  // namespace

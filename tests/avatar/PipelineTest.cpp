@@ -193,8 +193,13 @@ TEST_F(PipelineTest, FullChainProducesExactSchemaValidTelemetry) {
 
         const ExpressionParameters normalized = normalizer.normalize(tracked.value());
 
+        // Use the port's own vouched-for result timestamp, not the input
+        // frame's - this is what the reference Stage-C composition wiring
+        // will copy. They are equal for this fake (it copies frame.timestamp
+        // straight into the result), but the port's TrackingResult is the
+        // one contractually-correct source once a real provider exists.
         const AvatarMotionSample sample{
-            .timestamp = frame.value().timestamp,
+            .timestamp = tracked.value().timestamp,
             .parameters = normalized,
             .provider = provider.providerId(),
         };
@@ -260,7 +265,7 @@ TEST_F(PipelineTest, RunningTheSameScriptTwiceProducesIdenticalNdjson) {
             ASSERT_TRUE(tracked.hasValue()) << "frame " << i;
             const ExpressionParameters normalized = normalizer.normalize(tracked.value());
             const auto appended = sink.append(AvatarMotionSample{
-                .timestamp = frame.value().timestamp,
+                .timestamp = tracked.value().timestamp,
                 .parameters = normalized,
                 .provider = provider.providerId(),
             });
