@@ -166,7 +166,7 @@ target_compile_definitions(cs_app_tests PRIVATE
 # PRE_TEST discovery launches the binary before per-test ENVIRONMENT properties
 # exist. Wrap both discovery and execution so Windows can resolve the Qt DLLs.
 set_property(TARGET cs_app_tests PROPERTY TEST_LAUNCHER
-    "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;--"
+    "${CMAKE_COMMAND};-E;env;QT_QUICK_CONTROLS_STYLE=Basic;--modify;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;--"
 )
 
 gtest_discover_tests(cs_app_tests

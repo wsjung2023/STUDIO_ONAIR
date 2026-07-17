@@ -274,11 +274,14 @@ TEST(StudioSceneModelTest, PublishesStableSceneRolesAndSelection) {
     auto scenes = creator::domain::defaultStudioScenes().value();
     StudioSceneModel model;
     QSignalSpy resetSpy(&model, &QAbstractItemModel::modelReset);
+    QSignalSpy revisionSpy(&model, &StudioSceneModel::revisionChanged);
 
     model.setScenes(scenes, scenes[1].id(), scenes[2].id());
 
     ASSERT_EQ(model.rowCount(), 3);
     EXPECT_EQ(resetSpy.count(), 1);
+    EXPECT_EQ(revisionSpy.count(), 1);
+    EXPECT_EQ(model.revision(), 1U);
     EXPECT_EQ(model.roleNames().value(StudioSceneModel::SceneIdRole),
               "sceneId");
     EXPECT_EQ(model.roleNames().value(StudioSceneModel::SourceCountRole),
@@ -299,6 +302,8 @@ TEST(StudioSceneModelTest, PublishesStableSceneRolesAndSelection) {
     resetSpy.clear();
     model.setScenes(scenes, scenes[1].id(), scenes[2].id());
     EXPECT_EQ(resetSpy.count(), 0);
+    EXPECT_EQ(revisionSpy.count(), 1);
+    EXPECT_EQ(model.revision(), 1U);
 }
 
 TEST(StudioSourceModelTest, PublishesExactSourceTransformAndRoleNames) {
@@ -314,6 +319,8 @@ TEST(StudioSourceModelTest, PublishesExactSourceTransformAndRoleNames) {
               "sourceId");
     EXPECT_EQ(model.roleNames().value(StudioSourceModel::TransformRole),
               "transform");
+    EXPECT_EQ(model.roleNames().value(StudioSourceModel::SourceEnabledRole),
+              "sourceEnabled");
     const auto camera = model.index(1, 0);
     EXPECT_EQ(model.data(camera, StudioSourceModel::RoleNameRole).toString(),
               QStringLiteral("camera"));
@@ -328,6 +335,14 @@ TEST(StudioSourceModelTest, PublishesExactSourceTransformAndRoleNames) {
     EXPECT_FALSE(model.data(model.index(2, 0),
                             StudioSourceModel::HasTransformRole)
                      .toBool());
+    EXPECT_TRUE(model.enabledForRole(QStringLiteral("camera")));
+    EXPECT_DOUBLE_EQ(model.transformForRole(QStringLiteral("camera"))
+                         .value(QStringLiteral("width"))
+                         .toDouble(),
+                     0.25);
+    EXPECT_FALSE(model.enabledForRole(QStringLiteral("missing")));
+    EXPECT_TRUE(model.transformForRole(QStringLiteral("microphone")).isEmpty());
+    EXPECT_EQ(model.revision(), 1U);
     resetSpy.clear();
     model.setScene(scene, scene.sources()[1].id());
     EXPECT_EQ(resetSpy.count(), 0);

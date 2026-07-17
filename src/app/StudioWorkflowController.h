@@ -22,6 +22,7 @@ class StudioWorkflowController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QAbstractItemModel* sceneModel READ sceneModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel* sourceModel READ sourceModel CONSTANT)
+    Q_PROPERTY(QAbstractItemModel* activeSourceModel READ activeSourceModel CONSTANT)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(bool recording READ recording NOTIFY recordingChanged)
     Q_PROPERTY(bool reconciling READ reconciling NOTIFY reconcilingChanged)
@@ -48,6 +49,9 @@ public:
     }
     [[nodiscard]] QAbstractItemModel* sourceModel() noexcept {
         return &sourceModel_;
+    }
+    [[nodiscard]] QAbstractItemModel* activeSourceModel() noexcept {
+        return &activeSourceModel_;
     }
     [[nodiscard]] bool busy() const noexcept { return busy_; }
     [[nodiscard]] bool recording() const noexcept {
@@ -114,6 +118,7 @@ private:
     void publishState(StudioWorkflowState state);
     void setStatus(QString status);
     [[nodiscard]] const domain::StudioScene* selectedScene() const noexcept;
+    [[nodiscard]] const domain::StudioScene* activeScene() const noexcept;
     [[nodiscard]] const domain::SceneSource* selectedSource() const noexcept;
     [[nodiscard]] std::optional<domain::SceneId> parsedSelectedScene() const;
 
@@ -121,6 +126,7 @@ private:
     StudioWorkflowWorker* worker_{};
     StudioSceneModel sceneModel_;
     StudioSourceModel sourceModel_;
+    StudioSourceModel activeSourceModel_;
     std::optional<StudioWorkflowState> state_;
     std::optional<StudioWorkflowOperation> pendingOperation_;
     Completion pendingCompletion_;

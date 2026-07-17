@@ -683,8 +683,14 @@ TEST(StudioWorkflowControllerTest, EverySceneAndSourceEditPublishesDurableState)
 
     controller.selectScene(QStringLiteral("presentation"));
     controller.selectSource(QStringLiteral("camera"));
+    auto sourceRevision = controller.sourceModel()->property("revision").toULongLong();
     run([&] { controller.toggleSource(QStringLiteral("camera")); });
+    EXPECT_GT(controller.sourceModel()->property("revision").toULongLong(),
+              sourceRevision);
+    sourceRevision = controller.sourceModel()->property("revision").toULongLong();
     run([&] { controller.moveSource(QStringLiteral("camera"), -1); });
+    EXPECT_GT(controller.sourceModel()->property("revision").toULongLong(),
+              sourceRevision);
     QSignalSpy transformSpy(&controller,
                             &StudioWorkflowController::selectionChanged);
     run([&] {
@@ -729,6 +735,32 @@ TEST(StudioWorkflowControllerTest, EverySceneAndSourceEditPublishesDurableState)
         EXPECT_DOUBLE_EQ(
             presentation->sources().front().transform()->width(), 1.0);
     }
+}
+
+TEST(StudioWorkflowControllerTest,
+     ActiveCompositionModelDoesNotFollowInactiveInspectorSelection) {
+    auto state = std::make_shared<SharedStoreState>();
+    auto controller = makeController(state);
+    openReady(controller);
+
+    auto* selectedSources = qobject_cast<creator::app::StudioSourceModel*>(
+        controller.sourceModel());
+    auto* activeSources = qobject_cast<creator::app::StudioSourceModel*>(
+        controller.activeSourceModel());
+    ASSERT_NE(selectedSources, nullptr);
+    ASSERT_NE(activeSources, nullptr);
+    EXPECT_TRUE(activeSources->enabledForRole(QStringLiteral("camera")));
+
+    controller.selectScene(QStringLiteral("screen"));
+    EXPECT_EQ(controller.selectedSceneId(), QStringLiteral("screen"));
+    EXPECT_EQ(controller.activeSceneId(), QStringLiteral("presentation"));
+    EXPECT_FALSE(selectedSources->enabledForRole(QStringLiteral("camera")));
+    EXPECT_TRUE(activeSources->enabledForRole(QStringLiteral("camera")));
+
+    controller.switchScene(QStringLiteral("screen"));
+    ASSERT_TRUE(waitUntil([&] { return !controller.busy(); }));
+    EXPECT_EQ(controller.activeSceneId(), QStringLiteral("screen"));
+    EXPECT_FALSE(activeSources->enabledForRole(QStringLiteral("camera")));
 }
 
 TEST(StudioWorkflowControllerTest, RepeatedOpenAndDestructionReleaseEveryStore) {

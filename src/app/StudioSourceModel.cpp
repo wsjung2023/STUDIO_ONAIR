@@ -54,6 +54,7 @@ QVariant StudioSourceModel::data(const QModelIndex& index, int role) const {
     case PositionRole:
         return source.position();
     case EnabledRole:
+    case SourceEnabledRole:
         return source.enabled();
     case SelectedRole:
         return selectedSourceId_.has_value() &&
@@ -75,7 +76,28 @@ QHash<int, QByteArray> StudioSourceModel::roleNames() const {
             {EnabledRole, "enabled"},
             {SelectedRole, "selected"},
             {HasTransformRole, "hasTransform"},
-            {TransformRole, "transform"}};
+            {TransformRole, "transform"},
+            {SourceEnabledRole, "sourceEnabled"}};
+}
+
+bool StudioSourceModel::enabledForRole(const QString& roleName) const {
+    for (const auto& source : sources_) {
+        if (QString::fromUtf8(domain::studioSourceRoleName(source.role())) ==
+            roleName) {
+            return source.enabled();
+        }
+    }
+    return false;
+}
+
+QVariantMap StudioSourceModel::transformForRole(const QString& roleName) const {
+    for (const auto& source : sources_) {
+        if (QString::fromUtf8(domain::studioSourceRoleName(source.role())) ==
+            roleName) {
+            return transformValue(source).toMap();
+        }
+    }
+    return {};
 }
 
 void StudioSourceModel::setScene(
@@ -89,6 +111,8 @@ void StudioSourceModel::setScene(
     sources_ = scene.sources();
     selectedSourceId_ = std::move(selectedSourceId);
     endResetModel();
+    ++revision_;
+    emit revisionChanged();
 }
 
 void StudioSourceModel::clear() {
@@ -97,6 +121,8 @@ void StudioSourceModel::clear() {
     sources_.clear();
     selectedSourceId_.reset();
     endResetModel();
+    ++revision_;
+    emit revisionChanged();
 }
 
 }  // namespace creator::app

@@ -18,8 +18,10 @@
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQmlError>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QSignalSpy>
 #include <QThread>
 #include <QUrl>
 #include <QVariantList>
@@ -28,8 +30,10 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstddef>
 #include <memory>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -119,7 +123,7 @@ public:
     [[nodiscard]] bool busy() const noexcept { return busy_; }
     [[nodiscard]] bool recording() const noexcept { return recording_; }
     [[nodiscard]] bool recordingAvailable() const noexcept { return true; }
-    [[nodiscard]] int segmentCount() const noexcept { return 0; }
+    [[nodiscard]] int segmentCount() const noexcept { return 1; }
     [[nodiscard]] int trackCount() const noexcept { return 2; }
     [[nodiscard]] qulonglong queuedItems() const noexcept { return 3; }
     [[nodiscard]] qulonglong droppedFrames() const noexcept { return 1; }
@@ -180,6 +184,7 @@ class FakeShortcutSettingsController final : public QObject {
     Q_PROPERTY(QString scene7Shortcut READ scene7Shortcut CONSTANT)
     Q_PROPERTY(QString scene8Shortcut READ scene8Shortcut CONSTANT)
     Q_PROPERTY(QString scene9Shortcut READ scene9Shortcut CONSTANT)
+    Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
 
 public:
     using QObject::QObject;
@@ -196,12 +201,33 @@ public:
     [[nodiscard]] QString scene7Shortcut() const { return QStringLiteral("Ctrl+7"); }
     [[nodiscard]] QString scene8Shortcut() const { return QStringLiteral("Ctrl+8"); }
     [[nodiscard]] QString scene9Shortcut() const { return QStringLiteral("Ctrl+9"); }
+    [[nodiscard]] QString statusMessage() const { return {}; }
+    Q_INVOKABLE void setShortcut(const QString& actionId, const QString& sequence) {
+        ++setCalls_;
+        lastActionId_ = actionId;
+        lastSequence_ = sequence;
+    }
+    [[nodiscard]] int setCalls() const noexcept { return setCalls_; }
+
+private:
+    int setCalls_{0};
+    QString lastActionId_;
+    QString lastSequence_;
 };
 
 class FakeStudioSceneModel final : public QAbstractListModel {
     Q_OBJECT
+    Q_PROPERTY(qulonglong revision READ revision NOTIFY revisionChanged)
 
 public:
+    enum Role {
+        SceneIdRole = Qt::UserRole + 1,
+        NameRole,
+        PositionRole,
+        ActiveRole,
+        SelectedRole,
+        SourceCountRole,
+    };
     explicit FakeStudioSceneModel(QObject* parent = nullptr)
         : QAbstractListModel(parent) {
         for (int index = 1; index <= 9; ++index) {
@@ -213,34 +239,169 @@ public:
         const QModelIndex& parent = QModelIndex()) const override {
         return parent.isValid() ? 0 : static_cast<int>(sceneIds_.size());
     }
-    [[nodiscard]] QVariant data(const QModelIndex&, int) const override {
-        return {};
+    [[nodiscard]] QVariant data(const QModelIndex& index, int role) const override {
+        if (!index.isValid() || index.row() < 0 ||
+            index.row() >= static_cast<int>(sceneIds_.size())) {
+            return {};
+        }
+        const QString& id = sceneIds_[static_cast<std::size_t>(index.row())];
+        switch (role) {
+        case SceneIdRole: return id;
+        case NameRole: return QStringLiteral("Scene %1").arg(index.row() + 1);
+        case PositionRole: return index.row();
+        case ActiveRole: return id == QStringLiteral("scene-5");
+        case SelectedRole: return id == QStringLiteral("scene-1");
+        case SourceCountRole: return 2;
+        default: return {};
+        }
+    }
+    [[nodiscard]] QHash<int, QByteArray> roleNames() const override {
+        return {{SceneIdRole, "sceneId"}, {NameRole, "name"},
+                {PositionRole, "position"}, {ActiveRole, "active"},
+                {SelectedRole, "selected"}, {SourceCountRole, "sourceCount"}};
     }
     Q_INVOKABLE QString sceneIdAt(int row) const {
         if (row < 0 || row >= static_cast<int>(sceneIds_.size())) return {};
         return sceneIds_[static_cast<std::size_t>(row)];
     }
+    [[nodiscard]] qulonglong revision() const noexcept { return revision_; }
+    void setSceneCount(int count) {
+        beginResetModel();
+        sceneIds_.clear();
+        for (int index = 1; index <= count; ++index) {
+            sceneIds_.push_back(QStringLiteral("scene-%1").arg(index));
+        }
+        endResetModel();
+        ++revision_;
+        emit revisionChanged();
+    }
+
+signals:
+    void revisionChanged();
 
 private:
     std::vector<QString> sceneIds_;
+    qulonglong revision_{1};
+};
+
+class FakeStudioSourceModel final : public QAbstractListModel {
+    Q_OBJECT
+    Q_PROPERTY(qulonglong revision READ revision CONSTANT)
+
+public:
+    enum Role {
+        SourceIdRole = Qt::UserRole + 1,
+        NameRole,
+        RoleNameRole,
+        PositionRole,
+        EnabledRole,
+        SelectedRole,
+        HasTransformRole,
+        TransformRole,
+        SourceEnabledRole,
+    };
+    explicit FakeStudioSourceModel(bool activeComposition = false,
+                                   QObject* parent = nullptr)
+        : QAbstractListModel(parent), activeComposition_(activeComposition) {}
+    [[nodiscard]] int rowCount(
+        const QModelIndex& parent = QModelIndex()) const override {
+        return parent.isValid() ? 0 : 2;
+    }
+    [[nodiscard]] QVariant data(const QModelIndex& index, int role) const override {
+        if (!index.isValid() || index.row() < 0 || index.row() >= 2) return {};
+        const bool camera = index.row() == 1;
+        const QVariantMap transform{
+            {QStringLiteral("x"), camera ? (activeComposition_ ? 0.61 : 0.70) : 0.0},
+            {QStringLiteral("y"), camera ? 0.70 : 0.0},
+            {QStringLiteral("width"), camera ? 0.25 : 1.0},
+            {QStringLiteral("height"), camera ? 0.25 : 1.0},
+            {QStringLiteral("scaleX"), camera && activeComposition_ ? 1.2 : 1.0},
+            {QStringLiteral("scaleY"), camera && activeComposition_ ? 0.8 : 1.0},
+            {QStringLiteral("rotationDegrees"), 0.0},
+            {QStringLiteral("cropLeft"), camera && activeComposition_ ? 0.1 : 0.0},
+            {QStringLiteral("cropTop"), camera && activeComposition_ ? 0.05 : 0.0},
+            {QStringLiteral("cropRight"), camera && activeComposition_ ? 0.2 : 0.0},
+            {QStringLiteral("cropBottom"), camera && activeComposition_ ? 0.15 : 0.0},
+            {QStringLiteral("opacity"), 1.0},
+            {QStringLiteral("zOrder"), camera ? 10 : 0}};
+        switch (role) {
+        case SourceIdRole: return camera ? QStringLiteral("camera") : QStringLiteral("screen");
+        case NameRole: return camera ? QStringLiteral("Camera") : QStringLiteral("Screen");
+        case RoleNameRole: return camera ? QStringLiteral("camera") : QStringLiteral("screen");
+        case PositionRole: return index.row();
+        case EnabledRole: return true;
+        case SourceEnabledRole: return true;
+        case SelectedRole: return camera;
+        case HasTransformRole: return true;
+        case TransformRole: return transform;
+        default: return {};
+        }
+    }
+    [[nodiscard]] QHash<int, QByteArray> roleNames() const override {
+        return {{SourceIdRole, "sourceId"}, {NameRole, "name"},
+                {RoleNameRole, "role"}, {PositionRole, "position"},
+                {EnabledRole, "enabled"}, {SelectedRole, "selected"},
+                {HasTransformRole, "hasTransform"}, {TransformRole, "transform"},
+                {SourceEnabledRole, "sourceEnabled"}};
+    }
+    [[nodiscard]] qulonglong revision() const noexcept { return 1; }
+    Q_INVOKABLE bool enabledForRole(const QString& roleName) const {
+        return roleName == QStringLiteral("screen") ||
+               roleName == QStringLiteral("camera");
+    }
+    Q_INVOKABLE QVariantMap transformForRole(const QString& roleName) const {
+        const int row = roleName == QStringLiteral("camera") ? 1 : 0;
+        return data(index(row, 0), TransformRole).toMap();
+    }
+
+private:
+    bool activeComposition_{false};
 };
 
 class FakeStudioWorkflowController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QAbstractItemModel* sceneModel READ sceneModel CONSTANT)
+    Q_PROPERTY(QAbstractItemModel* sourceModel READ sourceModel CONSTANT)
+    Q_PROPERTY(QAbstractItemModel* activeSourceModel READ activeSourceModel CONSTANT)
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
     Q_PROPERTY(bool recording READ recording NOTIFY stateChanged)
     Q_PROPERTY(QString activeSceneId READ activeSceneId NOTIFY stateChanged)
+    Q_PROPERTY(QString selectedSceneId READ selectedSceneId NOTIFY stateChanged)
+    Q_PROPERTY(QString selectedSourceId READ selectedSourceId NOTIFY stateChanged)
+    Q_PROPERTY(QVariantMap selectedTransform READ selectedTransform NOTIFY stateChanged)
+    Q_PROPERTY(qlonglong markerCount READ markerCount NOTIFY stateChanged)
+    Q_PROPERTY(QString activeSessionId READ activeSessionId NOTIFY stateChanged)
+    Q_PROPERTY(bool reconciling READ reconciling NOTIFY stateChanged)
+    Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY stateChanged)
     Q_PROPERTY(qlonglong recordingPositionNs READ recordingPositionNs CONSTANT)
 
 public:
     explicit FakeStudioWorkflowController(QObject* parent = nullptr)
-        : QObject(parent), scenes_(this) {}
+        : QObject(parent), scenes_(this), sources_(false, this),
+          activeSources_(true, this) {}
 
     [[nodiscard]] QAbstractItemModel* sceneModel() noexcept { return &scenes_; }
+    [[nodiscard]] QAbstractItemModel* sourceModel() noexcept { return &sources_; }
+    [[nodiscard]] QAbstractItemModel* activeSourceModel() noexcept {
+        return &activeSources_;
+    }
     [[nodiscard]] bool busy() const noexcept { return busy_; }
     [[nodiscard]] bool recording() const noexcept { return recording_; }
     [[nodiscard]] QString activeSceneId() const { return activeSceneId_; }
+    [[nodiscard]] QString selectedSceneId() const { return QStringLiteral("scene-1"); }
+    [[nodiscard]] QString selectedSourceId() const { return selectedSourceId_; }
+    [[nodiscard]] QVariantMap selectedTransform() const {
+        if (selectedSourceId_ != QStringLiteral("camera") &&
+            selectedSourceId_ != QStringLiteral("screen")) {
+            return {};
+        }
+        return sources_.data(sources_.index(1, 0),
+                             FakeStudioSourceModel::TransformRole).toMap();
+    }
+    [[nodiscard]] qlonglong markerCount() const noexcept { return 3; }
+    [[nodiscard]] QString activeSessionId() const { return QStringLiteral("session-abcdef"); }
+    [[nodiscard]] bool reconciling() const noexcept { return false; }
+    [[nodiscard]] QString statusMessage() const { return {}; }
     [[nodiscard]] qlonglong recordingPositionNs() const noexcept { return 500; }
     Q_INVOKABLE void switchScene(const QString& sceneId, qlonglong positionNs) {
         ++switchCalls_;
@@ -253,6 +414,25 @@ public:
         ++markerCalls_;
         lastPositionNs_ = positionNs;
     }
+    Q_INVOKABLE void addScene(const QString&) { ++sceneEditCalls_; }
+    Q_INVOKABLE void duplicateSelectedScene() { ++sceneEditCalls_; }
+    Q_INVOKABLE void renameScene(const QString&, const QString&) {
+        ++sceneEditCalls_;
+    }
+    Q_INVOKABLE void removeScene(const QString&) { ++sceneEditCalls_; }
+    Q_INVOKABLE void moveScene(const QString&, int) { ++sceneEditCalls_; }
+    Q_INVOKABLE void selectScene(const QString&) {}
+    Q_INVOKABLE void selectSource(const QString&) {}
+    Q_INVOKABLE void toggleSource(const QString&) { ++sourceEditCalls_; }
+    Q_INVOKABLE void moveSource(const QString&, int) { ++sourceEditCalls_; }
+    Q_INVOKABLE void setSelectedTransform(double, double, double, double,
+                                          double, double, double, double,
+                                          double, double, double, double, int) {
+        ++transformCalls_;
+    }
+    Q_INVOKABLE void resetSelectedTransform() { ++transformCalls_; }
+    Q_INVOKABLE void applySelectedPipPreset(const QString&) { ++transformCalls_; }
+    Q_INVOKABLE void retryReconciliation() {}
     void setBusy(bool busy) {
         if (busy_ == busy) return;
         busy_ = busy;
@@ -267,23 +447,39 @@ public:
         activeSceneId_ = std::move(sceneId);
         emit stateChanged();
     }
+    void setSelectedSourceId(QString sourceId) {
+        selectedSourceId_ = std::move(sourceId);
+        emit stateChanged();
+        emit selectionChanged();
+    }
+    void setSceneCount(int count) { scenes_.setSceneCount(count); }
     [[nodiscard]] int switchCalls() const noexcept { return switchCalls_; }
     [[nodiscard]] int markerCalls() const noexcept { return markerCalls_; }
     [[nodiscard]] QString lastSceneId() const { return lastSceneId_; }
     [[nodiscard]] qlonglong lastPositionNs() const noexcept { return lastPositionNs_; }
+    [[nodiscard]] int sceneEditCalls() const noexcept { return sceneEditCalls_; }
+    [[nodiscard]] int sourceEditCalls() const noexcept { return sourceEditCalls_; }
+    [[nodiscard]] int transformCalls() const noexcept { return transformCalls_; }
 
 signals:
     void stateChanged();
+    void selectionChanged();
 
 private:
     FakeStudioSceneModel scenes_;
+    FakeStudioSourceModel sources_;
+    FakeStudioSourceModel activeSources_;
     bool busy_{false};
     bool recording_{true};
     QString activeSceneId_{QStringLiteral("scene-5")};
+    QString selectedSourceId_{QStringLiteral("camera")};
     int switchCalls_{0};
     int markerCalls_{0};
     QString lastSceneId_;
     qlonglong lastPositionNs_{0};
+    int sceneEditCalls_{0};
+    int sourceEditCalls_{0};
+    int transformCalls_{0};
 };
 
 class FakeScreenCaptureController final : public QObject {
@@ -1274,7 +1470,8 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     ASSERT_NE(object, nullptr) << component.errorString().toStdString();
     auto* selector = object->findChild<QObject*>(QStringLiteral("captureTargetSelector"));
     auto* status = object->findChild<QObject*>(QStringLiteral("captureStatusLabel"));
-    auto* preview = object->findChild<QObject*>(QStringLiteral("nativeScreenPreview"));
+    auto* preview = object->findChild<QObject*>(
+        QStringLiteral("studioScreenCompositionPreview"));
     auto* cameraSelector = object->findChild<QObject*>(QStringLiteral("cameraDeviceSelector"));
     auto* microphoneSelector =
         object->findChild<QObject*>(QStringLiteral("microphoneDeviceSelector"));
@@ -1416,6 +1613,261 @@ TEST(QmlSmokeTest, StudioShortcutsShareVisibleActionsAndStateGuards) {
     EXPECT_TRUE(object->findChild<QObject*>(QStringLiteral("studioScene1Action"))
                     ->property("enabled")
                     .toBool());
+}
+
+TEST(QmlSmokeTest, StudioPageProvidesModelDrivenAccessibleWorkflowAtAllSizes) {
+    const std::array<std::tuple<int, int, qreal>, 3> fixtures{
+        std::tuple{1280, 720, 1.0}, std::tuple{1440, 900, 1.0},
+        // A 1440x900 display at 200% exposes 720x450 device-independent pixels.
+        std::tuple{720, 450, 2.0}};
+    for (const auto& [width, height, scale] : fixtures) {
+        QQmlEngine engine;
+        FakeStudioController studioController;
+        FakeScreenCaptureController screenCaptureController;
+        FakeDeviceCaptureController deviceCaptureController;
+        FakeStudioWorkflowController studioWorkflowController;
+        FakeShortcutSettingsController shortcutSettingsController;
+        studioWorkflowController.setRecording(false);
+        QSignalSpy warningSpy{&engine, &QQmlEngine::warnings};
+        engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
+                                                 &studioController);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("screenCaptureController"), &screenCaptureController);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("deviceCaptureController"), &deviceCaptureController);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("studioWorkflowController"), &studioWorkflowController);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
+        QQmlComponent component{
+            &engine,
+            QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/StudioPage.qml"))};
+        QVariantMap initialProperties{{QStringLiteral("width"), width},
+                                      {QStringLiteral("height"), height}};
+        std::unique_ptr<QObject> object{
+            component.createWithInitialProperties(initialProperties)};
+        ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+        auto* rootItem = qobject_cast<QQuickItem*>(object.get());
+        ASSERT_NE(rootItem, nullptr);
+        QQuickWindow window;
+        window.setGeometry(0, 0, width, height);
+        rootItem->setParentItem(window.contentItem());
+        window.show();
+        for (int attempt = 0; attempt < 20; ++attempt) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            QThread::msleep(2);
+        }
+
+        const QStringList controls{
+            QStringLiteral("studioSceneList"),
+            QStringLiteral("studioSceneAddField"),
+            QStringLiteral("studioSceneAddButton"),
+            QStringLiteral("studioSceneDuplicateButton"),
+            QStringLiteral("studioSceneRenameField"),
+            QStringLiteral("studioSceneRenameButton"),
+            QStringLiteral("studioSceneRemoveButton"),
+            QStringLiteral("studioSceneUpButton"),
+            QStringLiteral("studioSceneDownButton"),
+            QStringLiteral("studioSourceList"),
+            QStringLiteral("studioSourceToggleButton"),
+            QStringLiteral("studioSourceUpButton"),
+            QStringLiteral("studioSourceDownButton"),
+            QStringLiteral("studioLeftScroll"),
+            QStringLiteral("studioTransformXField"),
+            QStringLiteral("studioTransformYField"),
+            QStringLiteral("studioTransformWidthField"),
+            QStringLiteral("studioTransformHeightField"),
+            QStringLiteral("studioTransformOpacityField"),
+            QStringLiteral("studioTransformZOrderField"),
+            QStringLiteral("studioTransformApplyButton"),
+            QStringLiteral("studioTransformResetButton"),
+            QStringLiteral("studioPipBottomRightButton"),
+            QStringLiteral("studioShortcutEditorButton"),
+            QStringLiteral("studioRecordShortcutField"),
+            QStringLiteral("studioMarkerShortcutField"),
+            QStringLiteral("studioScene9ShortcutField"),
+            QStringLiteral("studioScreenCompositionPreview"),
+            QStringLiteral("studioCameraCompositionPreview"),
+            QStringLiteral("studioHudActiveScene"),
+            QStringLiteral("studioHudSession"),
+            QStringLiteral("studioHudMarkerCount"),
+            QStringLiteral("studioHudReconciliation")};
+        for (const QString& name : controls) {
+            auto* control = object->findChild<QObject*>(name);
+            ASSERT_NE(control, nullptr)
+                << name.toStdString() << " at " << width << 'x' << height
+                << " scale " << scale;
+            auto* accessible = QAccessible::queryAccessibleInterface(control);
+            ASSERT_NE(accessible, nullptr) << name.toStdString();
+            EXPECT_FALSE(accessible->text(QAccessible::Name).isEmpty())
+                << name.toStdString();
+        }
+        QString warningText;
+        for (const auto& emission : warningSpy) {
+            for (const auto& warning :
+                 qvariant_cast<QList<QQmlError>>(emission.front())) {
+                warningText += warning.toString() + QLatin1Char('\n');
+            }
+        }
+        EXPECT_EQ(warningSpy.count(), 0) << warningText.toStdString();
+
+        auto* leftScroll = qobject_cast<QQuickItem*>(object->findChild<QObject*>(
+            QStringLiteral("studioLeftScroll")));
+        ASSERT_NE(leftScroll, nullptr);
+        const QPointF leftTop = leftScroll->mapToItem(rootItem, QPointF{});
+        const QPointF leftBottom = leftScroll->mapToItem(
+            rootItem, QPointF{leftScroll->width(), leftScroll->height()});
+        EXPECT_GE(leftTop.x(), 0.0);
+        EXPECT_GE(leftTop.y(), 0.0);
+        EXPECT_LE(leftBottom.x(), rootItem->width() + 0.5);
+        EXPECT_LE(leftBottom.y(), rootItem->height() + 0.5);
+        auto* leftContent = leftScroll->property("contentItem").value<QObject*>();
+        ASSERT_NE(leftContent, nullptr);
+        const double leftContentHeight =
+            leftScroll->property("contentHeight").toDouble();
+        if (height <= 720) {
+            EXPECT_GT(leftContentHeight, leftScroll->height())
+                << "the device controls need a reachable vertical scroll range";
+        }
+        leftContent->setProperty(
+            "contentY", leftContentHeight - leftScroll->height());
+        QCoreApplication::processEvents();
+        auto* systemAudioButton = object->findChild<QObject*>(
+            QStringLiteral("studioSystemAudioButton"));
+        ASSERT_NE(systemAudioButton, nullptr);
+        auto* systemAudioAccessible =
+            QAccessible::queryAccessibleInterface(systemAudioButton);
+        ASSERT_NE(systemAudioAccessible, nullptr);
+        EXPECT_FALSE(systemAudioAccessible->text(QAccessible::Name).isEmpty());
+
+        auto* cameraComposition = qobject_cast<QQuickItem*>(
+            object->findChild<QObject*>(
+                QStringLiteral("studioCameraCompositionPreview")));
+        ASSERT_NE(cameraComposition, nullptr);
+        auto* canvas = cameraComposition->parentItem();
+        ASSERT_NE(canvas, nullptr);
+        EXPECT_NEAR(cameraComposition->x(), canvas->width() * 0.61, 0.5);
+        EXPECT_DOUBLE_EQ(cameraComposition->property("cropLeft").toDouble(), 0.1);
+        EXPECT_DOUBLE_EQ(cameraComposition->property("cropTop").toDouble(), 0.05);
+        EXPECT_DOUBLE_EQ(cameraComposition->property("cropRight").toDouble(), 0.2);
+        EXPECT_DOUBLE_EQ(cameraComposition->property("cropBottom").toDouble(), 0.15);
+        EXPECT_DOUBLE_EQ(cameraComposition->property("scaleX").toDouble(), 1.2);
+        EXPECT_DOUBLE_EQ(cameraComposition->property("scaleY").toDouble(), 0.8);
+        const QPointF transformedCenter = cameraComposition->mapToItem(
+            canvas, QPointF{cameraComposition->width() / 2,
+                            cameraComposition->height() / 2});
+        EXPECT_NEAR(transformedCenter.x(),
+                    cameraComposition->x() + cameraComposition->width() / 2,
+                    0.01);
+        EXPECT_NEAR(transformedCenter.y(),
+                    cameraComposition->y() + cameraComposition->height() / 2,
+                    0.01);
+        auto* screenComposition = qobject_cast<QQuickItem*>(
+            object->findChild<QObject*>(
+                QStringLiteral("studioScreenCompositionPreview")));
+        ASSERT_NE(screenComposition, nullptr);
+        EXPECT_GT(cameraComposition->z(), screenComposition->z());
+
+        EXPECT_TRUE(object->findChild<QObject*>(
+                              QStringLiteral("studioHudActiveScene"))
+                        ->property("text")
+                        .toString()
+                        .contains(QStringLiteral("scene-5")));
+        EXPECT_TRUE(object->findChild<QObject*>(
+                              QStringLiteral("studioHudSession"))
+                        ->property("text")
+                        .toString()
+                        .contains(QStringLiteral("abcdef")));
+        EXPECT_TRUE(object->findChild<QObject*>(
+                              QStringLiteral("studioHudMarkerCount"))
+                        ->property("text")
+                        .toString()
+                        .contains(QStringLiteral("3")));
+        EXPECT_TRUE(object->findChild<QObject*>(
+                              QStringLiteral("studioHudReconciliation"))
+                        ->property("text")
+                        .toString()
+                        .contains(QStringLiteral("Not active")));
+
+        if (width == 1280 && scale == 1.0) {
+            auto* widthField = object->findChild<QObject*>(
+                QStringLiteral("studioTransformWidthField"));
+            auto* apply = object->findChild<QObject*>(
+                QStringLiteral("studioTransformApplyButton"));
+            ASSERT_NE(widthField, nullptr);
+            ASSERT_NE(apply, nullptr);
+            widthField->setProperty("text", QStringLiteral("0"));
+            QCoreApplication::processEvents();
+            EXPECT_FALSE(apply->property("enabled").toBool());
+            widthField->setProperty("text", QStringLiteral("0.25"));
+            QCoreApplication::processEvents();
+            EXPECT_TRUE(apply->property("enabled").toBool());
+            ASSERT_TRUE(QMetaObject::invokeMethod(apply, "clicked"));
+            EXPECT_EQ(studioWorkflowController.transformCalls(), 1);
+
+            auto* addField = object->findChild<QObject*>(
+                QStringLiteral("studioSceneAddField"));
+            auto* addButton = object->findChild<QObject*>(
+                QStringLiteral("studioSceneAddButton"));
+            addField->setProperty("text", QString::fromUtf8("강의 장면"));
+            QCoreApplication::processEvents();
+            ASSERT_TRUE(addButton->property("enabled").toBool());
+            ASSERT_TRUE(QMetaObject::invokeMethod(addButton, "clicked"));
+            EXPECT_EQ(studioWorkflowController.sceneEditCalls(), 1);
+            auto* toggle = object->findChild<QObject*>(
+                QStringLiteral("studioSourceToggleButton"));
+            ASSERT_TRUE(QMetaObject::invokeMethod(toggle, "clicked"));
+            EXPECT_EQ(studioWorkflowController.sourceEditCalls(), 1);
+
+            auto* markerShortcutField = object->findChild<QObject*>(
+                QStringLiteral("studioMarkerShortcutField"));
+            markerShortcutField->setProperty("text", QStringLiteral("Alt+M"));
+            ASSERT_TRUE(QMetaObject::invokeMethod(markerShortcutField,
+                                                  "editingFinished"));
+            EXPECT_EQ(shortcutSettingsController.setCalls(), 1);
+
+            auto* scene9Action = object->findChild<QObject*>(
+                QStringLiteral("studioScene9Action"));
+            ASSERT_TRUE(scene9Action->property("enabled").toBool());
+            studioWorkflowController.setSceneCount(3);
+            QCoreApplication::processEvents();
+            EXPECT_FALSE(scene9Action->property("enabled").toBool());
+
+            studioWorkflowController.setSelectedSourceId(
+                QStringLiteral("microphone"));
+            QCoreApplication::processEvents();
+            EXPECT_FALSE(widthField->property("enabled").toBool());
+            EXPECT_FALSE(apply->property("enabled").toBool());
+            studioWorkflowController.setSelectedSourceId(
+                QStringLiteral("camera"));
+            QCoreApplication::processEvents();
+            EXPECT_TRUE(widthField->property("enabled").toBool());
+
+            studioWorkflowController.setRecording(true);
+            QCoreApplication::processEvents();
+            EXPECT_FALSE(widthField->property("enabled").toBool());
+            EXPECT_FALSE(addButton->property("enabled").toBool());
+            EXPECT_FALSE(toggle->property("enabled").toBool());
+            studioWorkflowController.setRecording(false);
+            QCoreApplication::processEvents();
+
+            studioController.setRecording(true);
+            QCoreApplication::processEvents();
+            EXPECT_FALSE(widthField->property("enabled").toBool());
+            EXPECT_FALSE(addButton->property("enabled").toBool());
+            EXPECT_FALSE(toggle->property("enabled").toBool());
+            EXPECT_TRUE(object->findChild<QObject*>(
+                                   QStringLiteral("studioScene1Action"))
+                            ->property("enabled")
+                            .toBool());
+            studioController.setBusy(true);
+            QCoreApplication::processEvents();
+            EXPECT_FALSE(object->findChild<QObject*>(
+                                    QStringLiteral("studioScene1Action"))
+                             ->property("enabled")
+                             .toBool());
+        }
+    }
 }
 
 }  // namespace

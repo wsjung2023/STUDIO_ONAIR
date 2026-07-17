@@ -60,7 +60,8 @@ StudioWorkflowController::StudioWorkflowController(
     StudioStoreOpenFactory storeFactory,
     std::unique_ptr<IRecordingTimelineReconciler> reconciler,
     StudioIdentityFactory identityFactory, QObject* parent)
-    : QObject(parent), sceneModel_(this), sourceModel_(this) {
+    : QObject(parent), sceneModel_(this), sourceModel_(this),
+      activeSourceModel_(this) {
     qRegisterMetaType<StudioWorkflowResultPtr>();
     worker_ = new StudioWorkflowWorker{
         std::move(storeFactory), std::move(reconciler),
@@ -176,6 +177,7 @@ void StudioWorkflowController::openProject(QUrl packageUrl,
     ++selectionVersion_;
     sceneModel_.setScenes({}, std::nullopt, std::nullopt);
     sourceModel_.clear();
+    activeSourceModel_.clear();
     if (wasRecording) emit recordingChanged();
     if (hadSelection) emit selectionChanged();
     if (hadActiveScene) emit activeSceneChanged();
@@ -338,6 +340,12 @@ void StudioWorkflowController::publishState(StudioWorkflowState state) {
     } else {
         sourceModel_.clear();
     }
+    const auto* active = activeScene();
+    if (active) {
+        activeSourceModel_.setScene(*active, std::nullopt);
+    } else {
+        activeSourceModel_.clear();
+    }
     setStatus(fromStd(state_->status));
     if (oldRecording != recording()) emit recordingChanged();
     if (oldActive != activeSceneId()) emit activeSceneChanged();
@@ -356,6 +364,14 @@ const domain::StudioScene* StudioWorkflowController::selectedScene() const noexc
     if (!state_.has_value() || !state_->selectedSceneId.has_value()) return nullptr;
     const auto found = std::ranges::find(state_->snapshot.scenes,
                                          *state_->selectedSceneId,
+                                         &domain::StudioScene::id);
+    return found == state_->snapshot.scenes.end() ? nullptr : &*found;
+}
+
+const domain::StudioScene* StudioWorkflowController::activeScene() const noexcept {
+    if (!state_.has_value()) return nullptr;
+    const auto found = std::ranges::find(state_->snapshot.scenes,
+                                         state_->snapshot.activeSceneId,
                                          &domain::StudioScene::id);
     return found == state_->snapshot.scenes.end() ? nullptr : &*found;
 }

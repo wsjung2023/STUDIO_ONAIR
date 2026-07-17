@@ -66,6 +66,8 @@ void StudioSceneModel::setScenes(
     activeSceneId_ = std::move(activeSceneId);
     selectedSceneId_ = std::move(selectedSceneId);
     endResetModel();
+    ++revision_;
+    emit revisionChanged();
 }
 
 }  // namespace creator::app
