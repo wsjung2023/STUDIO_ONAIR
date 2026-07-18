@@ -612,6 +612,7 @@ class MltEditEngine::Impl final {
         domain::TimelineRevision revision;
         core::FrameRate frameRate;
         std::int64_t durationFrames;
+        std::size_t mediaProducerCount{};
         std::size_t videoCompositeTransitions{};
         std::size_t audioMixTransitions{};
         std::size_t visualBranchCount{};
@@ -673,7 +674,7 @@ class MltEditEngine::Impl final {
         auto graph = std::make_unique<Graph>(Graph{
             std::make_unique<Mlt::Profile>(), nullptr, {}, {}, {}, {}, {}, {},
             plan.revision, plan.frameRate, graphDurationFrames,
-            0, 0, plan.visualBranches.size(), 0, 0, 0});
+            0, 0, 0, plan.visualBranches.size(), 0, 0, 0});
         graph->profile->set_explicit(1);
         graph->profile->set_width(static_cast<int>(config_.previewWidth));
         graph->profile->set_height(static_cast<int>(config_.previewHeight));
@@ -726,6 +727,7 @@ class MltEditEngine::Impl final {
                     if (!producer->is_valid()) {
                         return stateError("MLT could not open an audio asset");
                     }
+                    ++graph->mediaProducerCount;
                     auto converter = std::make_unique<Mlt::Filter>(
                         *graph->profile, "audioconvert");
                     if (!converter->is_valid() ||
@@ -851,6 +853,7 @@ class MltEditEngine::Impl final {
                 if (!producer->is_valid()) {
                     return stateError("MLT could not open a visual branch");
                 }
+                ++graph->mediaProducerCount;
                 const bool transformed =
                     !isIdentityTransform(branch.transform);
                 const bool extractsPackedAlpha =
@@ -1171,6 +1174,7 @@ core::Result<MltEditEngineDiagnostics> MltEditEngine::diagnostics() const {
     return MltEditEngineDiagnostics{
         .nativeTrackCount =
             static_cast<std::size_t>(impl_->graph_->tractor->count()),
+        .mediaProducerCount = impl_->graph_->mediaProducerCount,
         .videoCompositeTransitions =
             impl_->graph_->videoCompositeTransitions,
         .audioMixTransitions = impl_->graph_->audioMixTransitions,

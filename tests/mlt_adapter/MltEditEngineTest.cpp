@@ -983,6 +983,12 @@ TEST(MltEditEngineTest, CompositesUpperVideoTrackOverLowerTrack) {
         .previewHeight = 2}};
     auto loaded = engine.load(layeredSnapshot(fixture.root()));
     ASSERT_TRUE(loaded.hasValue()) << loaded.error().message();
+    const auto diagnostics = engine.diagnostics();
+    ASSERT_TRUE(diagnostics.hasValue()) << diagnostics.error().message();
+    // Two independent timeline tracks (the merged-recording shape) must
+    // assemble exactly two media producers, not one producer per source
+    // segment.  The preview background is intentionally excluded.
+    EXPECT_EQ(diagnostics.value().mediaProducerCount, 2U);
 
     auto lowerFrame = engine.requestFrame(core::TimestampNs{});
     auto upperFrame = engine.requestFrame(

@@ -14,6 +14,7 @@ namespace {
 
 using namespace std::chrono_literals;
 using creator::app::RecordingImportRequest;
+using creator::app::RecordingConcatSource;
 using creator::app::RecordingSegmentProbe;
 using creator::app::planRecordingImport;
 using creator::core::DurationNs;
@@ -211,6 +212,45 @@ TEST(RecordingImportPlannerTest, SplitsVideoAtInteriorSceneBoundariesExactly) {
     EXPECT_EQ(clips[0].visualTransform(), presentation.sources()[0].transform());
     EXPECT_EQ(clips[1].sourceRange(), TimeRange::create(at(1500ms), 500ms).value());
     EXPECT_EQ(clips[2].sourceRange(), TimeRange::create(at(0s), 1s).value());
+}
+
+TEST(RecordingImportPlannerTest,
+     MergesAdjacentSegmentsIntoOneAssetAndClipPerContinuousTake) {
+    const auto camera = source("camera-merge");
+    const auto active = scene("active", camera, StudioSourceRole::Camera, true,
+                              transform(0.6, 2));
+    auto input = request(
+        camera, StudioSourceRole::Camera,
+        {segment(camera, 0, 0s, 2s, "media/camera-0.mkv"),
+         segment(camera, 1, 2s, 2s, "media/camera-1.mkv"),
+         segment(camera, 2, 4s, 2s, "media/camera-2.mkv")},
+        {active},
+        {{.sessionId = SessionId::create("session-placeholder").value(),
+          .sequence = 0,
+          .sceneId = active.id(),
+          .position = at(0s)}},
+        {{.relativePath = "media/camera-0.mkv", .media = videoProbe(2s)},
+         {.relativePath = "media/camera-1.mkv", .media = videoProbe(2s)},
+         {.relativePath = "media/camera-2.mkv", .media = videoProbe(2s)}});
+    input.sceneEvents.front().sessionId = input.sessionId;
+    input.concatSources.push_back(RecordingConcatSource{
+        .sourceId = camera,
+        .relativePath = "concat-camera-merge.ffconcat",
+        .media = videoProbe(6s),
+        .entries = {{"media/camera-0.mkv", 0s},
+                    {"media/camera-1.mkv", 2s},
+                    {"media/camera-2.mkv", 4s}}});
+
+    const auto planned = planRecordingImport(input);
+
+    ASSERT_TRUE(planned.hasValue()) << planned.error().message();
+    ASSERT_EQ(planned.value().assets.size(), 1U);
+    ASSERT_EQ(planned.value().tracks.size(), 1U);
+    ASSERT_EQ(planned.value().tracks.front().clips().size(), 1U);
+    EXPECT_EQ(planned.value().assets.front().relativePath(),
+              "concat-camera-merge.ffconcat");
+    EXPECT_EQ(planned.value().tracks.front().clips().front().sourceRange(),
+              TimeRange::create(at(0s), 6s).value());
 }
 
 TEST(RecordingImportPlannerTest, AudioSplitsOnlyWhenSceneEnableStateChanges) {

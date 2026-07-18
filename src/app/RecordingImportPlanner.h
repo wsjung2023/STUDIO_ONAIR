@@ -21,6 +21,26 @@ struct RecordingSegmentProbe final {
                            const RecordingSegmentProbe&) = default;
 };
 
+struct RecordingConcatEntry final {
+    std::string segmentPath;
+    core::DurationNs offset;
+
+    friend bool operator==(const RecordingConcatEntry&,
+                           const RecordingConcatEntry&) = default;
+};
+
+/// A regenerated ffconcat manifest and the offset of each original segment
+/// within it.  The source media files remain immutable package artifacts.
+struct RecordingConcatSource final {
+    domain::SourceId sourceId;
+    std::string relativePath;
+    media::MediaProbeResult media;
+    std::vector<RecordingConcatEntry> entries;
+
+    friend bool operator==(const RecordingConcatSource&,
+                           const RecordingConcatSource&) = default;
+};
+
 struct RecordingImportRequest final {
     domain::SessionId sessionId;
     std::vector<domain::SegmentInfo> segments;
@@ -30,6 +50,7 @@ struct RecordingImportRequest final {
     std::vector<project_store::RecordingMarker> markers;
     domain::Timeline timeline;
     std::vector<RecordingSegmentProbe> probes;
+    std::vector<RecordingConcatSource> concatSources;
 };
 
 struct RecordingImportPlan final {

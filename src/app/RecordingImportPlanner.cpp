@@ -124,6 +124,19 @@ Result<void> validateTextInputs(const RecordingImportRequest& request) {
             return invalid("recording probe text is not valid UTF-8");
         }
     }
+    for (const auto& concat : request.concatSources) {
+        if (!domain::isValidUtf8(concat.sourceId.value()) ||
+            !domain::isValidUtf8(concat.relativePath) ||
+            !domain::isValidUtf8(concat.media.formatName) ||
+            !domain::isValidUtf8(concat.media.codecName)) {
+            return invalid("recording concat source text is not valid UTF-8");
+        }
+        for (const auto& entry : concat.entries) {
+            if (!domain::isValidUtf8(entry.segmentPath)) {
+                return invalid("recording concat entry text is not valid UTF-8");
+            }
+        }
+    }
     return core::ok();
 }
 
@@ -471,6 +484,70 @@ Result<RecordingImportPlan> planRecordingImport(
 
     std::vector<domain::MediaAsset> assets;
     std::set<std::pair<domain::SourceId, std::uint64_t>> segmentIds;
+    std::map<std::string, const RecordingConcatSource*> concatByEntry;
+    for (const auto& concat : request.concatSources) {
+        if (concat.relativePath.empty() || concat.entries.empty() ||
+            concat.media.duration <= DurationNs::zero()) {
+            return invalid("recording concat source metadata is invalid");
+        }
+        if (!validSha256(concat.media.sha256)) {
+            return invalid("recording concat source identity is invalid");
+        }
+        for (const auto& entry : concat.entries) {
+            if (entry.segmentPath.empty() ||
+                entry.offset < DurationNs::zero() ||
+                !concatByEntry.emplace(entry.segmentPath, &concat).second) {
+                return invalid("recording concat entries are duplicated or invalid");
+            }
+        }
+    }
+    std::set<const RecordingConcatSource*> importedConcatSources;
+
+    const auto importUnit = [&](domain::SegmentInfo unit,
+                                StudioSourceRole role,
+                                const media::MediaProbeResult& probe)
+        -> Result<void> {
+        auto asset = makeAsset(request, unit, role, probe);
+        if (!asset.hasValue()) return asset.error();
+        auto boundaries = splitBoundaries(request, events.value(), unit, role);
+        if (!boundaries.hasValue()) return boundaries.error();
+        for (std::size_t index = 0; index + 1 < boundaries.value().size(); ++index) {
+            const auto pieceStart = boundaries.value()[index];
+            const auto duration = boundaries.value()[index + 1] - pieceStart;
+            auto state = stateAt(request, events.value(), unit.sourceId,
+                                 pieceStart);
+            if (!state.hasValue()) return state.error();
+            auto timelineStart = addTime(appendBase, pieceStart.time_since_epoch());
+            if (!timelineStart.hasValue()) return timelineStart.error();
+            auto sourceRange = domain::TimeRange::create(
+                TimestampNs{pieceStart - unit.startTime}, duration);
+            if (!sourceRange.hasValue()) return sourceRange.error();
+            auto timelineRange =
+                domain::TimeRange::create(timelineStart.value(), duration);
+            if (!timelineRange.hasValue()) return timelineRange.error();
+            auto clipId = makeClipId(request, unit, index);
+            if (!clipId.hasValue()) return clipId.error();
+            std::optional<domain::AudioEnvelope> envelope;
+            if (!videoRole(role)) {
+                auto created = domain::AudioEnvelope::create(
+                    0.0, DurationNs::zero(), DurationNs::zero(), duration);
+                if (!created.hasValue()) return created.error();
+                envelope = created.value();
+            }
+            auto clip = domain::Clip::createAsset(
+                clipId.value(), asset.value(), sourceRange.value(),
+                timelineRange.value(), state.value().enabled,
+                videoRole(role) ? state.value().transform : std::nullopt,
+                envelope);
+            if (!clip.hasValue()) return clip.error();
+            auto inserted = staging.value().insertClip(
+                trackIds.at(unit.sourceId), std::move(clip).value());
+            if (!inserted.hasValue()) return inserted.error();
+        }
+        assets.push_back(std::move(asset).value());
+        return core::ok();
+    };
+
     for (const auto& segment : segments) {
         if (!segmentIds.emplace(segment.sourceId, segment.index).second) {
             return invalid("recording segment identity is duplicated");
@@ -486,49 +563,55 @@ Result<RecordingImportPlan> planRecordingImport(
         if (segment.status == domain::SegmentStatus::Failed) continue;
         const auto role = roles.find(segment.sourceId);
         if (role == roles.end()) return notFound("recording source role was not found");
+
+        if (const auto concat = concatByEntry.find(segment.relativePath);
+            concat != concatByEntry.end()) {
+            if (!importedConcatSources.insert(concat->second).second) continue;
+            const auto& source = *concat->second;
+            std::vector<const domain::SegmentInfo*> parts;
+            parts.reserve(source.entries.size());
+            for (const auto& entry : source.entries) {
+                const auto found = std::find_if(
+                    segments.begin(), segments.end(),
+                    [&entry, &segment](const auto& candidate) {
+                        return candidate.sourceId == segment.sourceId &&
+                               candidate.relativePath == entry.segmentPath;
+                    });
+                if (found == segments.end() ||
+                    found->status == domain::SegmentStatus::Failed) {
+                    return invalid("recording concat entry does not match a ready segment");
+                }
+                parts.push_back(&*found);
+            }
+            if (parts.empty()) return invalid("recording concat source is empty");
+            auto merged = *parts.front();
+            merged.relativePath = source.relativePath;
+            merged.duration = DurationNs::zero();
+            for (std::size_t index = 0; index < parts.size(); ++index) {
+                if (parts[index]->sourceId != merged.sourceId ||
+                    (index > 0 &&
+                     parts[index]->startTime !=
+                         parts[index - 1]->startTime + parts[index - 1]->duration)) {
+                    return invalid("recording concat source contains a time gap");
+                }
+                merged.duration += parts[index]->duration;
+            }
+            if (auto imported = importUnit(std::move(merged), role->second,
+                                           source.media);
+                !imported.hasValue()) {
+                return imported.error();
+            }
+            continue;
+        }
+
         const auto probe = probes.value().find(segment.relativePath);
         if (probe == probes.value().end()) {
             return notFound("recording media probe was not found");
         }
-        auto asset = makeAsset(request, segment, role->second, probe->second);
-        if (!asset.hasValue()) return asset.error();
-        auto boundaries = splitBoundaries(request, events.value(), segment,
-                                          role->second);
-        if (!boundaries.hasValue()) return boundaries.error();
-        for (std::size_t index = 0; index + 1 < boundaries.value().size(); ++index) {
-            const auto pieceStart = boundaries.value()[index];
-            const auto duration = boundaries.value()[index + 1] - pieceStart;
-            auto state = stateAt(request, events.value(), segment.sourceId,
-                                 pieceStart);
-            if (!state.hasValue()) return state.error();
-            auto timelineStart = addTime(appendBase, pieceStart.time_since_epoch());
-            if (!timelineStart.hasValue()) return timelineStart.error();
-            auto sourceRange = domain::TimeRange::create(
-                TimestampNs{pieceStart - segment.startTime}, duration);
-            if (!sourceRange.hasValue()) return sourceRange.error();
-            auto timelineRange =
-                domain::TimeRange::create(timelineStart.value(), duration);
-            if (!timelineRange.hasValue()) return timelineRange.error();
-            auto clipId = makeClipId(request, segment, index);
-            if (!clipId.hasValue()) return clipId.error();
-            std::optional<domain::AudioEnvelope> envelope;
-            if (!videoRole(role->second)) {
-                auto created = domain::AudioEnvelope::create(
-                    0.0, DurationNs::zero(), DurationNs::zero(), duration);
-                if (!created.hasValue()) return created.error();
-                envelope = created.value();
-            }
-            auto clip = domain::Clip::createAsset(
-                clipId.value(), asset.value(), sourceRange.value(),
-                timelineRange.value(), state.value().enabled,
-                videoRole(role->second) ? state.value().transform : std::nullopt,
-                envelope);
-            if (!clip.hasValue()) return clip.error();
-            auto inserted = staging.value().insertClip(
-                trackIds.at(segment.sourceId), std::move(clip).value());
-            if (!inserted.hasValue()) return inserted.error();
+        if (auto imported = importUnit(segment, role->second, probe->second);
+            !imported.hasValue()) {
+            return imported.error();
         }
-        assets.push_back(std::move(asset).value());
     }
 
     auto recordingMarkers = request.markers;

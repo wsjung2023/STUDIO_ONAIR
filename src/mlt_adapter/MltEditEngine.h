@@ -22,6 +22,10 @@ struct MltEditEngineConfig final {
 
 struct MltEditEngineDiagnostics final {
     std::size_t nativeTrackCount{};
+    /// Number of avformat producers assembled for the current graph.  This is
+    /// intentionally a build diagnostic: playlist autoclose releases the
+    /// wrappers after assembly, but the count proves the graph stayed bounded.
+    std::size_t mediaProducerCount{};
     std::size_t videoCompositeTransitions{};
     std::size_t audioMixTransitions{};
     std::size_t visualBranchCount{};
