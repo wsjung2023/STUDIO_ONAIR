@@ -7,12 +7,14 @@
 #include "domain/TimelineRevision.h"
 #include "edit_engine/EditEngineTypes.h"
 #include "project_store/MigrationRunner.h"
+#include "project_store/RenderJobRecovery.h"
 #include "project_store/internal/SqliteConnection.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <utility>
@@ -199,6 +201,37 @@ TEST_F(SqliteRenderJobStoreTest, ListsOnlyRecoverableNonTerminalJobs) {
     ASSERT_TRUE(recoverable.hasValue()) << recoverable.error().message();
     ASSERT_EQ(recoverable.value().size(), 1U);
     EXPECT_EQ(recoverable.value().front().jobId, first.jobId);
+}
+
+TEST_F(SqliteRenderJobStoreTest, RecoveryCommitsMatchingPublishedRowTerminally) {
+    const auto record = pending("recover", "recover.mp4");
+    ASSERT_TRUE(store_->begin(record).hasValue());
+    auto running = update(RenderJobState::Running, 0.5, 500,
+                          "2026-07-18T00:00:01Z");
+    ASSERT_TRUE(store_->advance(record.jobId, running).hasValue());
+    {
+        std::ofstream output(record.partial,
+                             std::ios::binary | std::ios::trunc);
+        output << "finished-render";
+    }
+    auto evidence =
+        creator::project_store::inspectRenderArtifact(record.partial);
+    ASSERT_TRUE(evidence.hasValue()) << evidence.error().message();
+    auto publishing = update(RenderJobState::Publishing, 0.999, 1'000,
+                             "2026-07-18T00:00:02Z");
+    publishing.diagnostics.outputSha256 = evidence.value().sha256;
+    publishing.diagnostics.destinationIdentity = evidence.value().identity;
+    ASSERT_TRUE(store_->advance(record.jobId, publishing).hasValue());
+
+    auto recovered = creator::project_store::RenderJobRecovery::recoverAll(
+        *store_, utc("2026-07-18T00:00:03Z"));
+
+    ASSERT_TRUE(recovered.hasValue()) << recovered.error().message();
+    auto loaded = store_->load(record.jobId);
+    ASSERT_TRUE(loaded.hasValue());
+    ASSERT_TRUE(loaded.value().has_value());
+    EXPECT_EQ(loaded.value()->progress.state(), RenderJobState::Completed);
+    EXPECT_TRUE(fs::exists(record.destination));
 }
 
 }  // namespace

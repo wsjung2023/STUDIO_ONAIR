@@ -5,6 +5,8 @@ cs_add_qtfree_library(cs_project_store
         IProjectPackageStore.h
         IStudioStore.h
         IRenderJobStore.h
+        RenderJobRecovery.h
+        RenderJobRecovery.cpp
         JsonProjectStore.h
         JsonProjectStore.cpp
         ManifestSchemaValidator.h
