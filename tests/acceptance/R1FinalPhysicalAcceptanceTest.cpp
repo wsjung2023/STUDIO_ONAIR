@@ -459,6 +459,15 @@ TEST(R1FinalPhysicalAcceptanceTest,
     EXPECT_EQ(timelineRows(reopenedEditor), savedRows);
     ASSERT_TRUE(reopenedEditor.exportSnapshot().has_value());
 
+    // Diagnostic mode for the long hardware soak: export is covered by the
+    // retained-package replay test, while this mode isolates capture,
+    // reconciliation, and durable reopen without constructing a thousands-
+    // of-producers MLT render graph.
+    if (qEnvironmentVariableIntValue("CS_R1_SKIP_EXPORT") > 0) {
+        std::cout << "[ R1-07 EXPORT ] skipped by CS_R1_SKIP_EXPORT" << std::endl;
+        return;
+    }
+
     auto projectId = creator::domain::ProjectId::create(
         project.projectId().toUtf8().toStdString());
     ASSERT_TRUE(projectId.hasValue()) << projectId.error().message();
