@@ -33,6 +33,7 @@ using recorder::DiskSpaceMonitor;
 using recorder::DurableSegmentPublisher;
 using recorder::RecordingTrack;
 using recorder::TrackMediaKind;
+using recorder::TrackRole;
 
 class VideoRouter final : public capture::IVideoFrameSink {
 public:
@@ -86,11 +87,11 @@ core::Result<std::unique_ptr<AsyncTrackRecorder>> makeTrackRecorder(
     std::unique_ptr<recorder::ITrackSegmentEncoder> encoder;
     if (track.mediaKind() == TrackMediaKind::Video) {
         ffmpeg_adapter::VideoEncoderOptions options;
-        if (concurrentVideoSources) {
-            // Windows hardware encoders may advertise H.264 support but reject
-            // a second simultaneous source after opening. Source-isolated
-            // recording must remain atomic, so use the audited LGPL software
-            // encoder whenever screen and camera are recorded together.
+        if (concurrentVideoSources && track.role() == TrackRole::Camera) {
+            // Keep the camera on the audited software path when two video
+            // sources are active.  The screen track may use the platform H.264
+            // encoder; forcing both sources through MPEG-4 made 1080p capture
+            // permanently outrun the recorder worker on Windows.
             options.preferredEncoderNames = {"mpeg4"};
         }
         encoder = std::make_unique<ffmpeg_adapter::FfmpegVideoSegmentEncoder>(
@@ -107,7 +108,11 @@ core::Result<std::unique_ptr<AsyncTrackRecorder>> makeTrackRecorder(
         .packageRoot = start.packagePath,
         .recordingStartTime = start.startedAt,
         .segmentDuration = std::chrono::seconds{2},
-        .videoQueueCapacity = 30,
+        // Keep several seconds of video available while the software encoder
+        // catches up.  Thirty frames (0.5 s at 60 fps) was routinely exhausted
+        // during a long physical run with screen + camera enabled, turning a
+        // transient encoder stall into permanent frame loss.
+        .videoQueueCapacity = 180,
         .audioQueueFrameCapacity = 240'000,
         .nextSegmentEstimateBytes = 64ULL * 1024ULL * 1024ULL,
     };
@@ -134,10 +139,11 @@ std::uint32_t clockPriority(recorder::TrackRole role,
     }
 }
 
-core::DurationNs videoPeriod(recorder::TrackRole role) noexcept {
-    if (role == recorder::TrackRole::Screen) {
-        return std::chrono::nanoseconds{1'000'000'000LL / 60LL};
-    }
+core::DurationNs videoPeriod([[maybe_unused]] recorder::TrackRole role) noexcept {
+    // The durable segment encoders are configured for 30 fps.  Feeding the
+    // screen planner at 60 fps doubles BGRA conversion and software-encoder
+    // work, causing queue loss on ordinary Windows machines.  A stable 30 fps
+    // grid preserves A/V timing while keeping the recorder real-time.
     return std::chrono::nanoseconds{1'000'000'000LL / 30LL};
 }
 

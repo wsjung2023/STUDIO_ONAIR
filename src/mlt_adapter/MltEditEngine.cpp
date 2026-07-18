@@ -944,6 +944,11 @@ class MltEditEngine::Impl final {
             graph->transitions.push_back(std::move(composite));
         }
         graph->tractor->refresh();
+        // Playlist::append retains the producer service.  The extra owning
+        // wrappers are only needed while the graph is assembled; keeping one
+        // per segment defeats playlist autoclose and exhausts Windows handles
+        // during long exports.
+        graph->producers.clear();
         return graph;
     }
 
