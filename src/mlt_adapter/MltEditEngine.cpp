@@ -718,6 +718,7 @@ class MltEditEngine::Impl final {
                         *graph->profile, "avformat",
                         utf8Path(clip.mediaPath).c_str());
                     producer->set("threads", 1);
+                    producer->set("autoclose", 1);
                     producer->set("astream", 0);
                     producer->set("vstream", -1);
                     if (!producer->is_valid()) {
@@ -840,6 +841,7 @@ class MltEditEngine::Impl final {
                     *graph->profile, "avformat",
                     utf8Path(branch.sourcePath).c_str());
                 producer->set("threads", 1);
+                producer->set("autoclose", 1);
                 producer->set("astream", -1);
                 producer->set("vstream", 0);
                 if (!producer->is_valid()) {

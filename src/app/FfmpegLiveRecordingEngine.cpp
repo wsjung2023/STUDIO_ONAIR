@@ -112,7 +112,7 @@ core::Result<std::unique_ptr<AsyncTrackRecorder>> makeTrackRecorder(
         // catches up.  Thirty frames (0.5 s at 60 fps) was routinely exhausted
         // during a long physical run with screen + camera enabled, turning a
         // transient encoder stall into permanent frame loss.
-        .videoQueueCapacity = 180,
+        .videoQueueCapacity = 60,
         .audioQueueFrameCapacity = 240'000,
         .nextSegmentEstimateBytes = 64ULL * 1024ULL * 1024ULL,
     };
