@@ -1,6 +1,7 @@
 #pragma once
 
 #include "edit_engine/IEditEngine.h"
+#include "edit_engine/IRenderJobLifecycle.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -16,6 +17,7 @@ struct MltEditEngineConfig final {
     std::filesystem::path runtimeRoot;
     std::uint32_t previewWidth{1280};
     std::uint32_t previewHeight{720};
+    std::shared_ptr<edit_engine::IRenderJobLifecycle> renderLifecycle;
 };
 
 struct MltEditEngineDiagnostics final {

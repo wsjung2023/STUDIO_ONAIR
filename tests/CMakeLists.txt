@@ -83,6 +83,7 @@ add_executable(cs_tests
     project_store/SqliteStudioStoreTest.cpp
     project_store/SqliteRenderJobStoreTest.cpp
     project_store/RenderJobRecoveryTest.cpp
+    project_store/PersistentRenderJobLifecycleTest.cpp
     project_store/SegmentPersistenceTest.cpp
     project_store/RecoveryTest.cpp
     project_store/ProjectPackageStoreTest.cpp

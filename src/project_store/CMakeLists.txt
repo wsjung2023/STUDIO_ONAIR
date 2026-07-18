@@ -5,6 +5,8 @@ cs_add_qtfree_library(cs_project_store
         IProjectPackageStore.h
         IStudioStore.h
         IRenderJobStore.h
+        PersistentRenderJobLifecycle.h
+        PersistentRenderJobLifecycle.cpp
         RenderJobRecovery.h
         RenderJobRecovery.cpp
         JsonProjectStore.h

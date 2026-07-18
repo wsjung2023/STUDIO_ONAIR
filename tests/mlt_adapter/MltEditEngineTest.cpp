@@ -11,12 +11,14 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <optional>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -24,6 +26,53 @@ namespace {
 
 namespace fs = std::filesystem;
 using namespace creator;
+
+class PublicationBoundaryLifecycle final
+    : public edit_engine::IRenderJobLifecycle {
+public:
+    core::Result<void> begin(const edit_engine::RenderRequest& request,
+                             const fs::path&, core::DurationNs) override {
+        destination = request.destination();
+        began.store(true);
+        return core::ok();
+    }
+    core::Result<void> encoderSelected(
+        const domain::RenderJobId&,
+        const edit_engine::RenderEncoderDiagnostics& diagnostics) override {
+        selected.store(!diagnostics.selectedEncoder.empty());
+        return core::ok();
+    }
+    core::Result<void> advance(
+        const domain::RenderJobId&,
+        const edit_engine::RenderProgress& progress) override {
+        if (progress.state() == edit_engine::RenderJobState::Running) {
+            ran.store(true);
+        }
+        return core::ok();
+    }
+    core::Result<void> preparePublication(
+        const domain::RenderJobId&, const fs::path& partial,
+        const edit_engine::RenderProgress&) override {
+        preparedBeforeRename.store(fs::is_regular_file(partial) &&
+                                   !fs::exists(destination));
+        return core::ok();
+    }
+    core::Result<void> finish(const domain::RenderJobId&,
+                              edit_engine::RenderJobState state,
+                              std::string) override {
+        completedAfterRename.store(
+            state == edit_engine::RenderJobState::Completed &&
+            fs::is_regular_file(destination));
+        return core::ok();
+    }
+
+    fs::path destination;
+    std::atomic_bool began{};
+    std::atomic_bool selected{};
+    std::atomic_bool ran{};
+    std::atomic_bool preparedBeforeRename{};
+    std::atomic_bool completedAfterRename{};
+};
 
 void writeMonoWave(const fs::path& path, std::int16_t sampleValue,
                    std::uint32_t sampleCount = 48'000) {
@@ -1386,10 +1435,12 @@ TEST(MltEditEngineTest, UsesExactFractionalRateSamplePositionForFade) {
 
 TEST(MltEditEngineTest, RendersFrozenTimelineToValidatedH264AacMp4) {
     MltFixture fixture;
+    auto lifecycle = std::make_shared<PublicationBoundaryLifecycle>();
     mlt_adapter::MltEditEngine engine{{
         .runtimeRoot = fs::path{CS_TEST_MLT_ROOT},
         .previewWidth = 2,
-        .previewHeight = 2}};
+        .previewHeight = 2,
+        .renderLifecycle = lifecycle}};
     auto frozen = snapshot(fixture.root(), 31);
     ASSERT_TRUE(engine.load(frozen).hasValue());
     const auto destination = fixture.root() / "export.mp4";
@@ -1427,6 +1478,11 @@ TEST(MltEditEngineTest, RendersFrozenTimelineToValidatedH264AacMp4) {
     ASSERT_TRUE(media.value().audio.has_value());
     EXPECT_EQ(media.value().audio->sampleRate, 48'000);
     EXPECT_EQ(media.value().audio->channels, 2);
+    EXPECT_TRUE(lifecycle->began.load());
+    EXPECT_TRUE(lifecycle->selected.load());
+    EXPECT_TRUE(lifecycle->ran.load());
+    EXPECT_TRUE(lifecycle->preparedBeforeRename.load());
+    EXPECT_TRUE(lifecycle->completedAfterRename.load());
 }
 
 TEST(MltEditEngineTest, ImmediateCancellationPublishesNoDestinationOrPartial) {

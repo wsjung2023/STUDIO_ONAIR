@@ -35,6 +35,7 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <system_error>
@@ -120,6 +121,40 @@ bool requiresPackedAlphaExtraction(const MltVisualBranch& branch) {
                        return static_cast<char>(std::tolower(character));
                    });
     return extension == ".png";
+}
+
+core::DurationNs renderDuration(
+    const edit_engine::TimelineSnapshot& snapshot) noexcept {
+    core::TimestampNs timelineEnd{};
+    for (const auto& track : snapshot.timeline.tracks()) {
+        for (const auto& clip : track.clips()) {
+            if (clip.enabled()) {
+                timelineEnd = std::max(timelineEnd, clip.timelineRange().end());
+            }
+        }
+    }
+    return timelineEnd.time_since_epoch();
+}
+
+edit_engine::RenderEncoderDiagnostics encoderDiagnostics(
+    const ExportEncoderSelection& selection) {
+    std::ostringstream attempted;
+    std::ostringstream fallback;
+    bool firstAttempt = true;
+    bool firstFailure = true;
+    for (const auto& attempt : selection.attempts) {
+        if (!firstAttempt) attempted << ',';
+        firstAttempt = false;
+        attempted << attempt.candidate.id;
+        if (!attempt.succeeded) {
+            if (!firstFailure) fallback << "; ";
+            firstFailure = false;
+            fallback << attempt.candidate.id << ": " << attempt.diagnostic;
+        }
+    }
+    return {.attemptedEncoders = attempted.str(),
+            .selectedEncoder = selection.selected.id,
+            .fallbackReason = fallback.str()};
 }
 
 void setMltEnvironment(const std::filesystem::path& root) {
@@ -1212,6 +1247,11 @@ core::Result<void> MltEditEngine::renderFrozen(
     auto encoder = ExportEncoderProbe::probe(
         impl_->config_.runtimeRoot, probeRoot, request.preset());
     if (!encoder.hasValue()) return encoder.error();
+    if (impl_->config_.renderLifecycle) {
+        auto recorded = impl_->config_.renderLifecycle->encoderSelected(
+            request.jobId(), encoderDiagnostics(encoder.value()));
+        if (!recorded.hasValue()) return recorded.error();
+    }
     if (stopToken.stop_requested()) {
         return stateError("export cancelled during encoder preflight");
     }
@@ -1284,6 +1324,21 @@ core::Result<void> MltEditEngine::renderFrozen(
                 consumer.stop();
                 return stateError("export progress was rejected");
             }
+            if (impl_->config_.renderLifecycle) {
+                auto progress = edit_engine::RenderProgress::create(
+                    edit_engine::RenderJobState::Running, fraction, through,
+                    renderDuration(request.snapshot()));
+                if (!progress.hasValue()) {
+                    consumer.stop();
+                    return progress.error();
+                }
+                auto recorded = impl_->config_.renderLifecycle->advance(
+                    request.jobId(), progress.value());
+                if (!recorded.hasValue()) {
+                    consumer.stop();
+                    return recorded.error();
+                }
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds{10});
         }
         if (consumer.stop() != 0) {
@@ -1294,14 +1349,7 @@ core::Result<void> MltEditEngine::renderFrozen(
         return stateError("export cancelled after encoding");
     }
 
-    core::TimestampNs timelineEnd{};
-    for (const auto& track : request.snapshot().timeline.tracks()) {
-        for (const auto& clip : track.clips()) {
-            if (clip.enabled()) {
-                timelineEnd = std::max(timelineEnd, clip.timelineRange().end());
-            }
-        }
-    }
+    const core::TimestampNs timelineEnd{renderDuration(request.snapshot())};
     {
         ffmpeg_adapter::FfmpegMediaProbe probe;
         auto media = probe.probe(partial.parent_path(), partial.filename());
@@ -1329,6 +1377,15 @@ core::Result<void> MltEditEngine::renderFrozen(
     if (!report(edit_engine::RenderJobState::Publishing, 0.999, timelineEnd)) {
         return stateError("export publication was cancelled");
     }
+    if (impl_->config_.renderLifecycle) {
+        auto progress = edit_engine::RenderProgress::create(
+            edit_engine::RenderJobState::Publishing, 0.999, timelineEnd,
+            renderDuration(request.snapshot()));
+        if (!progress.hasValue()) return progress.error();
+        auto prepared = impl_->config_.renderLifecycle->preparePublication(
+            request.jobId(), partial, progress.value());
+        if (!prepared.hasValue()) return prepared.error();
+    }
     if (stopToken.stop_requested()) {
         return stateError("export cancelled at publication boundary");
     }
@@ -1344,14 +1401,50 @@ core::Result<std::unique_ptr<edit_engine::IRenderJob>> MltEditEngine::render(
     auto config = impl_->config_;
     config.previewWidth = request.preset().width();
     config.previewHeight = request.preset().height();
-    return MltRenderJob::start(
+    const auto partial = request.destination().parent_path() /
+                         (".creator-studio-" + request.jobId().value() +
+                          ".partial.mp4");
+    const auto duration = renderDuration(request.snapshot());
+    if (config.renderLifecycle) {
+        auto begun = config.renderLifecycle->begin(request, partial, duration);
+        if (!begun.hasValue()) return begun.error();
+    }
+    auto started = MltRenderJob::start(
         request, [config = std::move(config)](
                      const edit_engine::RenderRequest& frozen,
                      std::stop_token stopToken,
                      const MltRenderJob::ProgressReporter& report) mutable {
+            if (config.renderLifecycle) {
+                auto running = edit_engine::RenderProgress::create(
+                    edit_engine::RenderJobState::Running, 0.0,
+                    core::TimestampNs{}, renderDuration(frozen.snapshot()));
+                if (!running.hasValue()) return core::Result<void>{running.error()};
+                auto recorded = config.renderLifecycle->advance(
+                    frozen.jobId(), running.value());
+                if (!recorded.hasValue()) return recorded;
+            }
             MltEditEngine independent{config};
-            return independent.renderFrozen(frozen, stopToken, report);
+            auto rendered = independent.renderFrozen(frozen, stopToken, report);
+            if (config.renderLifecycle) {
+                const auto state = stopToken.stop_requested()
+                                       ? edit_engine::RenderJobState::Cancelled
+                                       : rendered.hasValue()
+                                             ? edit_engine::RenderJobState::Completed
+                                             : edit_engine::RenderJobState::Failed;
+                auto finished = config.renderLifecycle->finish(
+                    frozen.jobId(), state,
+                    rendered.hasValue() ? std::string{}
+                                        : rendered.error().message());
+                if (!finished.hasValue()) return finished;
+            }
+            return rendered;
         });
+    if (!started.hasValue() && impl_->config_.renderLifecycle) {
+        (void)impl_->config_.renderLifecycle->finish(
+            request.jobId(), edit_engine::RenderJobState::Failed,
+            started.error().message());
+    }
+    return started;
 }
 
 }  // namespace creator::mlt_adapter
