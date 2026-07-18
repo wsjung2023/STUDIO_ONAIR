@@ -300,6 +300,47 @@ if(CS_ENABLE_FFMPEG)
                 ENVIRONMENT_MODIFICATION
                     "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
         )
+
+        add_executable(cs_r1_replay_stress_tests
+            acceptance/R1ReplayStressTest.cpp
+        )
+        target_link_libraries(cs_r1_replay_stress_tests PRIVATE
+            cs_app
+            cs_ffmpeg_adapter
+            cs_mlt_adapter
+            Qt6::Quick
+            Qt6::Test
+            GTest::gtest
+            delayimp
+        )
+        target_compile_definitions(cs_r1_replay_stress_tests PRIVATE
+            CS_TEST_STAGED_MLT_ROOT="$<TARGET_FILE_DIR:creator_studio>/mlt-runtime"
+        )
+        target_include_directories(cs_r1_replay_stress_tests SYSTEM PRIVATE
+            ${FFMPEG_INCLUDE_DIRS}
+        )
+        target_link_libraries(cs_r1_replay_stress_tests PRIVATE
+            ${FFMPEG_LIBRARIES}
+        )
+        target_link_options(cs_r1_replay_stress_tests PRIVATE
+            "/DELAYLOAD:mlt++-7.dll"
+            "/DELAYLOAD:mlt-7.dll"
+        )
+        add_dependencies(cs_r1_replay_stress_tests creator_studio)
+        cs_apply_warnings(cs_r1_replay_stress_tests)
+        set_property(TARGET cs_r1_replay_stress_tests PROPERTY
+            TEST_LAUNCHER
+            "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;--"
+        )
+        gtest_discover_tests(cs_r1_replay_stress_tests
+            DISCOVERY_MODE PRE_TEST
+            PROPERTIES
+                TIMEOUT 1800
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+                LABELS "replay;r1"
+                ENVIRONMENT_MODIFICATION
+                    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+        )
     endif()
 
     add_executable(cs_ffmpeg_tests
