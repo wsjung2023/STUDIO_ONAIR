@@ -109,7 +109,8 @@ creator::core::Utc utc(std::string_view value) {
     return creator::core::Utc::parseRfc3339(value).value();
 }
 
-TEST(FfmpegLiveRecordingEngineTest, RecordsAttachedScreenAndMicrophoneToReadyFiles) {
+TEST(FfmpegLiveRecordingEngineTest,
+     ClampsPreviewEraFramesAndRecordsAttachedSourcesToReadyFiles) {
     const auto root = fs::temp_directory_path() / "cs_ffmpeg_live_engine";
     const auto packagePath = root / "live.cstudio";
     std::error_code ignored;
@@ -134,7 +135,8 @@ TEST(FfmpegLiveRecordingEngineTest, RecordsAttachedScreenAndMicrophoneToReadyFil
     const auto engineStarted = engine.start(
                           LiveRecordingStart{.sessionId = sessionId,
                                              .packagePath = packagePath,
-                                             .startedAt = {},
+                                             .startedAt = creator::core::TimestampNs{
+                                                 std::chrono::seconds{1}},
                                              .sources = bindings->sources},
                           [promise](auto result) { promise->set_value(std::move(result)); });
     ASSERT_TRUE(engineStarted.hasValue()) << engineStarted.error().message();
@@ -146,12 +148,11 @@ TEST(FfmpegLiveRecordingEngineTest, RecordsAttachedScreenAndMicrophoneToReadyFil
         bindings->video->onVideoFrame(videoFrame(frame));
     }
     const auto synchronized = engine.snapshot();
-    EXPECT_GT(synchronized.syncVideoFramesDuplicated, 0u);
     EXPECT_GT(synchronized.maximumAbsoluteDriftNanoseconds, 0u);
     for (std::uint32_t block = 1; block < 210; ++block) {
         bindings->audio->onAudioBlock(audioBlock(block));
     }
-    engine.stopAsync(creator::core::TimestampNs{std::chrono::milliseconds{2100}});
+    engine.stopAsync(creator::core::TimestampNs{std::chrono::milliseconds{3100}});
     const auto completed = future.get();
 
     ASSERT_TRUE(completed.hasValue()) << completed.error().message();

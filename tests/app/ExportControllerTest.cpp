@@ -176,6 +176,21 @@ TEST_F(ExportControllerTest, CancelAndDestructionDrainPendingJob) {
     EXPECT_TRUE(state_->jobDestroyed);
 }
 
+TEST_F(ExportControllerTest, PreservesCancellationRequestedBeforeWorkerEntry) {
+    state_->waitsForCancellation = true;
+    app::ExportController controller{
+        std::make_unique<ControllerEditEngine>(state_)};
+    controller.setRequest(request(root_));
+    QSignalSpy finished{&controller, &app::ExportController::exportFinished};
+
+    controller.startExport();
+    controller.cancelExport();
+
+    ASSERT_TRUE(finished.wait(3000));
+    EXPECT_TRUE(state_->cancelled);
+    EXPECT_FALSE(finished.at(0).at(0).toBool());
+}
+
 TEST_F(ExportControllerTest, RejectsStartWithoutFrozenRequest) {
     app::ExportController controller{
         std::make_unique<ControllerEditEngine>(state_)};

@@ -33,6 +33,7 @@ using namespace std::chrono_literals;
 
 using creator::app::RecordingTimelineReconciler;
 using creator::core::AppError;
+using creator::core::DurationNs;
 using creator::core::ErrorCode;
 using creator::core::TimestampNs;
 using creator::core::Utc;
@@ -72,6 +73,22 @@ public:
     }
 };
 
+class ChangingIdentityLease final
+    : public creator::media::IMediaIdentityLease {
+public:
+    [[nodiscard]] creator::core::Result<void> verifyCurrentIdentity()
+        const override {
+        if (verified_.fetch_add(1, std::memory_order_relaxed) == 0) {
+            return creator::core::ok();
+        }
+        return AppError{ErrorCode::IoFailure,
+                        "media replaced before import commit"};
+    }
+
+private:
+    mutable std::atomic_size_t verified_{0};
+};
+
 MediaProbeResult screenProbe(std::string sha = std::string(64, 'a')) {
     return MediaProbeResult{
         .duration = 3s,
@@ -92,7 +109,9 @@ public:
     [[nodiscard]] creator::core::Result<MediaProbeResult> probe(
         const fs::path&, const fs::path&) override {
         ++calls;
-        return calls == 1 ? screenProbe() : screenProbe(std::string(64, 'b'));
+        auto result = screenProbe();
+        result.identityLease = std::make_shared<ChangingIdentityLease>();
+        return result;
     }
 
     std::size_t calls{0};
@@ -132,7 +151,7 @@ public:
     [[nodiscard]] creator::core::Result<MediaProbeResult> probe(
         const fs::path&, const fs::path&) override {
         auto result = screenProbe();
-        if (calls_++ == 1) {
+        if (calls_++ == 0) {
             result.identityLease = std::make_shared<ExpiringIdentityLease>();
         }
         return result;
@@ -169,7 +188,7 @@ protected:
         ASSERT_TRUE(timelineStore.value().createTimeline(timeline.value()).hasValue());
 
         ASSERT_TRUE(packages_.beginRecording(packageRoot_, sessionId(),
-                                             TimestampNs{}, fixedUtc())
+                                             sessionOrigin_, fixedUtc())
                         .hasValue());
         auto studio = SqliteStudioStore::open(databasePath, manifest.projectId);
         ASSERT_TRUE(studio.hasValue()) << studio.error().message();
@@ -191,9 +210,9 @@ protected:
                         .hasValue());
 
         RecordingSession session{sessionId()};
-        ASSERT_TRUE(session.start(TimestampNs{}).hasValue());
+        ASSERT_TRUE(session.start(sessionOrigin_).hasValue());
         ASSERT_TRUE(session.addSegment(segment()).hasValue());
-        ASSERT_TRUE(session.stop(TimestampNs{} + 3s).hasValue());
+        ASSERT_TRUE(session.stop(sessionOrigin_ + 3s).hasValue());
         ASSERT_TRUE(packages_.completeRecording(packageRoot_, session, fixedUtc())
                         .hasValue());
     }
@@ -214,7 +233,7 @@ protected:
     [[nodiscard]] SegmentInfo segment() const {
         return SegmentInfo{.index = 0,
                            .sourceId = sourceId(),
-                           .startTime = TimestampNs{},
+                           .startTime = sessionOrigin_,
                            .duration = 3s,
                            .status = SegmentStatus::Ready,
                            .relativePath = "media/screen-0.mkv"};
@@ -236,6 +255,7 @@ protected:
 
     fs::path directory_;
     fs::path packageRoot_;
+    TimestampNs sessionOrigin_{DurationNs{268'907'000'000'000}};
     mutable ProjectPackageStore packages_;
 };
 
@@ -269,6 +289,11 @@ TEST_F(RecordingTimelineReconcilerTest,
     ASSERT_EQ(afterFirst.value().timeline.tracks().size(), 1U);
     ASSERT_EQ(afterFirst.value().timeline.markers().size(), 1U);
     ASSERT_EQ(assetsAfterFirst.value().size(), 1U);
+    ASSERT_EQ(afterFirst.value().timeline.tracks().front().clips().size(), 1U);
+    EXPECT_EQ(afterFirst.value().timeline.tracks().front().clips().front()
+                  .timelineRange()
+                  .start(),
+              TimestampNs{});
 
     probe.set(segment().relativePath,
               AppError{ErrorCode::IoFailure, "must not probe imported media"});
@@ -307,7 +332,7 @@ TEST_F(RecordingTimelineReconcilerTest,
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
-    EXPECT_EQ(probe.calls, 2U);
+    EXPECT_EQ(probe.calls, 1U);
     auto timelineStore = openTimelineStore();
     ASSERT_TRUE(timelineStore.hasValue());
     const auto timeline = timelineStore.value().loadPrimaryTimeline();

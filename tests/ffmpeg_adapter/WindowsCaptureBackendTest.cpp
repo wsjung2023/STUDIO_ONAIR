@@ -2,6 +2,7 @@
 
 #include "capture/AudioCaptureMailbox.h"
 #include "capture/LatestVideoFrameMailbox.h"
+#include "ffmpeg_adapter/BgraFrameMappers.h"
 
 #include <gtest/gtest.h>
 
@@ -83,6 +84,8 @@ TEST(WindowsCaptureBackendTest, CapturesRealMonotonicBgraDisplayFrames) {
     ASSERT_TRUE(second.has_value());
     EXPECT_EQ(first->pixelFormat, media::PixelFormat::Bgra8);
     EXPECT_TRUE(first->platformHandle);
+    ffmpeg_adapter::CpuBgraFrameMapper screenMapper;
+    EXPECT_TRUE(screenMapper.map(*first).hasValue());
     EXPECT_GT(source.value()->stats().receivedFrames, 1U);
     std::promise<core::Result<void>> stopped;
     auto stoppedFuture = stopped.get_future();
@@ -101,8 +104,8 @@ TEST(WindowsCaptureBackendTest, CapturesPhysicalCameraFrames) {
     auto sink = std::make_shared<capture::LatestVideoFrameMailbox>();
     auto source = backend.devices->createCamera(cameras.value().front().id(), sink);
     ASSERT_TRUE(source.hasValue()) << source.error().message();
-    ASSERT_TRUE(source.value()->start({.targetWidth = 1280,
-                                      .targetHeight = 720,
+    ASSERT_TRUE(source.value()->start({.targetWidth = 1920,
+                                      .targetHeight = 1080,
                                       .frameRateNumerator = 30,
                                       .frameRateDenominator = 1})
                     .hasValue());
@@ -117,6 +120,8 @@ TEST(WindowsCaptureBackendTest, CapturesPhysicalCameraFrames) {
     ASSERT_TRUE(frame.has_value());
     EXPECT_EQ(frame->pixelFormat, media::PixelFormat::Bgra8);
     EXPECT_TRUE(frame->platformHandle);
+    ffmpeg_adapter::CpuBgraFrameMapper cameraMapper;
+    EXPECT_TRUE(cameraMapper.map(*frame).hasValue());
     std::promise<core::Result<void>> stopped;
     auto stoppedFuture = stopped.get_future();
     source.value()->stopAsync(

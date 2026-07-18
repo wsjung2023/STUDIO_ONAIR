@@ -90,7 +90,9 @@ domain::VisualTransform transform(std::int32_t zOrder) {
 domain::Timeline timelineWithClip(const domain::MediaAsset& asset,
                                   std::int64_t sourceStart,
                                   std::int64_t timelineStart,
-                                  std::int64_t duration) {
+                                  std::int64_t duration,
+                                  std::optional<std::int64_t> timelineDuration =
+                                      std::nullopt) {
     auto timeline = domain::Timeline::create(
                         domain::TimelineId::create("main").value(), "Main",
                         core::FrameRate::create(30, 1).value())
@@ -105,7 +107,9 @@ domain::Timeline timelineWithClip(const domain::MediaAsset& asset,
         domain::ClipId::create("clip-1").value(), asset,
         domain::TimeRange::create(at(sourceStart), core::DurationNs{duration})
             .value(),
-        domain::TimeRange::create(at(timelineStart), core::DurationNs{duration})
+        domain::TimeRange::create(
+            at(timelineStart),
+            core::DurationNs{timelineDuration.value_or(duration)})
             .value(),
         true, std::nullopt, std::nullopt);
     EXPECT_TRUE(clip.hasValue());
@@ -140,6 +144,47 @@ TEST(MltGraphPlanTest, ResolvesUnicodeMediaAndPreservesGapAndTrimFrames) {
     EXPECT_EQ(clip.mediaPath, fs::weakly_canonical(package.root() / relative));
     EXPECT_EQ(plan.value().durationFrames, 60);
     EXPECT_EQ(plan.value().revision.value(), 4);
+}
+
+TEST(MltGraphPlanTest,
+     TrimsSubframePhaseMismatchToSharedCompleteFrameBoundary) {
+    TemporaryPackage package;
+    package.addFile("media/physical.mkv");
+    const auto asset = videoAsset("physical", "media/physical.mkv",
+                                  domain::AssetAvailability::Available);
+    edit_engine::TimelineSnapshot snapshot{
+        timelineWithClip(asset, 0, 20'000'000, 50'000'000),
+        domain::TimelineRevision::create(1).value(), {asset}, package.root()};
+
+    auto plan = mlt_adapter::compileMltGraphPlan(snapshot);
+
+    ASSERT_TRUE(plan.hasValue()) << plan.error().message();
+    ASSERT_EQ(plan.value().tracks.front().clips.size(), 1U);
+    const auto& clip = plan.value().tracks.front().clips.front();
+    EXPECT_EQ(clip.sourceIn, 0);
+    EXPECT_EQ(clip.sourceOut, 0);
+    EXPECT_EQ(clip.timelineIn, 0);
+    EXPECT_EQ(clip.timelineOut, 0);
+    ASSERT_EQ(plan.value().diagnostics.size(), 1U);
+    EXPECT_NE(plan.value().diagnostics.front().find("complete matching frame"),
+              std::string::npos);
+}
+
+TEST(MltGraphPlanTest, KeepsPositiveSubFrameTimelineAsOneOutputFrame) {
+    TemporaryPackage package;
+    package.addFile("media/physical.mkv");
+    const auto asset = videoAsset("physical", "media/physical.mkv",
+                                  domain::AssetAvailability::Available);
+    edit_engine::TimelineSnapshot snapshot{
+        timelineWithClip(asset, 0, 0, 1),
+        domain::TimelineRevision::create(1).value(), {asset}, package.root()};
+
+    auto plan = mlt_adapter::compileMltGraphPlan(snapshot);
+
+    ASSERT_TRUE(plan.hasValue()) << plan.error().message();
+    ASSERT_EQ(plan.value().tracks.front().clips.size(), 1U);
+    EXPECT_EQ(plan.value().tracks.front().clips.front().timelineIn, 0);
+    EXPECT_EQ(plan.value().tracks.front().clips.front().timelineOut, 0);
 }
 
 TEST(MltGraphPlanTest, KeepsOfflineClipExplicitWithoutResolvingAFile) {
