@@ -141,6 +141,7 @@ TEST_F(RenderJobFixture, FailureBecomesTerminalWithoutFalseCompletion) {
     ASSERT_TRUE(job.hasValue());
     EXPECT_EQ(waitForTerminal(*job.value()), RenderJobState::Failed);
     EXPECT_LT(job.value()->progress().value().fraction(), 1.0);
+    EXPECT_EQ(job.value()->diagnostic(), "injected encode failure");
 }
 
 TEST_F(RenderJobFixture, CancellationIsIdempotentlyJoinedOnDestruction) {

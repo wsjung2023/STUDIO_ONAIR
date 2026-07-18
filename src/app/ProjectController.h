@@ -23,6 +23,7 @@ class ProjectController final : public QObject, public IRecordingPersistence {
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(bool hasOpenProject READ hasOpenProject NOTIFY projectChanged)
     Q_PROPERTY(QString projectName READ projectName NOTIFY projectChanged)
+    Q_PROPERTY(QString projectId READ projectId NOTIFY projectChanged)
     Q_PROPERTY(QUrl projectUrl READ projectUrl NOTIFY projectChanged)
     Q_PROPERTY(QVariantList recentProjects READ recentProjects NOTIFY recentProjectsChanged)
     Q_PROPERTY(QVariantList recoveries READ recoveries NOTIFY recoveriesChanged)
@@ -40,6 +41,7 @@ public:
     [[nodiscard]] bool busy() const noexcept { return busy_; }
     [[nodiscard]] bool hasOpenProject() const noexcept { return !project_.isEmpty(); }
     [[nodiscard]] QString projectName() const;
+    [[nodiscard]] QString projectId() const;
     [[nodiscard]] QUrl projectUrl() const;
     [[nodiscard]] QVariantList recentProjects() const { return recentProjects_; }
     [[nodiscard]] QVariantList recoveries() const { return recoveries_; }

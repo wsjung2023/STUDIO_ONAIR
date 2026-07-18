@@ -5,6 +5,7 @@
 #include "edit_engine/EditEngineTypes.h"
 
 #include <memory>
+#include <string>
 
 namespace creator::edit_engine {
 
@@ -12,6 +13,7 @@ class IRenderJob {
 public:
     [[nodiscard]] virtual core::Result<RenderProgress> progress() const = 0;
     [[nodiscard]] virtual core::Result<void> cancel() = 0;
+    [[nodiscard]] virtual std::string diagnostic() const { return {}; }
     virtual ~IRenderJob() = default;
 };
 

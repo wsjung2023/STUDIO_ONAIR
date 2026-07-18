@@ -73,6 +73,7 @@ TEST_F(ProjectControllerTest, CreateRunsStoreOffUiThreadAndPublishesProject) {
     ASSERT_TRUE(opened.wait(3000));
     EXPECT_NE(fake_->lastThreadId(), QThread::currentThreadId());
     EXPECT_TRUE(controller_->hasOpenProject());
+    EXPECT_FALSE(controller_->projectId().isEmpty());
     EXPECT_EQ(controller_->projectName(), QStringLiteral("강의"));
     ASSERT_TRUE(controller_->recordingPackagePath().has_value());
     EXPECT_EQ(*controller_->recordingPackagePath(), packagePath_);

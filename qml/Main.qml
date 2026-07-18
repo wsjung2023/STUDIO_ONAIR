@@ -12,8 +12,8 @@ ApplicationWindow {
            ? qsTr("Creator Studio — %1").arg(projectController.projectName)
            : qsTr("Creator Studio")
 
-    readonly property var navigationPages: ["Home", "Studio", "Editor"]
-    readonly property var stackPages: ["Home", "Studio", "Editor", "Recovery"]
+    readonly property var navigationPages: ["Home", "Studio", "Editor", "Export"]
+    readonly property var stackPages: ["Home", "Studio", "Editor", "Export", "Recovery"]
     property string currentPage: "Home"
 
     Action {
@@ -73,6 +73,7 @@ ApplicationWindow {
                              && !studioController.busy
                              && (modelData !== "Studio" || projectController.hasOpenProject)
                              && (modelData !== "Editor" || projectController.hasOpenProject)
+                             && (modelData !== "Export" || projectController.hasOpenProject)
                     onClicked: window.currentPage = modelData
                 }
             }
@@ -109,6 +110,7 @@ ApplicationWindow {
         HomePage {}
         StudioPage {}
         EditorPage { controller: editorController }
+        ExportPage { controller: exportController }
         RecoveryPage {}
     }
 }

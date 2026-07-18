@@ -34,6 +34,9 @@ QVariantList recoveryMaps(const std::vector<project_store::RecoveryCandidate>& c
 QVariantMap projectMap(const project_store::ProjectPackage& package) {
     return QVariantMap{{QStringLiteral("name"),
                         QString::fromStdString(package.manifest.name)},
+                       {QStringLiteral("projectId"),
+                        QString::fromStdString(
+                            package.manifest.projectId.value())},
                        {QStringLiteral("url"),
                         QUrl::fromLocalFile(qStringFromPath(package.path))}};
 }

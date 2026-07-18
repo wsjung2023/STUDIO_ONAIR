@@ -88,6 +88,14 @@ if(CS_ENABLE_FFMPEG)
     target_compile_definitions(cs_app PRIVATE CS_APP_ENABLE_FFMPEG=1)
 endif()
 
+if(CS_ENABLE_MLT)
+    target_sources(cs_app PRIVATE
+        ProjectExportEngine.h
+        ProjectExportEngine.cpp
+    )
+    target_link_libraries(cs_app PRIVATE cs_mlt_adapter)
+endif()
+
 if(APPLE)
     find_library(CS_APP_COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
     find_library(CS_APP_IOSURFACE_FRAMEWORK IOSurface REQUIRED)

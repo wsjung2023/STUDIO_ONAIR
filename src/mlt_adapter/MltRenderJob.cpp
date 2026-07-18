@@ -71,6 +71,11 @@ public:
         return core::ok();
     }
 
+    std::string diagnostic() const {
+        std::lock_guard lock(mutex_);
+        return diagnostic_;
+    }
+
 private:
     bool publish(edit_engine::RenderJobState state, double fraction,
                  core::TimestampNs renderedThrough) {
@@ -118,6 +123,10 @@ private:
             return;
         }
         if (!result.hasValue()) {
+            {
+                std::lock_guard lock(mutex_);
+                diagnostic_ = result.error().message();
+            }
             finish(edit_engine::RenderJobState::Failed);
             return;
         }
@@ -140,6 +149,7 @@ private:
     Operation operation_;
     mutable std::mutex mutex_;
     edit_engine::RenderProgress progress_;
+    std::string diagnostic_;
     std::jthread worker_;
 };
 
@@ -171,5 +181,7 @@ core::Result<edit_engine::RenderProgress> MltRenderJob::progress() const {
 }
 
 core::Result<void> MltRenderJob::cancel() { return impl_->cancel(); }
+
+std::string MltRenderJob::diagnostic() const { return impl_->diagnostic(); }
 
 }  // namespace creator::mlt_adapter

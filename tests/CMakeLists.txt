@@ -300,12 +300,16 @@ endif()
 
 if(CS_ENABLE_MLT)
     add_executable(cs_mlt_tests
+        app/ProjectExportEngineIntegrationTest.cpp
         mlt_adapter/ExportEncoderProbeTest.cpp
         mlt_adapter/MltEditEngineTest.cpp
         mlt_adapter/MltRenderJobTest.cpp
         mlt_adapter/MltRuntimeManifestTest.cpp
     )
     target_link_libraries(cs_mlt_tests PRIVATE
+        cs_app
+        cs_project_store
+        cs_ffmpeg_adapter
         cs_mlt_adapter
         GTest::gtest_main
     )

@@ -1,6 +1,7 @@
 #include "app/ProjectController.h"
 #include "app/ProjectEditorBinding.h"
 #include "app/EditorController.h"
+#include "app/ExportController.h"
 #include "app/EditorPreviewItem.h"
 #include "app/DeviceCaptureController.h"
 #include "app/LiveRecordingController.h"
@@ -28,6 +29,7 @@
 #endif
 #include "edit_engine/UnavailableEditEngine.h"
 #if defined(CS_APP_ENABLE_MLT)
+#include "app/ProjectExportEngine.h"
 #include "mlt_adapter/MltEditEngine.h"
 #endif
 
@@ -151,17 +153,47 @@ int main(int argc, char* argv[]) {
         std::make_unique<creator::mlt_adapter::MltEditEngine>(
             creator::mlt_adapter::MltEditEngineConfig{
                 .runtimeRoot = mltRuntimeRoot});
+    std::unique_ptr<creator::edit_engine::IEditEngine> exportEngine =
+        std::make_unique<creator::app::ProjectExportEngine>(mltRuntimeRoot);
 #else
     std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
         std::make_unique<creator::edit_engine::UnavailableEditEngine>();
+    std::unique_ptr<creator::edit_engine::IEditEngine> exportEngine =
+        std::make_unique<creator::edit_engine::UnavailableEditEngine>();
 #endif
     creator::app::EditorController editorController{std::move(editEngine), &app};
+    creator::app::ExportController exportController{std::move(exportEngine), &app};
     creator::app::StudioRecordingBinding studioRecordingBinding{
         studioController, studioWorkflowController,
         [&projectController] { return projectController.projectUrl(); }, &app};
     static_cast<void>(
         creator::app::bindProjectEditor(projectController, editorController,
                                         studioRecordingBinding));
+    const auto updateExportSource = [&projectController, &editorController,
+                                     &exportController] {
+        auto snapshot = editorController.exportSnapshot();
+        if (!snapshot.has_value()) {
+            exportController.clearSource();
+            return;
+        }
+        auto projectId = creator::domain::ProjectId::create(
+            projectController.projectId().toStdString());
+        if (!projectId.hasValue()) {
+            creator::project_store::ProjectPackageStore packages;
+            auto opened = packages.open(snapshot->mediaRoot);
+            if (!opened.hasValue()) {
+                exportController.clearSource();
+                return;
+            }
+            projectId = opened.value().package.manifest.projectId;
+        }
+        exportController.setSource(std::move(projectId).value(),
+                                   std::move(*snapshot));
+    };
+    QObject::connect(&editorController, &creator::app::EditorController::timelineChanged,
+                     &app, updateExportSource);
+    QObject::connect(&projectController, &creator::app::ProjectController::projectChanged,
+                     &app, updateExportSource);
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
@@ -180,6 +212,8 @@ int main(int argc, char* argv[]) {
                                              &deviceCaptureController);
     engine.rootContext()->setContextProperty(QStringLiteral("editorController"),
                                              &editorController);
+    engine.rootContext()->setContextProperty(QStringLiteral("exportController"),
+                                             &exportController);
 
     QObject::connect(
         &engine,

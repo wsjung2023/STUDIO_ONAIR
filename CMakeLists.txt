@@ -192,6 +192,7 @@ qt_add_qml_module(creator_studio
         qml/RecoveryPage.qml
         qml/StudioPage.qml
         qml/EditorPage.qml
+        qml/ExportPage.qml
         qml/TestPattern.qml
 )
 

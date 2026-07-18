@@ -5,6 +5,7 @@
 
 #include <QSignalSpy>
 #include <QThread>
+#include <QUrl>
 
 #include <gtest/gtest.h>
 
@@ -21,6 +22,8 @@ struct EngineState final {
     std::atomic<bool> cancelled{};
     std::atomic<bool> jobDestroyed{};
     bool waitsForCancellation{};
+    std::atomic<std::int64_t> renderedRevision{};
+    std::atomic<std::uint32_t> renderedWidth{};
 };
 
 class ControllerRenderJob final : public edit_engine::IRenderJob {
@@ -73,8 +76,10 @@ public:
         return core::AppError{core::ErrorCode::InvalidState, "unused"};
     }
     core::Result<std::unique_ptr<edit_engine::IRenderJob>> render(
-        const edit_engine::RenderRequest&) override {
+        const edit_engine::RenderRequest& request) override {
         state_->renderThread = QThread::currentThreadId();
+        state_->renderedRevision = request.snapshot().revision.value();
+        state_->renderedWidth = request.preset().width();
         std::unique_ptr<edit_engine::IRenderJob> job =
             std::make_unique<ControllerRenderJob>(state_);
         return job;
@@ -177,6 +182,56 @@ TEST_F(ExportControllerTest, RejectsStartWithoutFrozenRequest) {
     controller.startExport();
     EXPECT_FALSE(controller.busy());
     EXPECT_FALSE(controller.statusMessage().isEmpty());
+}
+
+TEST_F(ExportControllerTest, FreezesCurrentSourceWithSelectedProductPreset) {
+    app::ExportController controller{
+        std::make_unique<ControllerEditEngine>(state_)};
+    auto source = request(root_);
+    controller.setSource(source.projectId(), source.snapshot());
+    QSignalSpy finished{&controller, &app::ExportController::exportFinished};
+
+    controller.exportTo(QUrl::fromLocalFile(
+                            QString::fromStdWString((root_ / "four-k.mp4").wstring())),
+                        QStringLiteral("h264-2160p30"), false);
+
+    ASSERT_TRUE(finished.wait(3000));
+    EXPECT_EQ(state_->renderedRevision.load(), 1);
+    EXPECT_EQ(state_->renderedWidth.load(), 3840U);
+    EXPECT_TRUE(controller.ready());
+}
+
+TEST_F(ExportControllerTest, RejectsUnsupportedPresetWithoutStartingWorker) {
+    app::ExportController controller{
+        std::make_unique<ControllerEditEngine>(state_)};
+    auto source = request(root_);
+    controller.setSource(source.projectId(), source.snapshot());
+
+    controller.exportTo(QUrl::fromLocalFile(
+                            QString::fromStdWString((root_ / "bad.mp4").wstring())),
+                        QStringLiteral("unknown"), false);
+
+    EXPECT_FALSE(controller.busy());
+    EXPECT_EQ(state_->renderThread.load(), nullptr);
+    EXPECT_FALSE(controller.statusMessage().isEmpty());
+}
+
+TEST_F(ExportControllerTest, RepeatedPageCloseCancelsAndJoinsWorker) {
+    for (int iteration = 0; iteration < 100; ++iteration) {
+        auto state = std::make_shared<EngineState>();
+        state->waitsForCancellation = true;
+        {
+            app::ExportController controller{
+                std::make_unique<ControllerEditEngine>(state)};
+            controller.setRequest(request(root_));
+            controller.startExport();
+            while (state->renderThread.load() == nullptr) {
+                QThread::yieldCurrentThread();
+            }
+        }
+        ASSERT_TRUE(state->cancelled) << "iteration " << iteration;
+        ASSERT_TRUE(state->jobDestroyed) << "iteration " << iteration;
+    }
 }
 
 }  // namespace

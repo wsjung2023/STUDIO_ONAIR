@@ -35,8 +35,8 @@ void ExportWorker::start(edit_engine::RenderRequest request) {
     for (;;) {
         if (cancellationRequested_->load(std::memory_order_acquire) &&
             !cancellationSent) {
-            auto cancelled = job->cancel();
-            cancellationSent = cancelled.hasValue();
+            static_cast<void>(job->cancel());
+            cancellationSent = true;
         }
         auto progress = job->progress();
         if (!progress.hasValue()) {
@@ -52,7 +52,8 @@ void ExportWorker::start(edit_engine::RenderRequest request) {
             value.totalDuration().count());
         if (terminal(value.state())) {
             emit finished(value.state() == edit_engine::RenderJobState::Completed,
-                          static_cast<int>(value.state()), {});
+                          static_cast<int>(value.state()),
+                          QString::fromStdString(job->diagnostic()));
             return;
         }
         QThread::msleep(10);

@@ -1,6 +1,8 @@
 #include "app/ExportController.h"
 
 #include "app/ExportWorker.h"
+#include "app/RecentProjectRegistry.h"
+#include "core/AppError.h"
 
 #include <QMetaObject>
 
@@ -48,6 +50,19 @@ void ExportController::setRequest(edit_engine::RenderRequest request) {
     if (!busy_) request_ = std::move(request);
 }
 
+void ExportController::setSource(domain::ProjectId projectId,
+                                 edit_engine::TimelineSnapshot snapshot) {
+    source_ = Source{std::move(projectId), std::move(snapshot)};
+    emit sourceChanged();
+}
+
+void ExportController::clearSource() {
+    if (!source_.has_value()) return;
+    source_.reset();
+    request_.reset();
+    emit sourceChanged();
+}
+
 bool ExportController::canCancel() const noexcept {
     return busy_ &&
            state_ != static_cast<int>(edit_engine::RenderJobState::Publishing);
@@ -69,6 +84,44 @@ void ExportController::startExport() {
     QMetaObject::invokeMethod(worker_, [worker = worker_, request]() mutable {
         worker->start(std::move(request));
     }, Qt::QueuedConnection);
+}
+
+void ExportController::exportTo(const QUrl& destination,
+                                const QString& presetId,
+                                bool replaceExisting) {
+    if (busy_) return;
+    if (!source_.has_value()) {
+        setStatus(tr("No editable timeline is ready"));
+        return;
+    }
+    if (!destination.isLocalFile()) {
+        setStatus(tr("Export destination must be a local MP4 file"));
+        return;
+    }
+    core::Result<edit_engine::RenderPreset> preset =
+        presetId == QStringLiteral("h264-1080p30")
+            ? edit_engine::RenderPreset::h2641080p30()
+            : presetId == QStringLiteral("h264-2160p30")
+                  ? edit_engine::RenderPreset::h2642160p30()
+                  : core::AppError{core::ErrorCode::InvalidArgument,
+                                   "unsupported export preset"};
+    if (!preset.hasValue()) {
+        setStatus(QString::fromStdString(preset.error().message()));
+        return;
+    }
+    auto request = edit_engine::RenderRequest::create(
+        source_->projectId, source_->snapshot,
+        pathFromQString(destination.toLocalFile()),
+        std::move(preset).value(),
+        replaceExisting
+            ? edit_engine::RenderOverwritePolicy::ReplaceExisting
+            : edit_engine::RenderOverwritePolicy::FailIfExists);
+    if (!request.hasValue()) {
+        setStatus(QString::fromStdString(request.error().message()));
+        return;
+    }
+    setRequest(std::move(request).value());
+    startExport();
 }
 
 void ExportController::cancelExport() {

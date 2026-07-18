@@ -24,6 +24,7 @@ public:
     [[nodiscard]] core::Result<edit_engine::RenderProgress> progress()
         const override;
     [[nodiscard]] core::Result<void> cancel() override;
+    [[nodiscard]] std::string diagnostic() const override;
 
     MltRenderJob(const MltRenderJob&) = delete;
     MltRenderJob& operator=(const MltRenderJob&) = delete;

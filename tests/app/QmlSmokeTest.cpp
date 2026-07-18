@@ -99,6 +99,45 @@ private:
     bool hasOpenProject_{false};
 };
 
+class FakeExportController final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(bool busy READ busy NOTIFY changed)
+    Q_PROPERTY(bool canCancel READ canCancel NOTIFY changed)
+    Q_PROPERTY(double progress READ progress NOTIFY changed)
+    Q_PROPERTY(int state READ state NOTIFY changed)
+    Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY changed)
+    Q_PROPERTY(bool ready READ ready NOTIFY changed)
+
+public:
+    using QObject::QObject;
+    [[nodiscard]] bool busy() const noexcept { return busy_; }
+    [[nodiscard]] bool canCancel() const noexcept { return busy_; }
+    [[nodiscard]] double progress() const noexcept { return busy_ ? 0.4 : 0.0; }
+    [[nodiscard]] int state() const noexcept { return busy_ ? 1 : 0; }
+    [[nodiscard]] QString statusMessage() const {
+        return busy_ ? QStringLiteral("Exporting") : QString{};
+    }
+    [[nodiscard]] bool ready() const noexcept { return true; }
+    Q_INVOKABLE void exportTo(const QUrl&, const QString&, bool) {
+        ++exportCalls_;
+    }
+    Q_INVOKABLE void cancelExport() { ++cancelCalls_; }
+    void setBusy(bool value) {
+        busy_ = value;
+        emit changed();
+    }
+    [[nodiscard]] int exportCalls() const noexcept { return exportCalls_; }
+    [[nodiscard]] int cancelCalls() const noexcept { return cancelCalls_; }
+
+signals:
+    void changed();
+
+private:
+    bool busy_{};
+    int exportCalls_{};
+    int cancelCalls_{};
+};
+
 class FakeStudioController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
@@ -990,6 +1029,7 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
     FakeEditorController editorController;
     FakeStudioWorkflowController studioWorkflowController;
     FakeShortcutSettingsController shortcutSettingsController;
+    FakeExportController exportController;
     engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
                                              &projectController);
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
@@ -1004,6 +1044,8 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
         QStringLiteral("studioWorkflowController"), &studioWorkflowController);
     engine.rootContext()->setContextProperty(
         QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
+    engine.rootContext()->setContextProperty(QStringLiteral("exportController"),
+                                             &exportController);
     QQmlComponent component{
         &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/Main.qml"))};
 
@@ -1022,6 +1064,7 @@ TEST(QmlSmokeTest, MainRecordShortcutSharesVisibleActionAndStateGuard) {
     FakeEditorController editorController;
     FakeStudioWorkflowController studioWorkflowController;
     FakeShortcutSettingsController shortcutSettingsController;
+    FakeExportController exportController;
     projectController.setHasOpenProject(true);
     engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
                                              &projectController);
@@ -1037,6 +1080,8 @@ TEST(QmlSmokeTest, MainRecordShortcutSharesVisibleActionAndStateGuard) {
         QStringLiteral("studioWorkflowController"), &studioWorkflowController);
     engine.rootContext()->setContextProperty(
         QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
+    engine.rootContext()->setContextProperty(QStringLiteral("exportController"),
+                                             &exportController);
     QQmlComponent component{
         &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/Main.qml"))};
     std::unique_ptr<QObject> object{component.create()};
@@ -1064,6 +1109,46 @@ TEST(QmlSmokeTest, MainRecordShortcutSharesVisibleActionAndStateGuard) {
     QCoreApplication::processEvents();
     EXPECT_FALSE(action->property("enabled").toBool());
     EXPECT_FALSE(shortcut->property("enabled").toBool());
+}
+
+TEST(QmlSmokeTest, ExportPageExposesProductPresetsProgressAndCancellation) {
+    QQmlEngine engine;
+    FakeExportController controller;
+    QQmlComponent component{
+        &engine,
+        QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/ExportPage.qml"))};
+    QVariantMap initialProperties{
+        {QStringLiteral("controller"),
+         QVariant::fromValue(static_cast<QObject*>(&controller))},
+        {QStringLiteral("width"), 900},
+        {QStringLiteral("height"), 700}};
+    std::unique_ptr<QObject> object{
+        component.createWithInitialProperties(initialProperties)};
+
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    auto* preset = object->findChild<QObject*>(QStringLiteral("exportPreset"));
+    auto* start =
+        object->findChild<QObject*>(QStringLiteral("exportStartButton"));
+    auto* cancel =
+        object->findChild<QObject*>(QStringLiteral("exportCancelButton"));
+    auto* progress =
+        object->findChild<QObject*>(QStringLiteral("exportProgress"));
+    ASSERT_NE(preset, nullptr);
+    ASSERT_NE(start, nullptr);
+    ASSERT_NE(cancel, nullptr);
+    ASSERT_NE(progress, nullptr);
+    EXPECT_EQ(preset->property("count").toInt(), 2);
+    EXPECT_TRUE(start->property("enabled").toBool());
+    EXPECT_FALSE(cancel->property("visible").toBool());
+
+    controller.setBusy(true);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(start->property("enabled").toBool());
+    EXPECT_TRUE(cancel->property("visible").toBool());
+    EXPECT_TRUE(cancel->property("enabled").toBool());
+    EXPECT_DOUBLE_EQ(progress->property("value").toDouble(), 0.4);
+    ASSERT_TRUE(QMetaObject::invokeMethod(cancel, "clicked"));
+    EXPECT_EQ(controller.cancelCalls(), 1);
 }
 
 TEST(QmlSmokeTest, EditorPageRendersTypedModelsAndPreviewState) {

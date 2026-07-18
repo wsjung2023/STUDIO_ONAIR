@@ -108,6 +108,10 @@ QString ProjectController::projectName() const {
     return project_.value(QStringLiteral("name")).toString();
 }
 
+QString ProjectController::projectId() const {
+    return project_.value(QStringLiteral("projectId")).toString();
+}
+
 QUrl ProjectController::projectUrl() const {
     return project_.value(QStringLiteral("url")).toUrl();
 }

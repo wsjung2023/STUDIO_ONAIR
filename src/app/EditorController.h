@@ -120,6 +120,8 @@ public:
     [[nodiscard]] bool canUndo() const noexcept { return canUndo_; }
     [[nodiscard]] bool canRedo() const noexcept { return canRedo_; }
     [[nodiscard]] bool clean() const noexcept { return clean_; }
+    [[nodiscard]] std::optional<edit_engine::TimelineSnapshot>
+    exportSnapshot() const { return snapshot_; }
 
     void openSession(std::vector<domain::MediaAsset> assets,
                      edit_engine::TimelineSnapshot snapshot);
