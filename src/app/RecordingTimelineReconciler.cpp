@@ -138,6 +138,11 @@ Result<std::vector<RecordingConcatSource>> buildConcatSources(
             return AppError{ErrorCode::IoFailure,
                             "could not write concat manifest: " + manifestPath.string()};
         }
+        // Windows media identity probing opens the file with exclusive
+        // metadata sharing. Release the writer before probing the derived
+        // manifest, otherwise reconciliation races its own ofstream and
+        // reports "media file could not be locked for inspection".
+        output.close();
         auto probe = mediaProbe.probe(packageRoot, source.relativePath);
         if (!probe.hasValue()) return probe.error();
         source.media = std::move(probe).value();

@@ -17,13 +17,21 @@ cs_add_qtfree_library(cs_avatar
         AvatarMotionSerializer.cpp
         AvatarMotionNdjsonSink.h
         AvatarMotionNdjsonSink.cpp
+        AvatarMotionPipeline.h
+        AvatarMotionPipeline.cpp
         PrimaryFaceSelector.h
         PrimaryFaceSelector.cpp
         openseeface/OpenSeeFaceParser.h
         openseeface/OpenSeeFaceParser.cpp
+        openseeface/OpenSeeFaceUdpSource.h
+        openseeface/OpenSeeFaceUdpSource.cpp
     DEPENDS
         cs_core
         cs_media
         cs_domain
         nlohmann_json::nlohmann_json
 )
+
+if(WIN32)
+    target_link_libraries(cs_avatar PUBLIC ws2_32)
+endif()
