@@ -700,6 +700,11 @@ class MltEditEngine::Impl final {
             -> core::Result<int> {
             auto playlist = std::make_unique<Mlt::Playlist>(*graph->profile);
             playlist->set("hide", 1);
+            // Let MLT release each avformat producer after its sequential
+            // playlist entry is consumed. Long recordings can contain
+            // thousands of short segments; retaining every decoder handle
+            // until the graph is destroyed exhausts Windows handles.
+            playlist->set("autoclose", 1);
             int cursor = 0;
             for (const auto& clip : track.clips) {
                 const int timelineIn = static_cast<int>(clip.timelineIn);
@@ -819,6 +824,7 @@ class MltEditEngine::Impl final {
         for (const auto& branch : plan.visualBranches) {
             auto playlist = std::make_unique<Mlt::Playlist>(*graph->profile);
             playlist->set("hide", 2);
+            playlist->set("autoclose", 1);
             const int timelineIn = static_cast<int>(branch.timelineIn);
             const int length = static_cast<int>(
                 branch.timelineOut - branch.timelineIn + 1);
