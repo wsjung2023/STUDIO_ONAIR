@@ -5,6 +5,7 @@
 #include "capture/NumericCaptureTargetId.h"
 #include "capture/ScreenCaptureFrameAssembler.h"
 #include "core/AppError.h"
+#include "ffmpeg_adapter/BgraFrameMappers.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -36,6 +37,7 @@ extern "C" {
 #include <optional>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -55,6 +57,21 @@ std::string ffmpegError(int code) {
     char buffer[AV_ERROR_MAX_STRING_SIZE]{};
     if (av_strerror(code, buffer, sizeof(buffer)) < 0) return "unknown FFmpeg error";
     return buffer;
+}
+
+AVPixelFormat normalizedPixelFormat(AVPixelFormat format) noexcept {
+    switch (format) {
+        case AV_PIX_FMT_YUVJ420P: return AV_PIX_FMT_YUV420P;
+        case AV_PIX_FMT_YUVJ422P: return AV_PIX_FMT_YUV422P;
+        case AV_PIX_FMT_YUVJ444P: return AV_PIX_FMT_YUV444P;
+        case AV_PIX_FMT_YUVJ440P: return AV_PIX_FMT_YUV440P;
+        default: return format;
+    }
+}
+
+bool isFullRangeYuv(AVPixelFormat format) noexcept {
+    return format == AV_PIX_FMT_YUVJ420P || format == AV_PIX_FMT_YUVJ422P ||
+           format == AV_PIX_FMT_YUVJ444P || format == AV_PIX_FMT_YUVJ440P;
 }
 
 std::string utf8(std::wstring_view value) {
@@ -217,9 +234,6 @@ struct FrameDeleter final {
 struct PacketDeleter final {
     void operator()(AVPacket* value) const noexcept { av_packet_free(&value); }
 };
-struct ScaleDeleter final {
-    void operator()(SwsContext* value) const noexcept { sws_freeContext(value); }
-};
 struct ResampleDeleter final {
     void operator()(SwrContext* value) const noexcept { swr_free(&value); }
 };
@@ -236,7 +250,10 @@ public:
         : monitor_(std::move(monitor)), sink_(std::move(sink)),
           id_(domain::SourceId::create("windows/" + monitor_.id).value()) {}
 
-    ~ScreenSource() override { static_cast<void>(stop()); }
+    ~ScreenSource() override {
+        static_cast<void>(stop());
+        if (scale_) sws_freeContext(scale_);
+    }
 
     domain::SourceId id() const override { return id_; }
     std::string displayName() const override { return monitor_.name; }
@@ -393,20 +410,26 @@ private:
 
     void deliver(const AVFrame& frame, AVRational timeBase) {
         if (frame.width <= 0 || frame.height <= 0) return;
-        std::unique_ptr<SwsContext, ScaleDeleter> scale{sws_getContext(
-            frame.width, frame.height, static_cast<AVPixelFormat>(frame.format),
+        const auto sourceFormat = static_cast<AVPixelFormat>(frame.format);
+        scale_ = sws_getCachedContext(
+            scale_, frame.width, frame.height, normalizedPixelFormat(sourceFormat),
             frame.width, frame.height, AV_PIX_FMT_BGRA, SWS_BILINEAR, nullptr,
-            nullptr, nullptr)};
-        if (!scale) {
+            nullptr, nullptr);
+        if (!scale_) {
             fail(ioFailure("screen BGRA conversion is unavailable"));
             return;
         }
         const auto stride = static_cast<std::size_t>(frame.width) * 4U;
-        const auto bytes = stride * static_cast<std::size_t>(frame.height);
-        auto pixels = std::shared_ptr<std::uint8_t[]>{new std::uint8_t[bytes]};
-        std::uint8_t* destinations[]{pixels.get()};
+        auto buffer = CpuBgraFrameBuffer::create(
+            static_cast<std::uint32_t>(frame.width),
+            static_cast<std::uint32_t>(frame.height), stride);
+        if (!buffer.hasValue()) {
+            fail(buffer.error());
+            return;
+        }
+        std::uint8_t* destinations[]{buffer.value()->data()};
         int strides[]{static_cast<int>(stride)};
-        if (sws_scale(scale.get(), frame.data, frame.linesize, 0, frame.height,
+        if (sws_scale(scale_, frame.data, frame.linesize, 0, frame.height,
                       destinations, strides) != frame.height) {
             fail(ioFailure("screen BGRA conversion failed"));
             return;
@@ -423,7 +446,7 @@ private:
                              .count(),
                          1'000'000'000};
         }
-        auto handle = std::shared_ptr<void>{pixels, pixels.get()};
+        std::shared_ptr<void> handle = buffer.value();
         auto assembled = assembler_.assemble(capture::NativeScreenFrame{
             .status = capture::NativeScreenFrameStatus::Complete,
             .timestamp = timestamp,
@@ -466,6 +489,7 @@ private:
     std::atomic_bool stopRequested_{};
     std::jthread worker_;
     std::thread stopThread_;
+    SwsContext* scale_{};
     mutable std::mutex mutex_;
     capture::CaptureStats stats_;
     std::optional<core::TimestampNs> lastTimestamp_;
@@ -510,7 +534,10 @@ public:
           sink_(std::move(sink)),
           id_(domain::SourceId::create("windows/" + deviceId_.value()).value()) {}
 
-    ~CameraSource() override { static_cast<void>(stop()); }
+    ~CameraSource() override {
+        static_cast<void>(stop());
+        if (scale_) sws_freeContext(scale_);
+    }
 
     domain::SourceId id() const override { return id_; }
     std::string displayName() const override { return deviceName_; }
@@ -579,22 +606,39 @@ private:
         const capture::CaptureConfig& config) {
         const auto* input = av_find_input_format("dshow");
         if (!input) return ioFailure("audited FFmpeg dshow input is unavailable");
-        AVFormatContext* raw = avformat_alloc_context();
-        if (!raw) return ioFailure("camera demuxer allocation failed");
-        raw->interrupt_callback = {interrupt, this};
-        AVDictionary* options = nullptr;
-        const auto rate = std::to_string(config.frameRateNumerator) + "/" +
-                          std::to_string(config.frameRateDenominator);
-        const auto size = std::to_string(config.targetWidth) + "x" +
-                          std::to_string(config.targetHeight);
-        av_dict_set(&options, "framerate", rate.c_str(), 0);
-        av_dict_set(&options, "video_size", size.c_str(), 0);
         const auto url = dshowUrl("video=", deviceName_);
-        const int opened = avformat_open_input(&raw, url.c_str(), input, &options);
-        av_dict_free(&options);
-        if (opened < 0) {
-            if (raw) avformat_free_context(raw);
-            return ioFailure("camera input open failed: " + ffmpegError(opened));
+        const auto tryOpen = [&](std::optional<std::pair<std::uint32_t,
+                                                         std::uint32_t>> size)
+            -> std::pair<AVFormatContext*, int> {
+            AVFormatContext* raw = avformat_alloc_context();
+            if (!raw) return {nullptr, AVERROR(ENOMEM)};
+            raw->interrupt_callback = {interrupt, this};
+            AVDictionary* options = nullptr;
+            if (size.has_value()) {
+                const auto rate = std::to_string(config.frameRateNumerator) + "/" +
+                                  std::to_string(config.frameRateDenominator);
+                const auto dimensions = std::to_string(size->first) + "x" +
+                                        std::to_string(size->second);
+                av_dict_set(&options, "framerate", rate.c_str(), 0);
+                av_dict_set(&options, "video_size", dimensions.c_str(), 0);
+            }
+            const int opened =
+                avformat_open_input(&raw, url.c_str(), input, &options);
+            av_dict_free(&options);
+            if (opened < 0 && raw) avformat_free_context(raw);
+            return {raw, opened};
+        };
+        auto [raw, opened] =
+            tryOpen(std::pair{config.targetWidth, config.targetHeight});
+        if (opened < 0 &&
+            (config.targetWidth != 1280U || config.targetHeight != 720U)) {
+            std::tie(raw, opened) = tryOpen(std::pair{1280U, 720U});
+        }
+        if (opened < 0) std::tie(raw, opened) = tryOpen(std::nullopt);
+        if (opened < 0 || !raw) {
+            return ioFailure("camera input open failed after supported-mode "
+                             "negotiation: " +
+                             ffmpegError(opened));
         }
         return std::unique_ptr<AVFormatContext, FormatDeleter>{raw};
     }
@@ -663,26 +707,40 @@ private:
 
     void deliver(const AVFrame& frame, AVRational timeBase) {
         if (frame.width <= 0 || frame.height <= 0) return;
-        std::unique_ptr<SwsContext, ScaleDeleter> scale{sws_getContext(
-            frame.width, frame.height, static_cast<AVPixelFormat>(frame.format),
+        const auto sourceFormat = static_cast<AVPixelFormat>(frame.format);
+        scale_ = sws_getCachedContext(
+            scale_, frame.width, frame.height, normalizedPixelFormat(sourceFormat),
             frame.width, frame.height, AV_PIX_FMT_BGRA, SWS_BILINEAR, nullptr,
-            nullptr, nullptr)};
-        if (!scale) {
+            nullptr, nullptr);
+        if (!scale_) {
             fail(ioFailure("camera BGRA conversion is unavailable"));
             return;
         }
+        if (isFullRangeYuv(sourceFormat)) {
+            const int* coefficients = sws_getCoefficients(SWS_CS_DEFAULT);
+            if (sws_setColorspaceDetails(scale_, coefficients, 1, coefficients, 1,
+                                         0, 1 << 16, 1 << 16) < 0) {
+                fail(ioFailure("camera color-range conversion failed"));
+                return;
+            }
+        }
         const auto stride = static_cast<std::size_t>(frame.width) * 4U;
-        const auto bytes = stride * static_cast<std::size_t>(frame.height);
-        auto pixels = std::shared_ptr<std::uint8_t[]>{new std::uint8_t[bytes]};
-        std::uint8_t* destinations[]{pixels.get()};
+        auto buffer = CpuBgraFrameBuffer::create(
+            static_cast<std::uint32_t>(frame.width),
+            static_cast<std::uint32_t>(frame.height), stride);
+        if (!buffer.hasValue()) {
+            fail(buffer.error());
+            return;
+        }
+        std::uint8_t* destinations[]{buffer.value()->data()};
         int strides[]{static_cast<int>(stride)};
-        if (sws_scale(scale.get(), frame.data, frame.linesize, 0, frame.height,
+        if (sws_scale(scale_, frame.data, frame.linesize, 0, frame.height,
                       destinations, strides) != frame.height) {
             fail(ioFailure("camera BGRA conversion failed"));
             return;
         }
         const auto timestamp = nativeTimestamp(frame.best_effort_timestamp, timeBase);
-        auto handle = std::shared_ptr<void>{pixels, pixels.get()};
+        std::shared_ptr<void> handle = buffer.value();
         auto assembled = assembler_.assemble(capture::NativeCameraFrame{
             .timestamp = timestamp,
             .width = static_cast<std::uint32_t>(frame.width),
@@ -734,6 +792,7 @@ private:
     std::atomic_bool stopRequested_{};
     std::jthread worker_;
     std::thread stopThread_;
+    SwsContext* scale_{};
     mutable std::mutex mutex_;
     capture::CaptureStats stats_;
     std::optional<core::TimestampNs> lastTimestamp_;
@@ -1074,6 +1133,25 @@ public:
     }
 
 private:
+    static bool isDeviceDisconnected(HRESULT result) noexcept {
+        return result == AUDCLNT_E_DEVICE_INVALIDATED ||
+               result == AUDCLNT_E_RESOURCES_INVALIDATED;
+    }
+
+    bool handlePacketQueryFailure(HRESULT result) noexcept {
+        if (isDeviceDisconnected(result)) {
+            // The default render endpoint can disappear while a recording is
+            // running (for example when an HDMI/Bluetooth device changes).
+            // System audio is an optional source; let the other sources keep
+            // recording and finish this worker without escalating a session-
+            // wide capture error.
+            stopRequested_.store(true, std::memory_order_release);
+            return true;
+        }
+        failHresult("WASAPI loopback packet query", result);
+        return false;
+    }
+
     void fail(core::AppError error) noexcept {
         std::shared_ptr<capture::IAudioBlockSink> sink;
         {
@@ -1222,8 +1300,7 @@ private:
             result = client.GetNextPacketSize(&packetFrames);
         }
         if (FAILED(result)) {
-            failHresult("WASAPI loopback packet query", result);
-            return false;
+            return handlePacketQueryFailure(result);
         }
         return true;
     }

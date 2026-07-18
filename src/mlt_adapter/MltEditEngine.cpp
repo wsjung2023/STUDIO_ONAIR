@@ -128,9 +128,7 @@ core::DurationNs renderDuration(
     core::TimestampNs timelineEnd{};
     for (const auto& track : snapshot.timeline.tracks()) {
         for (const auto& clip : track.clips()) {
-            if (clip.enabled()) {
-                timelineEnd = std::max(timelineEnd, clip.timelineRange().end());
-            }
+            timelineEnd = std::max(timelineEnd, clip.timelineRange().end());
         }
     }
     return timelineEnd.time_since_epoch();
@@ -943,6 +941,21 @@ class MltEditEngine::Impl final {
         return graph;
     }
 
+    core::Result<void> loadSnapshot(
+        const edit_engine::TimelineSnapshot& snapshot,
+        std::optional<core::FrameRate> outputFrameRate = std::nullopt) {
+        auto initialized = initialize();
+        if (!initialized.hasValue()) return initialized;
+        auto plan = compileMltGraphPlan(snapshot, outputFrameRate);
+        if (!plan.hasValue()) return plan.error();
+        auto graph = build(plan.value());
+        if (!graph.hasValue()) return graph.error();
+        graph_ = std::move(graph).value();
+        position_ = core::TimestampNs{};
+        playing_ = false;
+        return core::ok();
+    }
+
     MltEditEngineConfig config_;
     std::unique_ptr<Graph> graph_;
     core::TimestampNs position_{};
@@ -988,16 +1001,7 @@ core::Result<void> MltEditEngine::initializeRuntime(
 
 core::Result<void> MltEditEngine::load(
     const edit_engine::TimelineSnapshot& snapshot) {
-    auto initialized = impl_->initialize();
-    if (!initialized.hasValue()) return initialized;
-    auto plan = compileMltGraphPlan(snapshot);
-    if (!plan.hasValue()) return plan.error();
-    auto graph = impl_->build(plan.value());
-    if (!graph.hasValue()) return graph.error();
-    impl_->graph_ = std::move(graph).value();
-    impl_->position_ = core::TimestampNs{};
-    impl_->playing_ = false;
-    return core::ok();
+    return impl_->loadSnapshot(snapshot);
 }
 
 core::Result<void> MltEditEngine::update(
@@ -1256,7 +1260,8 @@ core::Result<void> MltEditEngine::renderFrozen(
         return stateError("export cancelled during encoder preflight");
     }
 
-    auto loaded = load(request.snapshot());
+    auto loaded = impl_->loadSnapshot(request.snapshot(),
+                                      request.preset().frameRate());
     if (!loaded.hasValue()) return loaded;
     if (!impl_->graph_ || !impl_->graph_->profile || !impl_->graph_->tractor) {
         return stateError("independent export graph was not constructed");
@@ -1307,18 +1312,25 @@ core::Result<void> MltEditEngine::renderFrozen(
         }
         const auto durationFrames = std::max<std::int64_t>(
             impl_->graph_->durationFrames, 1);
+        const auto totalDuration = renderDuration(request.snapshot());
+        std::int64_t lastReportedPosition = 0;
         while (!consumer.is_stopped()) {
             if (stopToken.stop_requested()) {
                 consumer.stop();
                 return stateError("export cancelled during encoding");
             }
-            const auto position = std::clamp<std::int64_t>(
-                consumer.position(), 0, durationFrames);
+            const auto position = std::max(
+                lastReportedPosition,
+                std::clamp<std::int64_t>(consumer.position(), 0,
+                                         durationFrames));
+            lastReportedPosition = position;
             const double fraction = std::min(
                 0.998, static_cast<double>(position) /
                            static_cast<double>(durationFrames));
-            const auto through = core::frameToTimestamp(
-                position, request.snapshot().timeline.frameRate());
+            const auto through = std::min(
+                core::frameToTimestamp(
+                    position, request.snapshot().timeline.frameRate()),
+                core::TimestampNs{totalDuration});
             if (!report(edit_engine::RenderJobState::Running, fraction,
                         through)) {
                 consumer.stop();
@@ -1327,7 +1339,7 @@ core::Result<void> MltEditEngine::renderFrozen(
             if (impl_->config_.renderLifecycle) {
                 auto progress = edit_engine::RenderProgress::create(
                     edit_engine::RenderJobState::Running, fraction, through,
-                    renderDuration(request.snapshot()));
+                    totalDuration);
                 if (!progress.hasValue()) {
                     consumer.stop();
                     return progress.error();
@@ -1355,20 +1367,39 @@ core::Result<void> MltEditEngine::renderFrozen(
         auto media = probe.probe(partial.parent_path(), partial.filename());
         if (!media.hasValue()) return media.error();
         const auto expectedRate = request.preset().frameRate();
-        if (media.value().codecName != "h264" ||
-            !media.value().video.has_value() ||
-            !media.value().audio.has_value() ||
-            media.value().video->width !=
-                static_cast<int>(request.preset().width()) ||
-            media.value().video->height !=
-                static_cast<int>(request.preset().height()) ||
-            media.value().video->frameRate != expectedRate ||
-            media.value().audio->sampleRate != 48'000 ||
-            media.value().audio->channels != 2 ||
-            std::chrono::abs(media.value().duration -
-                             timelineEnd.time_since_epoch()) >
-                std::chrono::milliseconds{100}) {
-            return stateError("exported MP4 failed H.264/AAC profile validation");
+        const auto& inspected = media.value();
+        const bool validProfile =
+            inspected.codecName == "h264" && inspected.video.has_value() &&
+            inspected.audio.has_value() &&
+            inspected.video->width == static_cast<int>(request.preset().width()) &&
+            inspected.video->height == static_cast<int>(request.preset().height()) &&
+            inspected.video->frameRate == expectedRate &&
+            inspected.audio->sampleRate == 48'000 &&
+            inspected.audio->channels == 2 &&
+            std::chrono::abs(inspected.duration - timelineEnd.time_since_epoch()) <=
+                std::chrono::milliseconds{100};
+        if (!validProfile) {
+            std::ostringstream diagnostic;
+            diagnostic << "exported MP4 failed H.264/AAC profile validation"
+                       << "; codec=" << inspected.codecName
+                       << "; duration_ns=" << inspected.duration.count()
+                       << "; expected_duration_ns="
+                       << timelineEnd.time_since_epoch().count();
+            if (inspected.video.has_value()) {
+                diagnostic << "; video=" << inspected.video->width << 'x'
+                           << inspected.video->height << "@"
+                           << inspected.video->frameRate.numerator() << '/'
+                           << inspected.video->frameRate.denominator();
+            } else {
+                diagnostic << "; video=missing";
+            }
+            if (inspected.audio.has_value()) {
+                diagnostic << "; audio=" << inspected.audio->sampleRate << '/'
+                           << inspected.audio->channels;
+            } else {
+                diagnostic << "; audio=missing";
+            }
+            return stateError(diagnostic.str());
         }
     }
     if (stopToken.stop_requested()) {

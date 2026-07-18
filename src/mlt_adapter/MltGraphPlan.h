@@ -80,6 +80,7 @@ struct MltGraphPlan final {
 };
 
 [[nodiscard]] core::Result<MltGraphPlan> compileMltGraphPlan(
-    const edit_engine::TimelineSnapshot& snapshot);
+    const edit_engine::TimelineSnapshot& snapshot,
+    std::optional<core::FrameRate> outputFrameRate = std::nullopt);
 
 }  // namespace creator::mlt_adapter

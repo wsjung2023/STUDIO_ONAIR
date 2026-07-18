@@ -23,7 +23,6 @@ ExportWorker::ExportWorker(
       cancellationRequested_(std::move(cancellationRequested)) {}
 
 void ExportWorker::start(edit_engine::RenderRequest request) {
-    cancellationRequested_->store(false, std::memory_order_release);
     auto created = engine_->render(request);
     if (!created.hasValue()) {
         emit finished(false, static_cast<int>(edit_engine::RenderJobState::Failed),

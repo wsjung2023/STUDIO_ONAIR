@@ -107,7 +107,7 @@ core::Result<std::unique_ptr<AsyncTrackRecorder>> makeTrackRecorder(
         .packageRoot = start.packagePath,
         .recordingStartTime = start.startedAt,
         .segmentDuration = std::chrono::seconds{2},
-        .videoQueueCapacity = 3,
+        .videoQueueCapacity = 30,
         .audioQueueFrameCapacity = 240'000,
         .nextSegmentEstimateBytes = 64ULL * 1024ULL * 1024ULL,
     };
@@ -181,8 +181,9 @@ void VideoRouter::onVideoFrame(media::VideoFrame frame) noexcept {
     }
     auto planned = [&] {
         std::lock_guard lock{plannerMutex_};
-        return planner_->plan(std::move(frame),
-                              correction.value().correctedTimestamp);
+        return planner_->plan(
+            std::move(frame),
+            std::max(correction.value().correctedTimestamp, run->startedAt));
     }();
     if (!planned.hasValue()) {
         run->fail(planned.error(), observedAt);
@@ -219,7 +220,8 @@ void AudioRouter::onAudioBlock(media::AudioBlock block) noexcept {
         run->fail(correction.error(), observedAt);
         return;
     }
-    block.timestamp = correction.value().correctedTimestamp;
+    block.timestamp =
+        std::max(correction.value().correctedTimestamp, run->startedAt);
     block.sampleRateRatio = correction.value().audioRateRatio;
     if (block.sampleRate > 0 && block.frameCount > 0) {
         std::lock_guard lock{timestampMutex_};

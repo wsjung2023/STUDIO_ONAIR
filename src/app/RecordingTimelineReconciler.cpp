@@ -91,6 +91,18 @@ Result<RecordingReconcileResult> RecordingTimelineReconciler::reconcile(
     }
     auto segments = database.segments(sessionId);
     if (!segments.hasValue()) return segments.error();
+    std::vector<domain::SegmentInfo> normalizedSegments;
+    normalizedSegments.reserve(segments.value().size());
+    for (const auto& segment : segments.value()) {
+        if (segment.startTime < session.value().startedAt) {
+            return AppError{ErrorCode::InvalidArgument,
+                            "recording segment starts before its session"};
+        }
+        auto normalized = segment;
+        normalized.startTime = core::TimestampNs{
+            segment.startTime - session.value().startedAt};
+        normalizedSegments.push_back(std::move(normalized));
+    }
     auto sources = studio.loadRecordingSources(sessionId);
     if (!sources.hasValue()) return sources.error();
     auto events = studio.loadRecordingSceneEvents(sessionId);
@@ -129,7 +141,7 @@ Result<RecordingReconcileResult> RecordingTimelineReconciler::reconcile(
     }
     auto plan = planRecordingImport(RecordingImportRequest{
         .sessionId = sessionId,
-        .segments = segments.value(),
+        .segments = std::move(normalizedSegments),
         .sources = sources.value(),
         .scenes = snapshot.value().scenes,
         .sceneEvents = events.value(),
@@ -138,24 +150,21 @@ Result<RecordingReconcileResult> RecordingTimelineReconciler::reconcile(
         .probes = probes});
     if (!plan.hasValue()) return plan.error();
 
+    // Probing every segment a second time makes a long recording scale with
+    // two full FFmpeg parses and hashes per segment.  Each first-pass probe
+    // retains an identity lease; verify those leases immediately before the
+    // transaction instead, which detects replacement/truncation without
+    // reopening thousands of containers.
     std::vector<media::MediaProbeResult> revalidatedProbes;
     revalidatedProbes.reserve(probes.size());
     for (const auto& expected : probes) {
-        auto revalidated =
-            mediaProbe_->probe(validatedPackageRoot, expected.relativePath);
-        if (!revalidated.hasValue()) return revalidated.error();
-        if (revalidated.value() != expected.media) {
-            return AppError{ErrorCode::IoFailure,
-                            "recording media changed before import commit"};
-        }
-        if (!revalidated.value().identityLease) {
+        if (!expected.media.identityLease) {
             return AppError{ErrorCode::InvalidState,
-                            "media revalidation did not retain an identity lease"};
+                            "media probe did not retain an identity lease"};
         }
-        auto identity =
-            revalidated.value().identityLease->verifyCurrentIdentity();
+        auto identity = expected.media.identityLease->verifyCurrentIdentity();
         if (!identity.hasValue()) return identity.error();
-        revalidatedProbes.push_back(std::move(revalidated).value());
+        revalidatedProbes.push_back(expected.media);
     }
 
     auto command = domain::ImportRecordingCommand::create(

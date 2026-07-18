@@ -88,10 +88,15 @@ struct FrameRange final {
 core::Result<FrameRange> toFrames(const domain::TimeRange& range,
                                   core::FrameRate frameRate) {
     const auto first = core::timestampToFrame(range.start(), frameRate);
-    const auto end = core::timestampToFrame(range.end(), frameRate);
-    if (first < 0 || end <= first) {
+    auto end = core::timestampToFrame(range.end(), frameRate);
+    if (first < 0 || range.duration().count() <= 0) {
         return invalid("timeline range does not span complete frames");
     }
+    // Edits and capture timestamps are nanosecond-based, so a valid positive
+    // range can be shorter than one output frame (especially after a 60 ->
+    // 30fps export conversion). Keep such a range visible for one frame
+    // instead of rejecting the entire export.
+    if (end <= first) end = first + 1;
     return FrameRange{first, end - 1};
 }
 
@@ -104,7 +109,8 @@ std::string generatedIdentity(const domain::Clip& clip,
 }  // namespace
 
 core::Result<MltGraphPlan> compileMltGraphPlan(
-    const edit_engine::TimelineSnapshot& snapshot) {
+    const edit_engine::TimelineSnapshot& snapshot,
+    std::optional<core::FrameRate> outputFrameRate) {
     if (auto validated = edit_engine::validateTimelineSnapshot(snapshot);
         !validated.hasValue()) {
         return validated.error();
@@ -124,7 +130,7 @@ core::Result<MltGraphPlan> compileMltGraphPlan(
     std::vector<MltVisualBranch> visualBranches;
     std::vector<std::string> diagnostics;
     std::int64_t durationFrames = 0;
-    const auto frameRate = snapshot.timeline.frameRate();
+    const auto frameRate = outputFrameRate.value_or(snapshot.timeline.frameRate());
 
     auto identity = identityTransform();
     if (!identity.hasValue()) return identity.error();
@@ -228,14 +234,26 @@ core::Result<MltGraphPlan> compileMltGraphPlan(
 
             const auto sourceIn =
                 core::timestampToFrame(clip.sourceRange().start(), frameRate);
-            const auto sourceEnd =
+            auto sourceEnd =
                 core::timestampToFrame(clip.sourceRange().end(), frameRate);
+            if (clip.sourceRange().duration().count() > 0 &&
+                sourceEnd <= sourceIn) {
+                sourceEnd = sourceIn + 1;
+            }
             const auto timelineIn = timelineFrames.value().first;
             const auto timelineEnd = timelineFrames.value().last + 1;
             if (sourceIn < 0 || timelineIn < 0 || sourceEnd <= sourceIn ||
-                timelineEnd <= timelineIn ||
-                sourceEnd - sourceIn != timelineEnd - timelineIn) {
+                timelineEnd <= timelineIn) {
                 return invalid("timeline clip does not span complete matching frames");
+            }
+            const auto sourceFrameCount = sourceEnd - sourceIn;
+            const auto timelineFrameCount = timelineEnd - timelineIn;
+            const auto matchingFrameCount =
+                std::min(sourceFrameCount, timelineFrameCount);
+            if (sourceFrameCount != timelineFrameCount) {
+                diagnostics.push_back(
+                    "clip " + clip.id().value() +
+                    " trimmed to complete matching frame boundaries");
             }
 
             std::filesystem::path mediaPath;
@@ -247,7 +265,8 @@ core::Result<MltGraphPlan> compileMltGraphPlan(
                 mediaPath = std::move(resolved).value();
             }
 
-            const auto timelineOut = timelineFrames.value().last;
+            const auto sourceOut = sourceIn + matchingFrameCount - 1;
+            const auto timelineOut = timelineIn + matchingFrameCount - 1;
             MltGraphClip graphClip{
                 clip.id(),
                 *clip.assetId(),
@@ -256,7 +275,7 @@ core::Result<MltGraphPlan> compileMltGraphPlan(
                 available,
                 clip.enabled(),
                 sourceIn,
-                sourceEnd - 1,
+                sourceOut,
                 timelineIn,
                 timelineOut,
                 clip.visualTransform(),

@@ -15,7 +15,7 @@ core::DurationNs timelineDuration(
     core::TimestampNs end{};
     for (const auto& track : snapshot.timeline.tracks()) {
         for (const auto& clip : track.clips()) {
-            if (clip.enabled()) end = std::max(end, clip.timelineRange().end());
+            end = std::max(end, clip.timelineRange().end());
         }
     }
     return end.time_since_epoch();
