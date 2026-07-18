@@ -254,6 +254,7 @@ TEST(EditEngineTypesTest, ValidatesRenderPresetRequestAndProgress) {
         RenderOverwritePolicy::FailIfExists);
     ASSERT_TRUE(request.hasValue()) << request.error().message();
     EXPECT_EQ(request.value().projectId().value(), "project-1");
+    EXPECT_FALSE(request.value().jobId().value().empty());
     EXPECT_EQ(request.value().snapshot().revision.value(), 1);
     EXPECT_EQ(request.value().overwritePolicy(),
               RenderOverwritePolicy::FailIfExists);

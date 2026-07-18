@@ -199,6 +199,9 @@ public:
     [[nodiscard]] const domain::ProjectId& projectId() const noexcept {
         return projectId_;
     }
+    [[nodiscard]] const domain::RenderJobId& jobId() const noexcept {
+        return jobId_;
+    }
     [[nodiscard]] const TimelineSnapshot& snapshot() const noexcept {
         return snapshot_;
     }
@@ -211,15 +214,17 @@ public:
     }
 
 private:
-    RenderRequest(domain::ProjectId projectId, TimelineSnapshot snapshot,
+    RenderRequest(domain::RenderJobId jobId, domain::ProjectId projectId,
+                  TimelineSnapshot snapshot,
                   std::filesystem::path destination, RenderPreset preset,
                   RenderOverwritePolicy overwritePolicy)
-        : projectId_(std::move(projectId)),
+        : jobId_(std::move(jobId)), projectId_(std::move(projectId)),
           snapshot_(std::move(snapshot)),
           destination_(std::move(destination)),
           preset_(std::move(preset)),
           overwritePolicy_(overwritePolicy) {}
 
+    domain::RenderJobId jobId_;
     domain::ProjectId projectId_;
     TimelineSnapshot snapshot_;
     std::filesystem::path destination_;

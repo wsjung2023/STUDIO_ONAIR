@@ -130,6 +130,7 @@ add_executable(cs_app_tests
     app/ShortcutSettingsControllerTest.cpp
     app/StudioWorkflowControllerTest.cpp
     app/EditorControllerTest.cpp
+    app/ExportControllerTest.cpp
     app/EditorSessionWorkerTest.cpp
     app/GeneratedOverlayCacheTest.cpp
     app/StudioControllerTest.cpp

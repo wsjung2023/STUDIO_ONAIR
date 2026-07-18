@@ -74,6 +74,10 @@ add_library(cs_app STATIC
     EditorController.cpp
     EditorPreviewItem.h
     EditorPreviewItem.cpp
+    ExportWorker.h
+    ExportWorker.cpp
+    ExportController.h
+    ExportController.cpp
 )
 
 if(CS_ENABLE_FFMPEG)

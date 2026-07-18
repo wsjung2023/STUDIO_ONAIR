@@ -1223,7 +1223,7 @@ core::Result<void> MltEditEngine::renderFrozen(
     }
 
     const auto partial = request.destination().parent_path() /
-                         (".creator-studio-" + core::generateUuidV4() +
+                         (".creator-studio-" + request.jobId().value() +
                           ".partial.mp4");
     PartialArtifact artifact{partial};
     const auto encodedPartial = utf8Path(partial);

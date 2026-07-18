@@ -1,5 +1,7 @@
 #include "edit_engine/EditEngineTypes.h"
 
+#include "core/Uuid.h"
+
 #include "core/AppError.h"
 
 #include <algorithm>
@@ -302,7 +304,10 @@ Result<RenderRequest> RenderRequest::create(
     if (!hasClip) {
         return invalid("render timeline must not be empty");
     }
-    return RenderRequest{std::move(projectId), std::move(snapshot),
+    auto jobId = domain::RenderJobId::create(core::generateUuidV4());
+    if (!jobId.hasValue()) return jobId.error();
+    return RenderRequest{std::move(jobId).value(), std::move(projectId),
+                         std::move(snapshot),
                          std::move(destination), std::move(preset),
                          overwritePolicy};
 }
