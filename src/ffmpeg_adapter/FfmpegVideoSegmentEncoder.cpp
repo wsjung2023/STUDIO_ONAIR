@@ -254,7 +254,14 @@ private:
             }
 
             AVDictionary* codecOptions = nullptr;
-            if (name == "h264_mf") av_dict_set(&codecOptions, "hw_encoding", "1", 0);
+            // The Media Foundation encoder's hardware mode requires an
+            // already-negotiated D3D11/NV12 pipeline, which this CPU BGRA
+            // recorder does not provide.  Request its software path instead
+            // of repeatedly failing format negotiation before falling back to
+            // the much slower MPEG-4 encoder.
+            if (name == "h264_mf") {
+                av_dict_set(&codecOptions, "hw_encoding", "0", 0);
+            }
             const int opened = avcodec_open2(candidate, codec, &codecOptions);
             av_dict_free(&codecOptions);
             if (opened >= 0) {
