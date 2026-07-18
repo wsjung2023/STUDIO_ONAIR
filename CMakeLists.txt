@@ -204,6 +204,7 @@ target_link_libraries(creator_studio
 )
 
 if(CS_ENABLE_FFMPEG)
+    target_link_libraries(creator_studio PRIVATE cs_ffmpeg_adapter)
     target_compile_definitions(creator_studio PRIVATE CS_APP_ENABLE_FFMPEG=1)
     if(WIN32)
         file(GLOB CS_APP_FFMPEG_RUNTIME_DLLS CONFIGURE_DEPENDS

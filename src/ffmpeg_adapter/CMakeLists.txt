@@ -13,6 +13,14 @@ add_library(cs_ffmpeg_adapter STATIC
     BgraFrameMappers.cpp
 )
 
+if(WIN32)
+    target_sources(cs_ffmpeg_adapter PRIVATE
+        windows/WindowsCaptureBackend.h
+        windows/WindowsCaptureBackend.cpp
+    )
+    target_link_libraries(cs_ffmpeg_adapter PRIVATE ole32 uuid)
+endif()
+
 if(APPLE)
     target_sources(cs_ffmpeg_adapter PRIVATE BgraFrameMappers_macos.mm)
     find_library(CS_FFMPEG_COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
@@ -26,7 +34,7 @@ target_include_directories(cs_ffmpeg_adapter
 target_include_directories(cs_ffmpeg_adapter SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
 target_compile_features(cs_ffmpeg_adapter PUBLIC cxx_std_20)
 target_link_libraries(cs_ffmpeg_adapter
-    PUBLIC cs_recorder cs_media
+    PUBLIC cs_capture cs_recorder cs_media
     PRIVATE cs_sync ${FFMPEG_LIBRARIES}
 )
 cs_apply_warnings(cs_ffmpeg_adapter)

@@ -258,6 +258,7 @@ endif()
 
 if(CS_ENABLE_FFMPEG)
     add_executable(cs_ffmpeg_tests
+        ffmpeg_adapter/WindowsCaptureBackendTest.cpp
         ffmpeg_adapter/FfmpegCapabilityProbeTest.cpp
         ffmpeg_adapter/FfmpegMediaProbeTest.cpp
         ffmpeg_adapter/FfmpegVideoSegmentEncoderTest.cpp
@@ -278,6 +279,7 @@ if(CS_ENABLE_FFMPEG)
     cs_apply_warnings(cs_ffmpeg_tests)
 
     if(WIN32)
+        target_link_libraries(cs_ffmpeg_tests PRIVATE winmm)
         file(GLOB CS_FFMPEG_RUNTIME_DLLS CONFIGURE_DEPENDS "${CS_FFMPEG_ROOT}/bin/*.dll")
         add_custom_command(TARGET cs_ffmpeg_tests POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different

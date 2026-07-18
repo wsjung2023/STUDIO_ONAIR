@@ -26,6 +26,9 @@
 #include "project_store/SqliteStudioStore.h"
 #if defined(CS_APP_ENABLE_FFMPEG)
 #include "ffmpeg_adapter/FfmpegMediaProbe.h"
+#if defined(_WIN32)
+#include "ffmpeg_adapter/windows/WindowsCaptureBackend.h"
+#endif
 #endif
 #include "edit_engine/UnavailableEditEngine.h"
 #if defined(CS_APP_ENABLE_MLT)
@@ -92,6 +95,15 @@ int main(int argc, char* argv[]) {
     creator::app::ScreenCaptureController screenCaptureController{
         std::move(screenCaptureBackend.permission), std::move(screenCaptureBackend.discovery),
         std::move(screenCaptureBackend.sourceFactory), &app};
+#elif defined(_WIN32) && defined(CS_APP_ENABLE_FFMPEG)
+    auto windowsCaptureBackend =
+        creator::ffmpeg_adapter::windows::makeWindowsCaptureBackend();
+    creator::app::DeviceCaptureController deviceCaptureController{
+        std::move(windowsCaptureBackend.devices), &app};
+    creator::app::ScreenCaptureController screenCaptureController{
+        std::move(windowsCaptureBackend.screenPermission),
+        std::move(windowsCaptureBackend.screenDiscovery),
+        std::move(windowsCaptureBackend.screenSourceFactory), &app};
 #else
     creator::app::DeviceCaptureController deviceCaptureController{
         std::make_unique<creator::capture::UnsupportedDeviceCaptureBackend>(), &app};
