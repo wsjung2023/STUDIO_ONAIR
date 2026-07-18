@@ -154,6 +154,7 @@ configure_file(
 # Layers below the application boundary. None of these link Qt.
 add_subdirectory(src/core)
 add_subdirectory(src/domain)
+add_subdirectory(src/audio_dsp)
 add_subdirectory(src/media)
 add_subdirectory(src/edit_engine)
 add_subdirectory(src/sync)
