@@ -55,11 +55,11 @@ public:
 **Interfaces:**
 - Produces: `DiagnosticBundle::create(DiagnosticBundleRequest)` returning the atomically published bundle directory.
 
-- [ ] Write tests proving explicit consent is required, symlinks and out-of-root paths are rejected, only named log/build-manifest files are copied, SHA-256 values are recorded, and forbidden extensions/content names are rejected.
-- [ ] Run RED before the class exists.
-- [ ] Implement an allowlist of `application.log`, `release-manifest.json`, and `system-summary.json`; use a sibling `.part` directory and rename only after the bundle manifest is durable.
-- [ ] Run the focused tests and a repository search ensuring diagnostic production code contains no upload URL.
-- [ ] Commit with `git commit -m "feat(r4): create consented local diagnostics"`.
+- [x] Write tests proving explicit consent is required, symlinks and out-of-root paths are rejected, only named log/build-manifest files are copied, SHA-256 values are recorded, and forbidden extensions/content names are rejected.
+- [x] Run RED before the class exists.
+- [x] Implement an allowlist of `application.log`, `release-manifest.json`, and `system-summary.json`; use a sibling `.part` directory and rename only after the bundle manifest is durable.
+- [x] Run the focused tests and a repository search ensuring diagnostic production code contains no upload URL.
+- [x] Commit with `git commit -m "feat(r4): create consented local diagnostics"`.
 
 ### Task 3: Artifact signing and store validation gates
 
