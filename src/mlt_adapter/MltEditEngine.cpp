@@ -4,6 +4,7 @@
 #include "core/Uuid.h"
 #include "audio_dsp/AudioBuffer.h"
 #include "audio_dsp/AudioFormat.h"
+#include "ffmpeg_adapter/FfmpegConcatRemuxer.h"
 #include "ffmpeg_adapter/FfmpegMediaProbe.h"
 #include "mlt_adapter/ExportEncoderProbe.h"
 #include "mlt_adapter/FrameEffects.h"
@@ -759,6 +760,15 @@ bool isIdentityTransform(const domain::VisualTransform& transform) noexcept {
            transform.cropBottom() == 0.0 && transform.opacity() == 1.0;
 }
 
+struct MltMediaSource final {
+    std::unique_ptr<Mlt::Producer> producer;
+    std::unique_ptr<Mlt::Playlist> playlist;
+
+    [[nodiscard]] Mlt::Producer& service() const {
+        return playlist ? static_cast<Mlt::Producer&>(*playlist) : *producer;
+    }
+};
+
 } // namespace
 
 class MltEditEngine::Impl final {
@@ -784,6 +794,7 @@ class MltEditEngine::Impl final {
         std::size_t transformedVisualBranchCount{};
         std::size_t audioEnvelopeBranchCount{};
         std::size_t missingOverlayCount{};
+
     };
 
     explicit Impl(MltEditEngineConfig config) : config_(std::move(config)) {}
@@ -855,6 +866,45 @@ class MltEditEngine::Impl final {
             static_cast<int>(plan.frameRate.denominator()));
         graph->tractor = std::make_unique<Mlt::Tractor>(*graph->profile);
 
+        const auto configureProducer = [](Mlt::Producer& producer,
+                                          bool audio) {
+            producer.set("threads", 1);
+            producer.set("autoclose", 1);
+            producer.set("cache", 0);
+            producer.set("noimagecache", 1);
+            producer.set("astream", audio ? 0 : -1);
+            producer.set("vstream", audio ? -1 : 0);
+        };
+        const auto buildMediaSource =
+            [&](const std::filesystem::path& mediaPath,
+                bool audio) -> core::Result<MltMediaSource> {
+            auto decoderPath = mediaPath;
+            if (mediaPath.extension() == ".ffconcat") {
+                auto materialized =
+                    ffmpeg_adapter::materializeFfmpegConcatForEditing(
+                        mediaPath);
+                if (!materialized.hasValue()) return materialized.error();
+                decoderPath = std::move(materialized).value();
+            }
+            const auto resource = utf8Path(decoderPath);
+            auto producer = std::make_unique<Mlt::Producer>(
+                *graph->profile, "avformat", resource.c_str());
+            configureProducer(*producer, audio);
+            if (!producer->is_valid()) {
+                return stateError("MLT could not open a media asset");
+            }
+            return MltMediaSource{.producer = std::move(producer),
+                                  .playlist = nullptr};
+        };
+        const auto retainMediaSource =
+            [&graph](MltMediaSource source) {
+                if (source.playlist) {
+                    graph->playlists.push_back(std::move(source.playlist));
+                } else {
+                    graph->producers.push_back(std::move(source.producer));
+                }
+            };
+
         int trackIndex = 0;
         const auto isAudible = [](const MltGraphTrack& track) {
             return std::any_of(track.clips.begin(), track.clips.end(),
@@ -881,23 +931,15 @@ class MltEditEngine::Impl final {
                 if (!clip.enabled || !clip.available) {
                     playlist->blank(length - 1);
                 } else {
-                    auto producer = std::make_unique<Mlt::Producer>(
-                        *graph->profile, "avformat",
-                        utf8Path(clip.mediaPath).c_str());
-                    producer->set("threads", 1);
-                    producer->set("autoclose", 1);
-                    producer->set("cache", 0);
-                    producer->set("noimagecache", 1);
-                    producer->set("astream", 0);
-                    producer->set("vstream", -1);
-                    if (!producer->is_valid()) {
-                        return stateError("MLT could not open an audio asset");
-                    }
+                    auto built = buildMediaSource(clip.mediaPath, true);
+                    if (!built.hasValue()) return built.error();
+                    auto source = std::move(built).value();
+                    auto& producer = source.service();
                     ++graph->mediaProducerCount;
                     auto converter = std::make_unique<Mlt::Filter>(
                         *graph->profile, "audioconvert");
                     if (!converter->is_valid() ||
-                        producer->attach(*converter) != 0) {
+                        producer.attach(*converter) != 0) {
                         return stateError(
                             "MLT could not attach the audio format converter");
                     }
@@ -912,7 +954,7 @@ class MltEditEngine::Impl final {
                         if (!creatorFilter.hasValue()) {
                             return creatorFilter.error();
                         }
-                        if (producer->attach(*creatorFilter.value()) != 0) {
+                        if (producer.attach(*creatorFilter.value()) != 0) {
                             return stateError(
                                 "MLT could not attach the audio envelope processor");
                         }
@@ -922,11 +964,11 @@ class MltEditEngine::Impl final {
                         ++graph->audioEnvelopeBranchCount;
                     }
                     if (playlist->append(
-                            *producer, static_cast<int>(clip.sourceIn),
+                            producer, static_cast<int>(clip.sourceIn),
                             static_cast<int>(clip.sourceOut)) != 0) {
                         return stateError("MLT could not place an audio asset");
                     }
-                    graph->producers.push_back(std::move(producer));
+                    retainMediaSource(std::move(source));
                 }
                 cursor = timelineIn + length;
             }
@@ -1007,18 +1049,10 @@ class MltEditEngine::Impl final {
                     ++graph->missingOverlayCount;
                 }
             } else {
-                auto producer = std::make_unique<Mlt::Producer>(
-                    *graph->profile, "avformat",
-                    utf8Path(branch.sourcePath).c_str());
-                producer->set("threads", 1);
-                producer->set("autoclose", 1);
-                producer->set("cache", 0);
-                producer->set("noimagecache", 1);
-                producer->set("astream", -1);
-                producer->set("vstream", 0);
-                if (!producer->is_valid()) {
-                    return stateError("MLT could not open a visual branch");
-                }
+                auto built = buildMediaSource(branch.sourcePath, false);
+                if (!built.hasValue()) return built.error();
+                auto source = std::move(built).value();
+                auto& producer = source.service();
                 ++graph->mediaProducerCount;
                 const bool transformed =
                     !isIdentityTransform(branch.transform);
@@ -1028,7 +1062,7 @@ class MltEditEngine::Impl final {
                     auto converter = std::make_unique<Mlt::Filter>(
                         *graph->profile, "imageconvert");
                     if (!converter->is_valid() ||
-                        producer->attach(*converter) != 0) {
+                        producer.attach(*converter) != 0) {
                         return stateError(
                             "MLT could not attach the visual format converter");
                     }
@@ -1042,7 +1076,7 @@ class MltEditEngine::Impl final {
                     if (!creatorFilter.hasValue()) {
                         return creatorFilter.error();
                     }
-                    if (producer->attach(*creatorFilter.value()) != 0) {
+                    if (producer.attach(*creatorFilter.value()) != 0) {
                         return stateError(
                             "MLT could not attach the visual branch processor");
                     }
@@ -1054,17 +1088,17 @@ class MltEditEngine::Impl final {
                     }
                 }
                 if (branch.mediaKind == domain::MediaKind::Image) {
-                    if (playlist->append(*producer, 0, 0) != 0 ||
+                    if (playlist->append(producer, 0, 0) != 0 ||
                         playlist->repeat(playlist->count() - 1, length) != 0) {
                         return stateError(
                             "MLT could not hold a visual still branch");
                     }
                 } else if (playlist->append(
-                               *producer, static_cast<int>(branch.sourceIn),
+                               producer, static_cast<int>(branch.sourceIn),
                                static_cast<int>(branch.sourceOut)) != 0) {
                     return stateError("MLT could not place a visual branch");
                 }
-                graph->producers.push_back(std::move(producer));
+                retainMediaSource(std::move(source));
             }
             const int cursor = timelineIn + length;
             if (graphDurationFrames > cursor) {

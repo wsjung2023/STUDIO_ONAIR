@@ -58,20 +58,22 @@ ScreenCaptureKit 시스템 오디오 경로는 구현했지만, 이 저장소를
 Apple 전용 코드를 컴파일하거나 실기 측정할 수 없어 R0-03/R0-04 제품 완료 증거로 간주하지
 않습니다. 실제 미디어 기록·인코딩은 production 경로에 연결되었지만, macOS VideoToolbox와
 CVPixelBuffer 실기 녹화, 30분 실시간 발열·처리량 soak는 별도 Apple 인수 증거가 필요합니다.
-비선형 편집과 R2 로컬 AI·커서·오디오 처리 기반은 구현되어 있습니다. R1-07과
-R2-07의 장시간 전체 제품·물리 검증 일부는 아직 완료되지 않았습니다.
+비선형 편집과 R2 로컬 AI·커서·오디오 처리 기반은 구현되어 있습니다. Windows 실제
+4소스 30분 촬영·편집·취소/재시도·MP4 출력으로 R1-07을 완료했으며, R2는 R2-01부터
+R2-06까지 구현되어 마지막 R2-07 제품 통합·물리 검증만 남았습니다.
 
 ### R4 진행 상태
 
-R4-01은 플랫폼 capability와 원자적 release manifest를 구현했습니다. 2026-07-19
-Windows Debug 빌드와 1,100개 전체 테스트를 통과했고, arm64-v8a 및 x86_64 Android
-Debug APK를 생성했습니다. release manifest는 실행 파일 SHA-256과 Git revision을
+R4-01부터 R4-05까지의 로컬 엔지니어링 범위(플랫폼 capability, Android capture/export,
+adaptive mobile editing, trusted update/diagnostics, commercial/privacy controls)를 구현하고
+각 검증 보고서를 기록했습니다. Windows Debug 전체 테스트와 arm64-v8a/x86_64 Android
+Debug APK 증거를 생성했습니다. release manifest는 실행 파일 SHA-256과 Git revision을
 기록하며, tracked 변경이 있으면 revision에 `-dirty`를 붙입니다.
 
 이 증거는 unsigned 로컬 빌드입니다. macOS 러너, Android 실기기 캡처·수명주기,
 서명·notarization·스토어 배포는 각각의 R4 승인 게이트가 통과되기 전까지 완료로
-표시하지 않습니다. R4-02 Android MediaProjection, 카메라, 마이크와 허용된 재생
-오디오 adapter 구현은 `feat/r4-01-release-foundation` 브랜치에서 진행 중입니다.
+표시하지 않습니다. 이들은 코드 미구현이 아니라 해당 계정·인증서·플랫폼 실기기가
+필요한 외부 승인 게이트입니다.
 
 모듈은 CMake static library로 분리되어 있고, application 계층 아래(`cs_core`, `cs_domain`, `cs_media`, `cs_capture`, `cs_recorder`, `cs_project_store`, `cs_fakes`)는 Qt를 링크하지 않습니다. `cmake/CreatorStudioTargets.cmake`의 `cs_add_qtfree_library()`가 configure 단계에서 이를 강제합니다.
 

@@ -44,7 +44,9 @@ TEST(RecordingTrackTest, DerivesMediaKindFromRole) {
 TEST(RecordingTrackTest, EncodesEveryPathSeparatorDotSpaceAndUnicodeByte) {
     EXPECT_EQ(safeSourcePathComponent(source("screen-1")).value(), "screen-1");
     EXPECT_EQ(safeSourcePathComponent(source("../built in/마이크")).value(),
-              "%2E%2E%2Fbuilt%20in%2F%EB%A7%88%EC%9D%B4%ED%81%AC");
+              "_2E_2E_2Fbuilt_20in_2F_EB_A7_88_EC_9D_B4_ED_81_AC");
+    EXPECT_EQ(safeSourcePathComponent(source("a/b")).value(), "a_2Fb");
+    EXPECT_EQ(safeSourcePathComponent(source("a_2Fb")).value(), "a_5F2Fb");
 }
 
 TEST(RecordingTrackTest, RejectsAComponentThatWouldExceedPortableBound) {

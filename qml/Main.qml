@@ -20,15 +20,30 @@ ApplicationWindow {
     Action {
         id: studioRecordAction
         objectName: "studioRecordAction"
-        text: studioController.recording ? qsTr("Stop") : qsTr("Record")
+        text: studioController.recording || studioController.paused
+              ? qsTr("Stop") : qsTr("Record")
         enabled: window.currentPage === "Studio"
                  && projectController.hasOpenProject
                  && !studioController.busy
                  && (studioController.recordingAvailable
-                     || studioController.recording)
-        onTriggered: studioController.recording
+                     || studioController.recording
+                     || studioController.paused)
+        onTriggered: studioController.recording || studioController.paused
                      ? studioController.stopRecording()
                      : studioController.startRecording()
+    }
+
+    Action {
+        id: studioPauseAction
+        objectName: "studioPauseAction"
+        text: studioController.paused ? qsTr("Resume") : qsTr("Pause")
+        enabled: window.currentPage === "Studio"
+                 && projectController.hasOpenProject
+                 && !studioController.busy
+                 && (studioController.recording || studioController.paused)
+        onTriggered: studioController.paused
+                     ? studioController.resumeRecording()
+                     : studioController.pauseRecording()
     }
 
     Shortcut {
@@ -74,6 +89,7 @@ ApplicationWindow {
                     Layout.minimumHeight: 44
                     checked: window.currentPage === modelData
                     enabled: !studioController.recording
+                             && !studioController.paused
                              && !studioController.busy
                              && (modelData !== "Studio" || projectController.hasOpenProject)
                              && (modelData !== "Editor" || projectController.hasOpenProject)
@@ -103,7 +119,15 @@ ApplicationWindow {
                 action: studioRecordAction
                 visible: window.currentPage === "Studio"
                 Layout.minimumHeight: 44
-                highlighted: studioController.recording
+                highlighted: studioController.recording || studioController.paused
+            }
+
+            Button {
+                objectName: "studioPauseButton"
+                action: studioPauseAction
+                visible: window.currentPage === "Studio"
+                         && (studioController.recording || studioController.paused)
+                Layout.minimumHeight: 44
             }
         }
     }

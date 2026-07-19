@@ -44,6 +44,8 @@ private:
 
 [[nodiscard]] core::Result<std::string> safeSourcePathComponent(
     const domain::SourceId& sourceId);
+[[nodiscard]] core::Result<std::string> safeSessionPathComponent(
+    const domain::SessionId& sessionId);
 [[nodiscard]] std::filesystem::path relativeSegmentPath(const RecordingTrack& track,
                                                         std::uint64_t index,
                                                         SegmentContainer container =

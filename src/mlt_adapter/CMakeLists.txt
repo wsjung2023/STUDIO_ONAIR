@@ -25,6 +25,7 @@ if(CS_ENABLE_MLT)
             MltEditEngine.cpp
         DEPENDS
             cs_mlt_graph_plan
+            cs_audio_dsp
             cs_ffmpeg_adapter
             MLT::PlusPlus
             nlohmann_json::nlohmann_json

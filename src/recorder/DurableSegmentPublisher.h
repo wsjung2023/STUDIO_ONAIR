@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace creator::recorder {
 
@@ -46,6 +47,10 @@ public:
     DurableSegmentPublisher(std::filesystem::path packageRoot,
                             std::unique_ptr<ISegmentFileOperations> fileOperations,
                             std::unique_ptr<ISegmentLifecycleSink> lifecycleSink);
+    DurableSegmentPublisher(std::filesystem::path packageRoot,
+                            std::unique_ptr<ISegmentFileOperations> fileOperations,
+                            std::unique_ptr<ISegmentLifecycleSink> lifecycleSink,
+                            std::string segmentNamespace);
 
     [[nodiscard]] core::Result<SegmentOutputPaths> begin(
         const RecordingTrack& track, std::uint64_t index,
@@ -69,6 +74,7 @@ private:
     std::filesystem::path packageRoot_;
     std::unique_ptr<ISegmentFileOperations> fileOperations_;
     std::unique_ptr<ISegmentLifecycleSink> lifecycleSink_;
+    std::string segmentNamespace_;
     std::optional<PendingSegment> pending_;
 };
 

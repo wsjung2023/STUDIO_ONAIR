@@ -253,6 +253,88 @@ TEST(RecordingImportPlannerTest,
               TimeRange::create(at(0s), 6s).value());
 }
 
+TEST(RecordingImportPlannerTest,
+     NormalizesSubSampleConcatDurationRoundingButRejectsRealTruncation) {
+    const auto microphone = source("microphone-concat-rounding");
+    const auto active = scene("active-audio", microphone,
+                              StudioSourceRole::Microphone, true);
+    auto input = request(
+        microphone, StudioSourceRole::Microphone,
+        {segment(microphone, 0, 0s, 2s, "media/mic-0.mka"),
+         segment(microphone, 1, 2s, 2s, "media/mic-1.mka"),
+         segment(microphone, 2, 4s, 2s, "media/mic-2.mka")},
+        {active},
+        {{.sessionId = SessionId::create("session-placeholder").value(),
+          .sequence = 0,
+          .sceneId = active.id(),
+          .position = at(0s)}},
+        {{.relativePath = "media/mic-0.mka", .media = audioProbe(2s)},
+         {.relativePath = "media/mic-1.mka", .media = audioProbe(2s)},
+         {.relativePath = "media/mic-2.mka", .media = audioProbe(2s)}});
+    input.sceneEvents.front().sessionId = input.sessionId;
+    input.concatSources.push_back(RecordingConcatSource{
+        .sourceId = microphone,
+        .relativePath = "derived-concat-microphone.ffconcat",
+        .media = audioProbe(6s - 200ns),
+        .entries = {{"media/mic-0.mka", 0s},
+                    {"media/mic-1.mka", 2s},
+                    {"media/mic-2.mka", 4s}}});
+
+    const auto rounded = planRecordingImport(input);
+
+    ASSERT_TRUE(rounded.hasValue()) << rounded.error().message();
+    ASSERT_EQ(rounded.value().assets.size(), 1U);
+    EXPECT_EQ(rounded.value().assets.front().duration(), 6s);
+
+    input.concatSources.front().media.duration = 6s - 1ms;
+    const auto truncated = planRecordingImport(input);
+    ASSERT_FALSE(truncated.hasValue());
+    EXPECT_EQ(truncated.error().code(), ErrorCode::InvalidArgument);
+}
+
+TEST(RecordingImportPlannerTest,
+     MergesFrameBoundaryGapsWithoutCollapsingTheirTimelineOffsets) {
+    const auto screen = source("screen-gapped-concat");
+    const auto active = scene("active-screen", screen,
+                              StudioSourceRole::Screen, true,
+                              transform(1.0, 0));
+    auto input = request(
+        screen, StudioSourceRole::Screen,
+        {segment(screen, 0, 0s, 1982ms, "media/screen-0.mkv"),
+         segment(screen, 1, 2s, 1982ms, "media/screen-1.mkv"),
+         segment(screen, 2, 4s, 1982ms, "media/screen-2.mkv")},
+        {active},
+        {{.sessionId = SessionId::create("session-placeholder").value(),
+          .sequence = 0,
+          .sceneId = active.id(),
+          .position = at(0s)}},
+        {{.relativePath = "media/screen-0.mkv", .media = videoProbe(1982ms)},
+         {.relativePath = "media/screen-1.mkv", .media = videoProbe(1982ms)},
+         {.relativePath = "media/screen-2.mkv", .media = videoProbe(1982ms)}});
+    input.sceneEvents.front().sessionId = input.sessionId;
+    input.concatSources.push_back(RecordingConcatSource{
+        .sourceId = screen,
+        .relativePath = "derived-concat-screen.ffconcat",
+        .media = videoProbe(5982ms),
+        .entries = {{"media/screen-0.mkv", 0s},
+                    {"media/screen-1.mkv", 2s},
+                    {"media/screen-2.mkv", 4s}}});
+
+    const auto planned = planRecordingImport(input);
+
+    ASSERT_TRUE(planned.hasValue()) << planned.error().message();
+    ASSERT_EQ(planned.value().assets.size(), 1U);
+    ASSERT_EQ(planned.value().tracks.front().clips().size(), 1U);
+    EXPECT_EQ(planned.value().assets.front().duration(), 5982ms);
+    EXPECT_EQ(planned.value().tracks.front().clips().front().sourceRange(),
+              TimeRange::create(at(0s), 5982ms).value());
+
+    input.concatSources.front().entries[1].offset = 1982ms;
+    const auto collapsedGap = planRecordingImport(input);
+    ASSERT_FALSE(collapsedGap.hasValue());
+    EXPECT_EQ(collapsedGap.error().code(), ErrorCode::InvalidArgument);
+}
+
 TEST(RecordingImportPlannerTest, AudioSplitsOnlyWhenSceneEnableStateChanges) {
     const auto microphone = source("microphone");
     const auto session = SessionId::create("세션-α").value();

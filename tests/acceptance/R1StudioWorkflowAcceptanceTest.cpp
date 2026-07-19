@@ -1186,14 +1186,14 @@ TEST(R1StudioWorkflowAcceptanceTest,
     auto imported = reconciler.reconcile(packagePath, scaleSession);
     const auto importElapsed = std::chrono::steady_clock::now() - importStarted;
     ASSERT_TRUE(imported.hasValue()) << imported.error().message();
-    EXPECT_EQ(imported.value().assetCount, 120U);
+    EXPECT_EQ(imported.value().assetCount, 1U);
     EXPECT_EQ(imported.value().trackCount, 1U);
     EXPECT_EQ(imported.value().markerCount, 300U);
 
     auto editor = loadEditorState(packagePath);
     ASSERT_TRUE(editor.has_value());
     ASSERT_EQ(editor->snapshot.timeline.tracks().size(), 1U);
-    EXPECT_EQ(editor->snapshot.timeline.tracks().front().clips().size(), 120U);
+    EXPECT_EQ(editor->snapshot.timeline.tracks().front().clips().size(), 1U);
     EXPECT_EQ(editor->snapshot.timeline.markers().size(), 300U);
     const auto graphStarted = std::chrono::steady_clock::now();
     std::chrono::steady_clock::duration graphElapsed{};
@@ -1205,6 +1205,9 @@ TEST(R1StudioWorkflowAcceptanceTest,
              .previewHeight = 180}};
         auto loaded = mlt.load(editor->snapshot);
         ASSERT_TRUE(loaded.hasValue()) << loaded.error().message();
+        const auto diagnostics = mlt.diagnostics();
+        ASSERT_TRUE(diagnostics.hasValue()) << diagnostics.error().message();
+        EXPECT_EQ(diagnostics.value().mediaProducerCount, 1U);
         graphElapsed = std::chrono::steady_clock::now() - graphStarted;
         EXPECT_LT(graphElapsed, 10s);
         const auto frameStarted = std::chrono::steady_clock::now();

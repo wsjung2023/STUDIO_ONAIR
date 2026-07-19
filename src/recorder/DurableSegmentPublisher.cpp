@@ -174,9 +174,18 @@ DurableSegmentPublisher::DurableSegmentPublisher(
     std::filesystem::path packageRoot,
     std::unique_ptr<ISegmentFileOperations> fileOperations,
     std::unique_ptr<ISegmentLifecycleSink> lifecycleSink)
+    : DurableSegmentPublisher(std::move(packageRoot), std::move(fileOperations),
+                              std::move(lifecycleSink), {}) {}
+
+DurableSegmentPublisher::DurableSegmentPublisher(
+    std::filesystem::path packageRoot,
+    std::unique_ptr<ISegmentFileOperations> fileOperations,
+    std::unique_ptr<ISegmentLifecycleSink> lifecycleSink,
+    std::string segmentNamespace)
     : packageRoot_(std::move(packageRoot)),
       fileOperations_(std::move(fileOperations)),
-      lifecycleSink_(std::move(lifecycleSink)) {}
+      lifecycleSink_(std::move(lifecycleSink)),
+      segmentNamespace_(std::move(segmentNamespace)) {}
 
 core::Result<SegmentOutputPaths> DurableSegmentPublisher::begin(
     const RecordingTrack& track, std::uint64_t index,
@@ -196,9 +205,15 @@ core::Result<SegmentOutputPaths> DurableSegmentPublisher::begin(
                               "Segment publisher is not fully configured"};
     }
 
-    const auto relativeFinal = relativeSegmentPath(track, index, container);
+    auto relativeFinal = relativeSegmentPath(track, index, container);
+    if (!segmentNamespace_.empty()) {
+        relativeFinal = relativeFinal.parent_path() / segmentNamespace_ /
+                        relativeFinal.filename();
+    }
+    auto relativePart = std::filesystem::path{".tmp"} / relativeFinal;
+    relativePart += ".part";
     SegmentOutputPaths paths{
-        .partPath = packageRoot_ / temporarySegmentPath(track, index, container),
+        .partPath = packageRoot_ / relativePart,
         .finalPath = packageRoot_ / relativeFinal,
         .relativeFinalPath = relativeFinal,
     };

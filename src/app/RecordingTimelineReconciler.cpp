@@ -8,9 +8,9 @@
 #include "project_store/SqliteProjectDatabase.h"
 #include "project_store/SqliteStudioStore.h"
 #include "project_store/SqliteTimelineStore.h"
+#include "project_store/internal/DurableFile.h"
 
 #include <algorithm>
-#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -18,6 +18,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -95,7 +96,12 @@ Result<std::vector<RecordingConcatSource>> buildConcatSources(
         ++cursor;
         while (cursor < ready.size() && ready[cursor]->sourceId == sourceId) {
             const auto* previous = parts.back();
-            if (ready[cursor]->startTime != previous->startTime + previous->duration) break;
+            const auto gap = ready[cursor]->startTime -
+                             (previous->startTime + previous->duration);
+            if (gap < -kMaximumRecordingConcatGap ||
+                gap > kMaximumRecordingConcatGap) {
+                break;
+            }
             parts.push_back(ready[cursor]);
             ++cursor;
         }
@@ -115,34 +121,32 @@ Result<std::vector<RecordingConcatSource>> buildConcatSources(
             return AppError{ErrorCode::IoFailure,
                             "could not create concat manifest directory: " + error.message()};
         }
-        std::ofstream output(manifestPath, std::ios::binary | std::ios::trunc);
-        if (!output) {
-            return AppError{ErrorCode::IoFailure,
-                            "could not create concat manifest: " + manifestPath.string()};
-        }
+        std::ostringstream output;
         output << "ffconcat version 1.0\n";
         RecordingConcatSource source{.sourceId = sourceId,
                                      .relativePath = relativePath.generic_string(),
                                      .media = {},
                                      .entries = {}};
-        core::DurationNs offset{};
-        for (const auto* part : parts) {
+        for (std::size_t index = 0; index < parts.size(); ++index) {
+            const auto* part = parts[index];
+            const auto duration = index + 1 < parts.size()
+                                      ? parts[index + 1]->startTime -
+                                            part->startTime
+                                      : part->duration;
+            const auto offset = part->startTime - parts.front()->startTime;
             output << "file '" << ffconcatPath(part->relativePath) << "'\n";
-            output << "duration " << seconds(part->duration) << "\n";
+            output << "duration " << seconds(duration) << "\n";
             source.entries.push_back(RecordingConcatEntry{
                 .segmentPath = part->relativePath, .offset = offset});
-            offset += part->duration;
         }
-        output.flush();
         if (!output) {
             return AppError{ErrorCode::IoFailure,
-                            "could not write concat manifest: " + manifestPath.string()};
+                            "could not serialize concat manifest: " +
+                                manifestPath.string()};
         }
-        // Windows media identity probing opens the file with exclusive
-        // metadata sharing. Release the writer before probing the derived
-        // manifest, otherwise reconciliation races its own ofstream and
-        // reports "media file could not be locked for inspection".
-        output.close();
+        auto written = project_store::internal::writeFileDurably(
+            manifestPath, output.str());
+        if (!written.hasValue()) return written.error();
         auto probe = mediaProbe.probe(packageRoot, source.relativePath);
         if (!probe.hasValue()) return probe.error();
         source.media = std::move(probe).value();
@@ -245,9 +249,18 @@ Result<RecordingReconcileResult> RecordingTimelineReconciler::reconcile(
     if (!editServiceResult.hasValue()) return editServiceResult.error();
     auto editService = std::move(editServiceResult).value();
 
+    std::unordered_set<std::string> concatEntries;
+    for (const auto& concat : concatSources.value()) {
+        for (const auto& entry : concat.entries) {
+            concatEntries.insert(entry.segmentPath);
+        }
+    }
     std::vector<RecordingSegmentProbe> probes;
     for (const auto& segment : segments.value()) {
-        if (segment.status != domain::SegmentStatus::Ready) continue;
+        if (segment.status != domain::SegmentStatus::Ready ||
+            concatEntries.contains(segment.relativePath)) {
+            continue;
+        }
         auto probe =
             mediaProbe_->probe(validatedPackageRoot, segment.relativePath);
         if (!probe.hasValue()) return probe.error();

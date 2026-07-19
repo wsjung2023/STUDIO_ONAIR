@@ -116,6 +116,18 @@ void LiveRecordingController::setRecordingPreparation(
 
 void LiveRecordingController::startRecording() {
     if (operationState_ != LiveRecordingOperationState::Idle) return;
+    beginRecording();
+}
+
+void LiveRecordingController::resumeRecording() {
+    if (!isPaused()) return;
+    beginRecording();
+}
+
+void LiveRecordingController::beginRecording() {
+    if (operationState_ != LiveRecordingOperationState::Idle && !isPaused()) {
+        return;
+    }
     if (!engine_ || !engine_->available()) {
         setStatusMessage(engine_ ? fromUtf8(engine_->unavailableReason())
                                  : tr("Live recording engine is unavailable"));
@@ -142,6 +154,7 @@ void LiveRecordingController::startRecording() {
     }
 
     ++generation_;
+    pauseRequested_ = false;
     resetDiagnostics();
     pendingStart_ = LiveRecordingStart{.sessionId = std::move(sessionId).value(),
                                        .packagePath = std::move(*packagePath),
@@ -275,6 +288,7 @@ void LiveRecordingController::startEngine() {
 void LiveRecordingController::abortStartedSession(core::AppError error) {
     if (!pendingStart_ || !persistence_) {
         pendingStart_.reset();
+        pauseRequested_ = false;
         setOperationState(LiveRecordingOperationState::Idle);
         setStatusMessage(fromUtf8(error.message()));
         return;
@@ -297,6 +311,7 @@ void LiveRecordingController::abortStartedSession(core::AppError error) {
                     return;
                 }
                 self->pendingStart_.reset();
+                self->pauseRequested_ = false;
                 emit self->activeRecordingChanged();
                 self->setOperationState(LiveRecordingOperationState::Idle);
                 self->setStatusMessage(fromUtf8(
@@ -315,17 +330,34 @@ void LiveRecordingController::abortStartedSession(core::AppError error) {
         });
 }
 
+void LiveRecordingController::pauseRecording() {
+    if (!isRecording()) return;
+    pauseRequested_ = true;
+    finalizeActiveRecording(tr("Pausing recording"));
+}
+
 void LiveRecordingController::stopRecording() {
+    if (isPaused()) {
+        pauseRequested_ = false;
+        setOperationState(LiveRecordingOperationState::Idle);
+        setStatusMessage(tr("Stopped"));
+        return;
+    }
     if (!isRecording()) {
         if (operationState_ == LiveRecordingOperationState::Idle) {
             setStatusMessage(tr("Not recording"));
         }
         return;
     }
+    pauseRequested_ = false;
+    finalizeActiveRecording(tr("Finalizing recording"));
+}
+
+void LiveRecordingController::finalizeActiveRecording(QString statusMessage) {
     diagnosticsTimer_.stop();
     pollDiagnostics();
     setOperationState(LiveRecordingOperationState::Finalizing);
-    setStatusMessage(tr("Finalizing recording"));
+    setStatusMessage(std::move(statusMessage));
     engine_->stopAsync(clock_());
 }
 
@@ -385,17 +417,22 @@ void LiveRecordingController::handlePersistenceComplete(
         !pendingCompletion_ || pendingCompletion_->session.id() != sessionId) {
         return;
     }
+    const bool shouldPause = result.hasValue() && !pendingTerminalError_ &&
+                             pauseRequested_;
     const auto finalMessage = !result.hasValue()
                                   ? fromUtf8(result.error().message())
                                   : pendingTerminalError_
                                         ? fromUtf8(pendingTerminalError_->message())
-                                        : tr("Stopped");
+                                        : shouldPause ? tr("Paused")
+                                                      : tr("Stopped");
     const auto committedSessionId = pendingCompletion_->session.id();
     pendingCompletion_.reset();
     pendingTerminalError_.reset();
     pendingStart_.reset();
     emit activeRecordingChanged();
-    setOperationState(LiveRecordingOperationState::Idle);
+    pauseRequested_ = false;
+    setOperationState(shouldPause ? LiveRecordingOperationState::Paused
+                                  : LiveRecordingOperationState::Idle);
     setStatusMessage(finalMessage);
     if (result.hasValue()) {
         emit recordingCommitted(fromUtf8(committedSessionId.value()));

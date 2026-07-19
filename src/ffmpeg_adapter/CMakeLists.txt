@@ -3,6 +3,8 @@ add_library(cs_ffmpeg_adapter STATIC
     FfmpegCapabilityProbe.cpp
     FfmpegMediaProbe.h
     FfmpegMediaProbe.cpp
+    FfmpegConcatRemuxer.h
+    FfmpegConcatRemuxer.cpp
     FfmpegEncodedDuration.h
     FfmpegEncodedDuration.cpp
     FfmpegVideoSegmentEncoder.h

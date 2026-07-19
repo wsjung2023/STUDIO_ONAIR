@@ -8,6 +8,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avio.h>
 #include <libavformat/avformat.h>
+#include <libavutil/dict.h>
 #include <libavutil/error.h>
 #include <libavutil/mathematics.h>
 #include <libavutil/mem.h>
@@ -19,11 +20,13 @@ extern "C" {
 #include <cctype>
 #include <cstdio>
 #include <cstdint>
+#include <fstream>
 #include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -193,6 +196,141 @@ Result<ValidatedMediaPath> validatedMediaPath(
         return invalid("media path escapes its package root");
     }
     return ValidatedMediaPath{.root = root, .file = canonical};
+}
+
+Result<std::filesystem::path> parseConcatEntry(std::string_view line) {
+    constexpr std::string_view prefix{"file '"};
+    if (!line.starts_with(prefix) || line.size() <= prefix.size() ||
+        line.back() != '\'') {
+        return invalid("concat file entry is malformed");
+    }
+    std::string decoded;
+    decoded.reserve(line.size() - prefix.size() - 1U);
+    const auto encoded = line.substr(prefix.size(),
+                                     line.size() - prefix.size() - 1U);
+    for (std::size_t index = 0; index < encoded.size(); ++index) {
+        const char character = encoded[index];
+        if (character == '\\') {
+            if (++index >= encoded.size() ||
+                (encoded[index] != '\\' && encoded[index] != '\'')) {
+                return invalid("concat file entry escape is malformed");
+            }
+            decoded.push_back(encoded[index]);
+            continue;
+        }
+        if (character == '\'') {
+            return invalid("concat file entry quote is malformed");
+        }
+        decoded.push_back(character);
+    }
+    if (decoded.empty()) return invalid("concat file entry is empty");
+    std::u8string pathText;
+    pathText.reserve(decoded.size());
+    for (const unsigned char character : decoded) {
+        pathText.push_back(static_cast<char8_t>(character));
+    }
+    return std::filesystem::path{pathText};
+}
+
+Result<DurationNs> parseConcatDuration(std::string_view value) {
+    if (value.empty()) return invalid("concat duration entry is invalid");
+    const auto decimal = value.find('.');
+    if (decimal == 0 || decimal == value.size() - 1 ||
+        (decimal != std::string_view::npos &&
+         value.find('.', decimal + 1) != std::string_view::npos)) {
+        return invalid("concat duration entry is invalid");
+    }
+    const auto wholeText = value.substr(0, decimal);
+    const auto fractionText = decimal == std::string_view::npos
+                                  ? std::string_view{}
+                                  : value.substr(decimal + 1);
+    if (fractionText.size() > 9) {
+        return invalid("concat duration precision exceeds nanoseconds");
+    }
+    std::uint64_t whole = 0;
+    for (const char character : wholeText) {
+        if (character < '0' || character > '9') {
+            return invalid("concat duration entry is invalid");
+        }
+        const auto digit = static_cast<std::uint64_t>(character - '0');
+        if (whole > (static_cast<std::uint64_t>(
+                         std::numeric_limits<std::int64_t>::max()) -
+                     digit) /
+                        10U) {
+            return invalid("concat duration exceeds supported range");
+        }
+        whole = whole * 10U + digit;
+    }
+    std::uint64_t fraction = 0;
+    for (const char character : fractionText) {
+        if (character < '0' || character > '9') {
+            return invalid("concat duration entry is invalid");
+        }
+        fraction = fraction * 10U +
+                   static_cast<std::uint64_t>(character - '0');
+    }
+    for (std::size_t digit = fractionText.size(); digit < 9; ++digit) {
+        fraction *= 10U;
+    }
+    constexpr std::uint64_t nanosecondsPerSecond = 1'000'000'000U;
+    const auto maximum =
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+    if (whole > (maximum - fraction) / nanosecondsPerSecond) {
+        return invalid("concat duration exceeds supported range");
+    }
+    const auto nanoseconds = whole * nanosecondsPerSecond + fraction;
+    if (nanoseconds == 0) {
+        return invalid("concat duration entry is invalid");
+    }
+    return DurationNs{static_cast<std::int64_t>(nanoseconds)};
+}
+
+Result<std::vector<FfmpegConcatEntry>> parseConcatManifest(
+    const std::filesystem::path& packageRoot,
+    const ValidatedMediaPath& manifest) {
+    std::ifstream input{manifest.file, std::ios::binary};
+    if (!input) return ioFailure("concat manifest could not be read");
+    std::string line;
+    if (!std::getline(input, line)) {
+        return invalid("concat manifest is empty");
+    }
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line != "ffconcat version 1.0") {
+        return invalid("concat manifest header is invalid");
+    }
+    bool expectingFile = true;
+    std::optional<std::filesystem::path> pendingPath;
+    std::vector<FfmpegConcatEntry> entries;
+    while (std::getline(input, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (expectingFile) {
+            auto entry = parseConcatEntry(line);
+            if (!entry.hasValue()) return entry.error();
+            auto validated = validatedMediaPath(packageRoot, entry.value());
+            if (!validated.hasValue()) {
+                return invalid("concat file entry escapes the package root");
+            }
+            pendingPath = std::move(validated).value().file;
+            expectingFile = false;
+            continue;
+        }
+        constexpr std::string_view prefix{"duration "};
+        if (!std::string_view{line}.starts_with(prefix)) {
+            return invalid("concat duration entry is invalid");
+        }
+        auto duration =
+            parseConcatDuration(std::string_view{line}.substr(prefix.size()));
+        if (!duration.hasValue()) return duration.error();
+        entries.push_back(FfmpegConcatEntry{
+            .path = std::move(*pendingPath), .duration = duration.value()});
+        pendingPath.reset();
+        expectingFile = true;
+    }
+    if (!input.eof()) return ioFailure("concat manifest could not be read");
+    if (entries.empty() || !expectingFile) {
+        return invalid("concat manifest entries are incomplete");
+    }
+    return entries;
 }
 
 #ifdef _WIN32
@@ -666,6 +804,11 @@ struct FormatCloser final {
     }
 };
 
+struct Dictionary final {
+    AVDictionary* value{};
+    ~Dictionary() { av_dict_free(&value); }
+};
+
 Result<DurationNs> durationOf(const AVFormatContext& context,
                               const std::vector<AVStream*>& streams) {
     constexpr AVRational nanoseconds{1, 1'000'000'000};
@@ -703,6 +846,23 @@ Result<DurationNs> durationOf(const AVFormatContext& context,
 
 }  // namespace
 
+Result<std::vector<FfmpegConcatEntry>> readValidatedFfmpegConcat(
+    const std::filesystem::path& manifestPath) {
+    if (manifestPath.empty()) {
+        return invalid("concat manifest path is empty");
+    }
+    std::error_code error;
+    const auto absolute = std::filesystem::absolute(manifestPath, error);
+    if (error) {
+        return filesystemFailure("concat manifest path could not be resolved",
+                                 error);
+    }
+    const auto packageRoot = absolute.parent_path();
+    auto manifest = validatedMediaPath(packageRoot, absolute.filename());
+    if (!manifest.hasValue()) return manifest.error();
+    return parseConcatManifest(packageRoot, manifest.value());
+}
+
 Result<media::MediaProbeResult> FfmpegMediaProbe::probe(
     const std::filesystem::path& packageRoot,
     const std::filesystem::path& relativePath) {
@@ -711,11 +871,23 @@ Result<media::MediaProbeResult> FfmpegMediaProbe::probe(
     auto locked = lockMediaPath(validated.value(), relativePath);
     if (!locked.hasValue()) return locked.error();
     const auto size = locked.value().byteSize();
+    const bool concat = relativePath.extension() == ".ffconcat";
+    if (concat) {
+        auto manifest = parseConcatManifest(packageRoot, validated.value());
+        if (!manifest.hasValue()) return manifest.error();
+    }
+
+    Dictionary options;
+    if (concat && av_dict_set(&options.value, "safe", "0", 0) < 0) {
+        return ioFailure("FFmpeg concat options could not be allocated");
+    }
 
     AVFormatContext* opened = nullptr;
 #ifdef _WIN32
     const auto path = pathUtf8(validated.value().file);
-    if (avformat_open_input(&opened, path.c_str(), nullptr, nullptr) < 0) {
+    const int openResult =
+        avformat_open_input(&opened, path.c_str(), nullptr, &options.value);
+    if (openResult < 0) {
         return parseFailure("media container could not be opened");
     }
 #else
@@ -742,7 +914,9 @@ Result<media::MediaProbeResult> FfmpegMediaProbe::probe(
     }
     opened->pb = io.get();
     opened->flags |= AVFMT_FLAG_CUSTOM_IO;
-    if (avformat_open_input(&opened, nullptr, nullptr, nullptr) < 0) {
+    const int openResult =
+        avformat_open_input(&opened, nullptr, nullptr, &options.value);
+    if (openResult < 0) {
         if (opened != nullptr) avformat_free_context(opened);
         return parseFailure("media container could not be opened");
     }

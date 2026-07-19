@@ -210,6 +210,7 @@ class FakeStudioController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
     Q_PROPERTY(bool recording READ recording NOTIFY stateChanged)
+    Q_PROPERTY(bool paused READ paused NOTIFY stateChanged)
     Q_PROPERTY(bool recordingAvailable READ recordingAvailable CONSTANT)
     Q_PROPERTY(int segmentCount READ segmentCount CONSTANT)
     Q_PROPERTY(int trackCount READ trackCount CONSTANT)
@@ -229,6 +230,7 @@ public:
     using QObject::QObject;
     [[nodiscard]] bool busy() const noexcept { return busy_; }
     [[nodiscard]] bool recording() const noexcept { return recording_; }
+    [[nodiscard]] bool paused() const noexcept { return paused_; }
     [[nodiscard]] bool recordingAvailable() const noexcept { return true; }
     [[nodiscard]] int segmentCount() const noexcept { return 1; }
     [[nodiscard]] int trackCount() const noexcept { return 2; }
@@ -247,11 +249,25 @@ public:
     [[nodiscard]] qlonglong recordingPositionNs() const noexcept { return 777; }
     Q_INVOKABLE void startRecording() {
         ++startCalls_;
+        paused_ = false;
         setRecording(true);
     }
     Q_INVOKABLE void stopRecording() {
         ++stopCalls_;
+        paused_ = false;
         setRecording(false);
+    }
+    Q_INVOKABLE void pauseRecording() {
+        ++pauseCalls_;
+        recording_ = false;
+        paused_ = true;
+        emit stateChanged();
+    }
+    Q_INVOKABLE void resumeRecording() {
+        ++resumeCalls_;
+        paused_ = false;
+        recording_ = true;
+        emit stateChanged();
     }
     void setBusy(bool busy) {
         if (busy_ == busy) return;
@@ -265,6 +281,8 @@ public:
     }
     [[nodiscard]] int startCalls() const noexcept { return startCalls_; }
     [[nodiscard]] int stopCalls() const noexcept { return stopCalls_; }
+    [[nodiscard]] int pauseCalls() const noexcept { return pauseCalls_; }
+    [[nodiscard]] int resumeCalls() const noexcept { return resumeCalls_; }
 
 signals:
     void stateChanged();
@@ -272,8 +290,11 @@ signals:
 private:
     bool busy_{false};
     bool recording_{false};
+    bool paused_{false};
     int startCalls_{0};
     int stopCalls_{0};
+    int pauseCalls_{0};
+    int resumeCalls_{0};
 };
 
 class FakeShortcutSettingsController final : public QObject {
@@ -1168,15 +1189,31 @@ TEST(QmlSmokeTest, MainRecordShortcutSharesVisibleActionAndStateGuard) {
     auto* action = object->findChild<QObject*>(QStringLiteral("studioRecordAction"));
     auto* button = object->findChild<QObject*>(QStringLiteral("studioRecordButton"));
     auto* shortcut = object->findChild<QObject*>(QStringLiteral("studioRecordShortcut"));
+    auto* pauseAction =
+        object->findChild<QObject*>(QStringLiteral("studioPauseAction"));
+    auto* pauseButton =
+        object->findChild<QObject*>(QStringLiteral("studioPauseButton"));
     ASSERT_NE(action, nullptr);
     ASSERT_NE(button, nullptr);
     ASSERT_NE(shortcut, nullptr);
+    ASSERT_NE(pauseAction, nullptr);
+    ASSERT_NE(pauseButton, nullptr);
     EXPECT_EQ(button->property("action").value<QObject*>(), action);
     EXPECT_TRUE(action->property("enabled").toBool());
     EXPECT_TRUE(shortcut->property("enabled").toBool());
+    EXPECT_FALSE(pauseAction->property("enabled").toBool());
 
     ASSERT_TRUE(QMetaObject::invokeMethod(action, "trigger"));
     EXPECT_EQ(studioController.startCalls(), 1);
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(pauseAction->property("enabled").toBool());
+    EXPECT_EQ(pauseButton->property("action").value<QObject*>(), pauseAction);
+    ASSERT_TRUE(QMetaObject::invokeMethod(pauseAction, "trigger"));
+    EXPECT_EQ(studioController.pauseCalls(), 1);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(pauseAction->property("text").toString(), QStringLiteral("Resume"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(pauseAction, "trigger"));
+    EXPECT_EQ(studioController.resumeCalls(), 1);
     studioController.setRecording(false);
     ASSERT_TRUE(QMetaObject::invokeMethod(shortcut, "activated"));
     EXPECT_EQ(studioController.startCalls(), 2);

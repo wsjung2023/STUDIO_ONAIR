@@ -16,12 +16,14 @@
 #include "ffmpeg_adapter/windows/WindowsCaptureBackend.h"
 #include "mlt_adapter/MltEditEngine.h"
 #include "project_store/ProjectPackageStore.h"
+#include "project_store/SqliteProjectDatabase.h"
 #include "project_store/SqliteStudioStore.h"
 
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QGuiApplication>
 #include <QSignalSpy>
+#include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
 
@@ -36,8 +38,10 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -133,6 +137,11 @@ public:
     }
 
     ~PhysicalPackage() {
+        if (qEnvironmentVariableIntValue("CS_R1_RETAIN_PACKAGE") > 0) {
+            std::cout << "[ R1-07 PACKAGE ] retained="
+                      << root_.string() << std::endl;
+            return;
+        }
         std::error_code error;
         fs::remove_all(root_, error);
         EXPECT_FALSE(error) << error.message();
@@ -149,6 +158,33 @@ private:
 TEST(R1FinalPhysicalAcceptanceTest,
      RecordsAllPhysicalWindowsSourcesForThirtyWallClockMinutes) {
     PhysicalPackage physical;
+    DWORD initialProcessHandles = 0;
+    ASSERT_NE(GetProcessHandleCount(GetCurrentProcess(), &initialProcessHandles),
+              FALSE);
+    DWORD maximumProcessHandles = initialProcessHandles;
+    bool handleSamplingSucceeded = true;
+    QTimer handleSampler;
+    handleSampler.setInterval(100);
+    QObject::connect(&handleSampler, &QTimer::timeout, [&] {
+        DWORD current = 0;
+        if (GetProcessHandleCount(GetCurrentProcess(), &current) == FALSE) {
+            handleSamplingSucceeded = false;
+            return;
+        }
+        maximumProcessHandles = std::max(maximumProcessHandles, current);
+    });
+    handleSampler.start();
+    const auto verifyHandleBudget = [&](std::string_view phase,
+                                        DWORD maximumGrowth) {
+        std::cout << "[ R1-07 HANDLES ] phase=" << phase
+                  << " initial=" << initialProcessHandles
+                  << " maximum=" << maximumProcessHandles
+                  << " growth="
+                  << maximumProcessHandles - initialProcessHandles << std::endl;
+        EXPECT_TRUE(handleSamplingSucceeded);
+        EXPECT_LE(maximumProcessHandles,
+                  initialProcessHandles + maximumGrowth);
+    };
     creator::app::ProjectController project{
         std::make_unique<ProjectPackageStore>(), physical.registry(), false};
     QSignalSpy opened{&project, &creator::app::ProjectController::projectOpened};
@@ -269,6 +305,7 @@ TEST(R1FinalPhysicalAcceptanceTest,
     auto nextReport = started;
     bool markerAdded = false;
     bool sceneSwitched = false;
+    bool pauseResumeCompleted = false;
     while (std::chrono::steady_clock::now() - started < requiredDuration) {
         const auto now = std::chrono::steady_clock::now();
         const auto elapsed = now - started;
@@ -284,6 +321,28 @@ TEST(R1FinalPhysicalAcceptanceTest,
                     ->sceneIdAt(1);
             workflow.switchScene(secondScene, recording.recordingPositionNs());
             sceneSwitched = true;
+        }
+        if (!pauseResumeCompleted && elapsed >= 5s && !workflow.busy() &&
+            !editor.sessionBusy()) {
+            const auto revisionBeforePause = editor.timelineRevision();
+            recording.pauseRecording();
+            ASSERT_TRUE(waitUntil(
+                [&] {
+                    return recording.isPaused() && !workflow.busy() &&
+                           !workflow.reconciling() && !editor.sessionBusy() &&
+                           editor.timelineRevision() > revisionBeforePause;
+                },
+                180s))
+                << "pause=" << recording.statusMessage().toStdString()
+                << " workflow=" << workflow.statusMessage().toStdString()
+                << " editor=" << editor.statusMessage().toStdString();
+            recording.resumeRecording();
+            ASSERT_TRUE(waitUntil(
+                [&] { return recording.isRecording() && workflow.recording(); },
+                60s))
+                << "resume=" << recording.statusMessage().toStdString()
+                << " workflow=" << workflow.statusMessage().toStdString();
+            pauseResumeCompleted = true;
         }
         if (now >= nextSound) {
             if (qEnvironmentVariableIntValue("CS_R1_PHYSICAL_NOTIFY") > 0) {
@@ -321,9 +380,10 @@ TEST(R1FinalPhysicalAcceptanceTest,
         << recording.statusMessage().toStdString();
     ASSERT_TRUE(survivedSoak) << recording.statusMessage().toStdString();
     ASSERT_EQ(aborted.count(), 0);
-    ASSERT_EQ(committed.count(), 1) << recording.statusMessage().toStdString();
+    ASSERT_EQ(committed.count(), 2) << recording.statusMessage().toStdString();
     ASSERT_TRUE(markerAdded);
     ASSERT_TRUE(sceneSwitched);
+    ASSERT_TRUE(pauseResumeCompleted);
     ASSERT_TRUE(waitUntil(
         [&] {
             // The binding signal is an informational notification and can be
@@ -339,7 +399,13 @@ TEST(R1FinalPhysicalAcceptanceTest,
         600s))
         << "workflow=" << workflow.statusMessage().toStdString()
         << " editor=" << editor.statusMessage().toStdString();
-    EXPECT_EQ(workflow.markerCount(), 1);
+    // Pause/resume is implemented as two durable recording sessions.  The
+    // workflow HUD count belongs to the currently active session and therefore
+    // resets on resume; the product gate is that the pre-pause marker survived
+    // reconciliation into the durable editor timeline.
+    const auto reconciledSnapshot = editor.exportSnapshot();
+    ASSERT_TRUE(reconciledSnapshot.has_value());
+    EXPECT_EQ(reconciledSnapshot->timeline.markers().size(), 1U);
     EXPECT_EQ(recording.trackCount(), 4);
     EXPECT_GT(recording.segmentCount(), 0);
     const auto allowedQueueDrops = std::max<qulonglong>(
@@ -362,6 +428,44 @@ TEST(R1FinalPhysicalAcceptanceTest,
     ProjectPackageStore packages;
     auto reopened = packages.open(physical.package());
     ASSERT_TRUE(reopened.hasValue()) << reopened.error().message();
+    const auto databaseLease = reopened.value().databaseIdentityLease;
+    ASSERT_TRUE(databaseLease);
+    auto recordingDatabase =
+        creator::project_store::SqliteProjectDatabase::open(
+            reopened.value().databasePath,
+            reopened.value().package.manifest.projectId,
+            [databaseLease] { return databaseLease->verifyCurrentIdentity(); });
+    ASSERT_TRUE(recordingDatabase.hasValue())
+        << recordingDatabase.error().message();
+    std::int64_t maximumAlignedStartSpreadNs = 0;
+    for (const auto& committedSignal : committed) {
+        ASSERT_FALSE(committedSignal.empty());
+        const auto sessionId = creator::domain::SessionId::create(
+            committedSignal.front().toString().toUtf8().toStdString());
+        ASSERT_TRUE(sessionId.hasValue()) << sessionId.error().message();
+        const auto segments =
+            recordingDatabase.value().segments(sessionId.value());
+        ASSERT_TRUE(segments.hasValue()) << segments.error().message();
+        std::map<std::uint64_t, std::vector<std::int64_t>> startsByIndex;
+        for (const auto& segment : segments.value()) {
+            if (segment.status != creator::domain::SegmentStatus::Ready) continue;
+            startsByIndex[segment.index].push_back(
+                segment.startTime.time_since_epoch().count());
+        }
+        ASSERT_FALSE(startsByIndex.empty());
+        for (const auto& [index, starts] : startsByIndex) {
+            static_cast<void>(index);
+            ASSERT_EQ(starts.size(), 4U);
+            const auto [minimum, maximum] =
+                std::minmax_element(starts.begin(), starts.end());
+            maximumAlignedStartSpreadNs = std::max(
+                maximumAlignedStartSpreadNs, *maximum - *minimum);
+        }
+    }
+    std::cout << "[ R1-07 SYNC ] maximum_aligned_start_spread_ms="
+              << static_cast<double>(maximumAlignedStartSpreadNs) / 1'000'000.0
+              << std::endl;
+    EXPECT_LE(maximumAlignedStartSpreadNs, 40'000'000LL);
     std::size_t videoFiles = 0;
     std::size_t audioFiles = 0;
     for (const auto& entry :
@@ -459,6 +563,11 @@ TEST(R1FinalPhysicalAcceptanceTest,
     EXPECT_EQ(timelineRows(reopenedEditor), savedRows);
     ASSERT_TRUE(reopenedEditor.exportSnapshot().has_value());
 
+    // Capture, reconciliation and durable reopen are the regression boundary
+    // for the former unbounded producer/handle explosion. Export temporarily
+    // owns another complete MLT graph, so it has a separate bounded ceiling.
+    verifyHandleBudget("capture-reconcile-reopen", 20'000);
+
     // Diagnostic mode for the long hardware soak: export is covered by the
     // retained-package replay test, while this mode isolates capture,
     // reconciliation, and durable reopen without constructing a thousands-
@@ -512,6 +621,7 @@ TEST(R1FinalPhysicalAcceptanceTest,
     EXPECT_TRUE(output.value().audio.has_value());
     const auto outputDuration = output.value().duration.count();
     EXPECT_LE(std::abs(outputDuration - editedDuration), 1'000'000'000LL);
+    verifyHandleBudget("including-export", 60'000);
 }
 
 }  // namespace

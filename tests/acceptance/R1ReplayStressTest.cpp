@@ -97,14 +97,15 @@ TEST(R1ReplayStressTest, ReopensRetainedPackageAndBuildsExportGraph) {
             .runtimeRoot = fs::path{CS_TEST_STAGED_MLT_ROOT},
             .previewWidth = 320,
             .previewHeight = 180});
-    creator::app::EditorController editor{std::move(editorEngine)};
-    editor.openProject(project.projectUrl());
+    auto editor = std::make_unique<creator::app::EditorController>(
+        std::move(editorEngine));
+    editor->openProject(project.projectUrl());
     ASSERT_TRUE(waitUntil(
-        [&] { return !editor.busy() && !editor.sessionBusy(); }, 15min))
-        << editor.statusMessage().toStdString();
-    ASSERT_TRUE(editor.exportSnapshot().has_value())
-        << editor.statusMessage().toStdString();
-    ASSERT_GT(editor.timelineDurationNs(), 0);
+        [&] { return !editor->busy() && !editor->sessionBusy(); }, 15min))
+        << editor->statusMessage().toStdString();
+    ASSERT_TRUE(editor->exportSnapshot().has_value())
+        << editor->statusMessage().toStdString();
+    ASSERT_GT(editor->timelineDurationNs(), 0);
 
     const auto output = packagePath.parent_path() / "r1-replay-cancelled.mp4";
     std::error_code ignored;
@@ -112,23 +113,30 @@ TEST(R1ReplayStressTest, ReopensRetainedPackageAndBuildsExportGraph) {
     const auto projectId = creator::domain::ProjectId::create(
         project.projectId().toUtf8().toStdString());
     ASSERT_TRUE(projectId.hasValue()) << projectId.error().message();
-    creator::app::ExportController exporter{
+    auto exporter = std::make_unique<creator::app::ExportController>(
         std::make_unique<creator::app::ProjectExportEngine>(
-            fs::path{CS_TEST_STAGED_MLT_ROOT})};
-    exporter.setSource(projectId.value(), *editor.exportSnapshot());
-    exporter.exportTo(QUrl::fromLocalFile(QString::fromStdWString(output.wstring())),
-                      QStringLiteral("h264-1080p30"), false);
-    ASSERT_TRUE(waitUntil([&] { return exporter.canCancel() || !exporter.busy(); },
+            fs::path{CS_TEST_STAGED_MLT_ROOT}));
+    exporter->setSource(projectId.value(), *editor->exportSnapshot());
+    exporter->exportTo(
+        QUrl::fromLocalFile(QString::fromStdWString(output.wstring())),
+        QStringLiteral("h264-1080p30"), false);
+    ASSERT_TRUE(waitUntil([&] { return exporter->canCancel() || !exporter->busy(); },
                           120s))
-        << exporter.statusMessage().toStdString();
-    ASSERT_TRUE(exporter.busy()) << exporter.statusMessage().toStdString();
-    exporter.cancelExport();
-    ASSERT_TRUE(waitUntil([&] { return !exporter.busy(); }, 180s))
-        << exporter.statusMessage().toStdString();
+        << exporter->statusMessage().toStdString();
+    ASSERT_TRUE(exporter->busy()) << exporter->statusMessage().toStdString();
+    exporter->cancelExport();
+    ASSERT_TRUE(waitUntil([&] { return !exporter->busy(); }, 180s))
+        << exporter->statusMessage().toStdString();
     EXPECT_FALSE(fs::exists(output));
     std::cout << "[R1-REPLAY] scenes=" << workflow.sceneModel()->rowCount()
-              << " tracks=" << editor.timelineTrackModel()->rowCount()
-              << " durationNs=" << editor.timelineDurationNs() << std::endl;
+              << " tracks=" << editor->timelineTrackModel()->rowCount()
+              << " durationNs=" << editor->timelineDurationNs() << std::endl;
+    std::cout << "[R1-REPLAY] destroying exporter" << std::endl;
+    exporter.reset();
+    std::cout << "[R1-REPLAY] destroyed exporter" << std::endl;
+    std::cout << "[R1-REPLAY] destroying editor" << std::endl;
+    editor.reset();
+    std::cout << "[R1-REPLAY] destroyed editor" << std::endl;
 }
 }  // namespace
 

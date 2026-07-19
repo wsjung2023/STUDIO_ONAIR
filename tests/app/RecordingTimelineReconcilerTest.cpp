@@ -19,6 +19,7 @@
 #include <future>
 #include <memory>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <process.h>
@@ -159,6 +160,21 @@ public:
 
 private:
     std::size_t calls_{0};
+};
+
+class CountingConcatMediaProbe final : public IMediaProbe {
+public:
+    [[nodiscard]] creator::core::Result<MediaProbeResult> probe(
+        const fs::path&, const fs::path& relativePath) override {
+        paths.push_back(relativePath);
+        auto result = screenProbe();
+        result.duration =
+            relativePath.extension() == ".ffconcat" ? concatDuration : 2s;
+        return result;
+    }
+
+    DurationNs concatDuration{6506ms};
+    std::vector<fs::path> paths;
 };
 
 class RecordingTimelineReconcilerTest : public ::testing::Test {
@@ -348,6 +364,131 @@ TEST_F(RecordingTimelineReconcilerTest,
     const auto import = studio.value().recordingImport(sessionId());
     ASSERT_TRUE(import.hasValue());
     EXPECT_FALSE(import.value().has_value());
+}
+
+TEST_F(RecordingTimelineReconcilerTest,
+       MergesPhysicalScreenJitterIntoOneConcatAssetAndProbe) {
+    const auto concatSession = SessionId::create("concat-session").value();
+    const auto origin = sessionOrigin_ + 10s;
+    ASSERT_TRUE(packages_.beginRecording(packageRoot_, concatSession, origin,
+                                         fixedUtc())
+                    .hasValue());
+    auto studio = openStudioStore();
+    ASSERT_TRUE(studio.hasValue());
+    ASSERT_TRUE(studio.value()
+                    .prepareRecording(
+                        concatSession,
+                        {RecordingSourceRole{.sourceId = sourceId(),
+                                             .role = StudioSourceRole::Screen}},
+                        creator::domain::defaultStudioScenes().value().front().id())
+                    .hasValue());
+    RecordingSession session{concatSession};
+    ASSERT_TRUE(session.start(origin).hasValue());
+    ASSERT_TRUE(session
+                    .addSegment(SegmentInfo{.index = 0,
+                                            .sourceId = sourceId(),
+                                            .startTime = origin,
+                                            .duration = 2s,
+                                            .status = SegmentStatus::Ready,
+                                            .relativePath = "media/concat-0.mkv"})
+                    .hasValue());
+    ASSERT_TRUE(session
+                    .addSegment(SegmentInfo{.index = 1,
+                                            .sourceId = sourceId(),
+                                            .startTime = origin + 2679ms,
+                                            .duration = 2s,
+                                            .status = SegmentStatus::Ready,
+                                            .relativePath = "media/concat-1.mkv"})
+                    .hasValue());
+    ASSERT_TRUE(session
+                    .addSegment(SegmentInfo{.index = 2,
+                                            .sourceId = sourceId(),
+                                            .startTime = origin + 4506ms,
+                                            .duration = 2s,
+                                            .status = SegmentStatus::Ready,
+                                            .relativePath = "media/concat-2.mkv"})
+                    .hasValue());
+    ASSERT_TRUE(session.stop(origin + 6506ms).hasValue());
+    ASSERT_TRUE(packages_.completeRecording(packageRoot_, session, fixedUtc())
+                    .hasValue());
+
+    CountingConcatMediaProbe probe;
+    RecordingTimelineReconciler reconciler{
+        probe, [] { return std::string{"concat-event"}; },
+        [] { return fixedUtc(); }};
+
+    const auto result = reconciler.reconcile(packageRoot_, concatSession);
+
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    EXPECT_EQ(result.value().assetCount, 1U);
+    ASSERT_EQ(probe.paths.size(), 1U);
+    EXPECT_EQ(probe.paths.front().extension(), ".ffconcat");
+}
+
+TEST_F(RecordingTimelineReconcilerTest,
+       SplitsRecordingWhenARealGapExceedsTheJitterTolerance) {
+    const auto concatSession = SessionId::create("concat-loss-session").value();
+    const auto origin = sessionOrigin_ + 10s;
+    ASSERT_TRUE(packages_.beginRecording(packageRoot_, concatSession, origin,
+                                         fixedUtc())
+                    .hasValue());
+    auto studio = openStudioStore();
+    ASSERT_TRUE(studio.hasValue());
+    ASSERT_TRUE(studio.value()
+                    .prepareRecording(
+                        concatSession,
+                        {RecordingSourceRole{.sourceId = sourceId(),
+                                             .role = StudioSourceRole::Screen}},
+                        creator::domain::defaultStudioScenes().value().front().id())
+                    .hasValue());
+    RecordingSession session{concatSession};
+    ASSERT_TRUE(session.start(origin).hasValue());
+    const std::vector<SegmentInfo> segments{
+        {.index = 0,
+         .sourceId = sourceId(),
+         .startTime = origin,
+         .duration = 2s,
+         .status = SegmentStatus::Ready,
+         .relativePath = "media/loss-0.mkv"},
+        {.index = 1,
+         .sourceId = sourceId(),
+         .startTime = origin + 2100ms,
+         .duration = 2s,
+         .status = SegmentStatus::Ready,
+         .relativePath = "media/loss-1.mkv"},
+        {.index = 2,
+         .sourceId = sourceId(),
+         .startTime = origin + 5200ms,
+         .duration = 2s,
+         .status = SegmentStatus::Ready,
+         .relativePath = "media/loss-2.mkv"},
+        {.index = 3,
+         .sourceId = sourceId(),
+         .startTime = origin + 7300ms,
+         .duration = 2s,
+         .status = SegmentStatus::Ready,
+         .relativePath = "media/loss-3.mkv"},
+    };
+    for (const auto& segment : segments) {
+        ASSERT_TRUE(session.addSegment(segment).hasValue());
+    }
+    ASSERT_TRUE(session.stop(origin + 9300ms).hasValue());
+    ASSERT_TRUE(packages_.completeRecording(packageRoot_, session, fixedUtc())
+                    .hasValue());
+
+    CountingConcatMediaProbe probe;
+    probe.concatDuration = 4100ms;
+    RecordingTimelineReconciler reconciler{
+        probe, [] { return std::string{"concat-loss-event"}; },
+        [] { return fixedUtc(); }};
+
+    const auto result = reconciler.reconcile(packageRoot_, concatSession);
+
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    EXPECT_EQ(result.value().assetCount, 2U);
+    ASSERT_EQ(probe.paths.size(), 2U);
+    EXPECT_EQ(probe.paths[0].extension(), ".ffconcat");
+    EXPECT_EQ(probe.paths[1].extension(), ".ffconcat");
 }
 
 TEST_F(RecordingTimelineReconcilerTest,

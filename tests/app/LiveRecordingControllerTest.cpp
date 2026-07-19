@@ -232,6 +232,66 @@ TEST(LiveRecordingControllerTest,
 }
 
 TEST(LiveRecordingControllerTest,
+     PauseCommitsCurrentTakeAndResumeBeginsANewDurableSession) {
+    Fixture fixture;
+    QSignalSpy committed{fixture.controller.get(),
+                         &LiveRecordingController::recordingCommitted};
+
+    fixture.controller->startRecording();
+    fixture.persistence.finishBegin();
+    const auto firstSession = fixture.persistence.lastSessionId;
+    fixture.now = TimestampNs{std::chrono::seconds{12}};
+
+    fixture.controller->pauseRecording();
+    EXPECT_EQ(fixture.controller->operationState(),
+              LiveRecordingOperationState::Finalizing);
+    EXPECT_EQ(fixture.engineRaw->stopCalls, 1);
+    fixture.engineRaw->finish(fixture.now);
+    fixture.persistence.finishComplete();
+
+    EXPECT_TRUE(fixture.controller->isPaused());
+    EXPECT_FALSE(fixture.controller->isRecording());
+    ASSERT_EQ(committed.count(), 1);
+    EXPECT_EQ(committed.front().front().toString(),
+              QString::fromStdString(firstSession));
+
+    fixture.now = TimestampNs{std::chrono::seconds{15}};
+    fixture.controller->resumeRecording();
+    EXPECT_EQ(fixture.controller->operationState(),
+              LiveRecordingOperationState::Preparing);
+    EXPECT_EQ(fixture.persistence.beginCalls, 2);
+    EXPECT_NE(fixture.persistence.lastSessionId, firstSession);
+    fixture.persistence.finishBegin();
+    EXPECT_TRUE(fixture.controller->isRecording());
+    EXPECT_FALSE(fixture.controller->isPaused());
+
+    fixture.now = TimestampNs{std::chrono::seconds{18}};
+    fixture.controller->stopRecording();
+    fixture.engineRaw->finish(fixture.now);
+    fixture.persistence.finishComplete();
+    EXPECT_EQ(fixture.controller->operationState(),
+              LiveRecordingOperationState::Idle);
+    EXPECT_EQ(committed.count(), 2);
+}
+
+TEST(LiveRecordingControllerTest, StopWhilePausedEndsTheRecordingWorkflow) {
+    Fixture fixture;
+    fixture.controller->startRecording();
+    fixture.persistence.finishBegin();
+    fixture.controller->pauseRecording();
+    fixture.engineRaw->finish(fixture.now);
+    fixture.persistence.finishComplete();
+    ASSERT_TRUE(fixture.controller->isPaused());
+
+    fixture.controller->stopRecording();
+
+    EXPECT_EQ(fixture.controller->operationState(),
+              LiveRecordingOperationState::Idle);
+    EXPECT_EQ(fixture.engineRaw->stopCalls, 1);
+    EXPECT_EQ(fixture.controller->statusMessage(), QStringLiteral("Stopped"));
+}
+
+TEST(LiveRecordingControllerTest,
      PersistenceCompletionReturnsToOwnerThreadBeforeMutatingState) {
     Fixture fixture;
     fixture.controller->startRecording();
