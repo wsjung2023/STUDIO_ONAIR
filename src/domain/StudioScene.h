@@ -18,6 +18,7 @@ enum class StudioSourceRole {
     Camera,
     Microphone,
     SystemAudio,
+    Avatar,
 };
 
 [[nodiscard]] std::string_view studioSourceRoleName(

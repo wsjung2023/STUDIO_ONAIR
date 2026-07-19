@@ -404,7 +404,8 @@ Result<StudioWorkflowState> StudioWorkflowWorker::apply(
         if (request.operation == StudioWorkflowOperation::ToggleSource) {
             if (!source->enabled() && !source->transform().has_value() &&
                 (source->role() == StudioSourceRole::Screen ||
-                 source->role() == StudioSourceRole::Camera)) {
+                 source->role() == StudioSourceRole::Camera ||
+                 source->role() == StudioSourceRole::Avatar)) {
                 auto transform = fullFrame();
                 if (!transform.hasValue()) return transform.error();
                 auto transformed = source->withTransform(transform.value());
@@ -434,7 +435,8 @@ Result<StudioWorkflowState> StudioWorkflowWorker::apply(
             }
         } else {
             if (source->role() != StudioSourceRole::Screen &&
-                source->role() != StudioSourceRole::Camera) {
+                source->role() != StudioSourceRole::Camera &&
+                source->role() != StudioSourceRole::Avatar) {
                 return invalid("audio sources have no visual transform");
             }
             if (request.operation ==

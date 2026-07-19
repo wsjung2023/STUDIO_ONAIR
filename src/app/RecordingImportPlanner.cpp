@@ -65,6 +65,8 @@ std::string_view roleToken(StudioSourceRole role) noexcept {
             return "microphone";
         case StudioSourceRole::SystemAudio:
             return "system-audio";
+        case StudioSourceRole::Avatar:
+            return "avatar";
     }
     return "unknown";
 }
@@ -79,13 +81,16 @@ std::string roleName(StudioSourceRole role) {
             return "Microphone";
         case StudioSourceRole::SystemAudio:
             return "System Audio";
+        case StudioSourceRole::Avatar:
+            return "Avatar";
     }
     return "Recorded Source";
 }
 
 bool videoRole(StudioSourceRole role) noexcept {
     return role == StudioSourceRole::Screen ||
-           role == StudioSourceRole::Camera;
+           role == StudioSourceRole::Camera ||
+           role == StudioSourceRole::Avatar;
 }
 
 bool validSha256(std::string_view value) noexcept {

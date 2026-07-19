@@ -46,13 +46,14 @@ SceneSource source(std::string id, StudioSourceRole role,
 TEST(StudioSceneTest, RoleNamesRoundTripAndRejectUnknownValues) {
     for (const auto role : {StudioSourceRole::Screen, StudioSourceRole::Camera,
                             StudioSourceRole::Microphone,
-                            StudioSourceRole::SystemAudio}) {
+                            StudioSourceRole::SystemAudio,
+                            StudioSourceRole::Avatar}) {
         const auto restored = studioSourceRoleFromName(studioSourceRoleName(role));
         ASSERT_TRUE(restored.hasValue());
         EXPECT_EQ(restored.value(), role);
     }
 
-    const auto unknown = studioSourceRoleFromName("avatar");
+    const auto unknown = studioSourceRoleFromName("unsupported");
     ASSERT_FALSE(unknown.hasValue());
     EXPECT_EQ(unknown.error().code(), ErrorCode::InvalidArgument);
 }
@@ -83,6 +84,10 @@ TEST(StudioSceneTest, RequiresEnabledVideoTransformAndBoundsPositions) {
                                      false, std::nullopt).hasValue());
     EXPECT_FALSE(StudioScene::create(sceneId("scene"), "Scene", 1024, {})
                      .hasValue());
+    EXPECT_TRUE(SceneSource::create(sourceId("avatar"),
+                                    StudioSourceRole::Avatar, "Avatar", 0,
+                                    true, fullFrame())
+                    .hasValue());
 }
 
 TEST(StudioSceneTest, RejectsEmptyNamesAndDuplicateSourcePositions) {

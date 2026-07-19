@@ -55,3 +55,8 @@ JSON sidecar resolves a model path relative to itself, validates canvas bounds,
 and reuses the parameter mapper for names and ranges. It deliberately does not
 parse Inochi2D internals; the renderer adapter receives a verified model path
 and descriptor-owned mapping instead.
+
+Studio scene sources now include the persisted `avatar` role. It is treated as
+a visual source (so transform, PIP, z-order, and enable/disable operations use
+the same scene rules as camera/screen) without changing the R1 default scene
+or pretending that a real model is bundled.

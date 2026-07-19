@@ -21,7 +21,8 @@ constexpr std::int32_t kMaximumPosition = 1023;
 constexpr std::size_t kMaximumNameCodePoints = 200;
 
 bool isVideoRole(StudioSourceRole role) noexcept {
-    return role == StudioSourceRole::Screen || role == StudioSourceRole::Camera;
+    return role == StudioSourceRole::Screen || role == StudioSourceRole::Camera ||
+           role == StudioSourceRole::Avatar;
 }
 
 bool isKnownRole(StudioSourceRole role) noexcept {
@@ -30,6 +31,7 @@ bool isKnownRole(StudioSourceRole role) noexcept {
     case StudioSourceRole::Camera:
     case StudioSourceRole::Microphone:
     case StudioSourceRole::SystemAudio:
+    case StudioSourceRole::Avatar:
         return true;
     }
     return false;
@@ -148,6 +150,8 @@ std::string_view studioSourceRoleName(StudioSourceRole role) noexcept {
         return "microphone";
     case StudioSourceRole::SystemAudio:
         return "system_audio";
+    case StudioSourceRole::Avatar:
+        return "avatar";
     }
     return {};
 }
@@ -157,6 +161,7 @@ core::Result<StudioSourceRole> studioSourceRoleFromName(std::string_view name) {
     if (name == "camera") return StudioSourceRole::Camera;
     if (name == "microphone") return StudioSourceRole::Microphone;
     if (name == "system_audio") return StudioSourceRole::SystemAudio;
+    if (name == "avatar") return StudioSourceRole::Avatar;
     return AppError{ErrorCode::InvalidArgument, "unknown studio source role"};
 }
 
@@ -209,7 +214,7 @@ core::Result<StudioScene> StudioScene::create(
 
     std::unordered_set<std::string> ids;
     std::unordered_set<std::int32_t> positions;
-    std::array<bool, 4> roles{};
+    std::array<bool, 5> roles{};
     for (const auto& source : sources) {
         const auto roleIndex = static_cast<std::size_t>(source.role());
         if (roleIndex >= roles.size() || roles[roleIndex] ||
