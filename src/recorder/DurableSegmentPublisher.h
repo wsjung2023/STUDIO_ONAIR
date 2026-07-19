@@ -48,7 +48,11 @@ public:
                             std::unique_ptr<ISegmentLifecycleSink> lifecycleSink);
 
     [[nodiscard]] core::Result<SegmentOutputPaths> begin(
-        const RecordingTrack& track, std::uint64_t index, core::TimestampNs startTime);
+        const RecordingTrack& track, std::uint64_t index,
+        core::TimestampNs startTime);
+    [[nodiscard]] core::Result<SegmentOutputPaths> begin(
+        const RecordingTrack& track, std::uint64_t index,
+        core::TimestampNs startTime, SegmentContainer container);
     [[nodiscard]] core::Result<domain::SegmentInfo> publish(
         const EncodedSegment& encoded);
     [[nodiscard]] core::Result<void> fail();

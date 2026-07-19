@@ -10,6 +10,7 @@
 namespace creator::recorder {
 
 enum class TrackMediaKind { Video, Audio };
+enum class SegmentContainer { Matroska, Mp4 };
 enum class TrackRole {
     Screen,
     Camera,
@@ -44,8 +45,12 @@ private:
 [[nodiscard]] core::Result<std::string> safeSourcePathComponent(
     const domain::SourceId& sourceId);
 [[nodiscard]] std::filesystem::path relativeSegmentPath(const RecordingTrack& track,
-                                                        std::uint64_t index);
+                                                        std::uint64_t index,
+                                                        SegmentContainer container =
+                                                            SegmentContainer::Matroska);
 [[nodiscard]] std::filesystem::path temporarySegmentPath(const RecordingTrack& track,
-                                                         std::uint64_t index);
+                                                         std::uint64_t index,
+                                                         SegmentContainer container =
+                                                             SegmentContainer::Matroska);
 
 }  // namespace creator::recorder

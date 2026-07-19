@@ -179,7 +179,14 @@ DurableSegmentPublisher::DurableSegmentPublisher(
       lifecycleSink_(std::move(lifecycleSink)) {}
 
 core::Result<SegmentOutputPaths> DurableSegmentPublisher::begin(
-    const RecordingTrack& track, std::uint64_t index, core::TimestampNs startTime) {
+    const RecordingTrack& track, std::uint64_t index,
+    core::TimestampNs startTime) {
+    return begin(track, index, startTime, SegmentContainer::Matroska);
+}
+
+core::Result<SegmentOutputPaths> DurableSegmentPublisher::begin(
+    const RecordingTrack& track, std::uint64_t index,
+    core::TimestampNs startTime, SegmentContainer container) {
     if (pending_) {
         return core::AppError{core::ErrorCode::InvalidState,
                               "A segment is already pending publication"};
@@ -189,9 +196,9 @@ core::Result<SegmentOutputPaths> DurableSegmentPublisher::begin(
                               "Segment publisher is not fully configured"};
     }
 
-    const auto relativeFinal = relativeSegmentPath(track, index);
+    const auto relativeFinal = relativeSegmentPath(track, index, container);
     SegmentOutputPaths paths{
-        .partPath = packageRoot_ / temporarySegmentPath(track, index),
+        .partPath = packageRoot_ / temporarySegmentPath(track, index, container),
         .finalPath = packageRoot_ / relativeFinal,
         .relativeFinalPath = relativeFinal,
     };

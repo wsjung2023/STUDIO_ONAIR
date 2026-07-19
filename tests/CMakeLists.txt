@@ -69,6 +69,7 @@ cs_apply_warnings(cs_crash_recovery_fixture)
 
 add_executable(cs_tests
     ${PROJECT_SOURCE_DIR}/src/app/TimelineEditService.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/android/AndroidMediaCodecSession.cpp
     core/ResultTest.cpp
     core/TimebaseTest.cpp
     core/UuidTest.cpp
@@ -156,6 +157,7 @@ add_executable(cs_tests
     project_store/ProjectPackageStoreTest.cpp
     project_store/CrashRecoveryIntegrationTest.cpp
     app/TimelineEditServiceTest.cpp
+    app/AndroidMediaCodecSessionTest.cpp
     fakes/FakeCaptureSourceTest.cpp
     fakes/ManualPushCaptureSourceTest.cpp
     fakes/FakeRecorderTest.cpp
@@ -654,6 +656,12 @@ if(WIN32)
         NAME AndroidPerformanceBudgetPolicy
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidPerformanceBudgetPolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME AndroidMediaCodecPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidMediaCodecPolicyTest.ps1"
             -RepositoryRoot "${PROJECT_SOURCE_DIR}"
     )
     add_test(

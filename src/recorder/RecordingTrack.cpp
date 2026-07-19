@@ -87,14 +87,23 @@ core::Result<std::string> safeSourcePathComponent(const domain::SourceId& source
     return encoded;
 }
 
-std::filesystem::path relativeSegmentPath(const RecordingTrack& track, std::uint64_t index) {
-    const auto extension = track.mediaKind() == TrackMediaKind::Video ? "mkv" : "mka";
+std::filesystem::path relativeSegmentPath(const RecordingTrack& track,
+                                          std::uint64_t index,
+                                          SegmentContainer container) {
+    const auto extension = container == SegmentContainer::Mp4
+                               ? (track.mediaKind() == TrackMediaKind::Video ? "mp4"
+                                                                            : "m4a")
+                               : (track.mediaKind() == TrackMediaKind::Video ? "mkv"
+                                                                            : "mka");
     return std::filesystem::path{roleDirectory(track.role())} / track.pathComponent() /
            segmentFilename(index, extension);
 }
 
-std::filesystem::path temporarySegmentPath(const RecordingTrack& track, std::uint64_t index) {
-    auto path = std::filesystem::path{".tmp"} / relativeSegmentPath(track, index);
+std::filesystem::path temporarySegmentPath(const RecordingTrack& track,
+                                           std::uint64_t index,
+                                           SegmentContainer container) {
+    auto path = std::filesystem::path{".tmp"} /
+                relativeSegmentPath(track, index, container);
     path += ".part";
     return path;
 }

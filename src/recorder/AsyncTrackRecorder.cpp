@@ -320,7 +320,8 @@ core::Result<void> AsyncTrackRecorder::openSegment(core::TimestampNs startTime) 
         std::lock_guard lock{mutex_};
         diskSpaceSnapshot_ = space.value();
     }
-    auto paths = publisher_->begin(config_.track, nextSegmentIndex_, startTime);
+    auto paths = publisher_->begin(config_.track, nextSegmentIndex_, startTime,
+                                   encoder_->container());
     if (!paths.hasValue()) return paths.error();
 
     SegmentEncodeConfig encodeConfig{

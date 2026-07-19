@@ -11,6 +11,7 @@ namespace {
 
 using creator::domain::SourceId;
 using creator::recorder::RecordingTrack;
+using creator::recorder::SegmentContainer;
 using creator::recorder::TrackMediaKind;
 using creator::recorder::TrackRole;
 using creator::recorder::relativeSegmentPath;
@@ -78,6 +79,21 @@ TEST(RecordingTrackTest, TemporaryPathMirrorsFinalPathBelowPackageTmp) {
     const auto screen = track("screen-1", TrackRole::Screen);
     EXPECT_EQ(temporarySegmentPath(screen, 9).generic_string(),
               ".tmp/media/screen/screen-1/segment_000009.mkv.part");
+}
+
+TEST(RecordingTrackTest, SelectsTypedMp4ExtensionsWithoutChangingRolePaths) {
+    const auto screen = track("screen-1", TrackRole::Screen);
+    const auto microphone = track("mic-1", TrackRole::Microphone);
+
+    EXPECT_EQ(relativeSegmentPath(screen, 2, SegmentContainer::Mp4)
+                  .generic_string(),
+              "media/screen/screen-1/segment_000002.mp4");
+    EXPECT_EQ(relativeSegmentPath(microphone, 3, SegmentContainer::Mp4)
+                  .generic_string(),
+              "audio/microphone/mic-1/segment_000003.m4a");
+    EXPECT_EQ(temporarySegmentPath(screen, 2, SegmentContainer::Mp4)
+                  .generic_string(),
+              ".tmp/media/screen/screen-1/segment_000002.mp4.part");
 }
 
 }  // namespace

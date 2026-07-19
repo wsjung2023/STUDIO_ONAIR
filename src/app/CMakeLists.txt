@@ -86,11 +86,15 @@ add_library(cs_app STATIC
     AvatarFrameTrackingCoordinator.cpp
 )
 
-if(CS_ENABLE_FFMPEG)
+if(CS_ENABLE_FFMPEG OR ANDROID)
     target_sources(cs_app PRIVATE
         FfmpegLiveRecordingEngine.h
         FfmpegLiveRecordingEngine.cpp
     )
+    target_compile_definitions(cs_app PRIVATE CS_APP_ENABLE_LIVE_RECORDING=1)
+endif()
+
+if(CS_ENABLE_FFMPEG)
     target_compile_definitions(cs_app PRIVATE CS_APP_ENABLE_FFMPEG=1)
 endif()
 
@@ -129,6 +133,10 @@ if(ANDROID)
         android/AndroidExportDestinationResolver.cpp
         android/AndroidDeviceProfile.h
         android/AndroidDeviceProfile.cpp
+        android/AndroidMediaCodecSession.h
+        android/AndroidMediaCodecSession.cpp
+        android/AndroidMediaCodecSegmentEncoder.h
+        android/AndroidMediaCodecSegmentEncoder.cpp
     )
 endif()
 add_library(CreatorStudio::cs_app ALIAS cs_app)
@@ -152,7 +160,11 @@ target_link_libraries(cs_app
 )
 
 if(CS_ENABLE_FFMPEG)
-    target_link_libraries(cs_app PRIVATE cs_ffmpeg_adapter cs_sync)
+    target_link_libraries(cs_app PRIVATE cs_ffmpeg_adapter)
+endif()
+
+if(CS_ENABLE_FFMPEG OR ANDROID)
+    target_link_libraries(cs_app PRIVATE cs_sync)
 endif()
 
 if(CS_ENABLE_WHISPER)

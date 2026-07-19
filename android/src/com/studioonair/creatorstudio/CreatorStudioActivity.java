@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.content.pm.ApplicationInfo;
 import android.net.Uri;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraDevice;
@@ -15,6 +16,11 @@ import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.AudioPlaybackCaptureConfiguration;
+import android.media.MediaCodec;
+import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
+import android.media.MediaFormat;
+import android.media.MediaMuxer;
 import android.media.MediaRecorder;
 import android.media.projection.MediaProjectionManager;
 import android.media.projection.MediaProjection;
@@ -29,14 +35,18 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.PowerManager;
 import android.util.Size;
+import android.util.Log;
 import android.view.Surface;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.io.FileInputStream;
+import java.io.File;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Arrays;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.qtproject.qt.android.bindings.QtActivity;
 
@@ -87,6 +97,9 @@ public class CreatorStudioActivity extends QtActivity {
     private volatile boolean playbackStopping;
     private volatile long stoppingPlaybackGeneration;
     private volatile long stoppedPlaybackGeneration;
+    private static final AtomicLong nextMediaEncoderHandle = new AtomicLong(1);
+    private static final ConcurrentHashMap<Long, MediaSegmentEncoder> mediaEncoders =
+        new ConcurrentHashMap<>();
 
     public static native void nativeProjectionResult(long generation, boolean granted);
     public static native boolean nativeProjectionFrame(long generation, java.nio.ByteBuffer bytes,
@@ -142,6 +155,383 @@ public class CreatorStudioActivity extends QtActivity {
         if (status >= PowerManager.THERMAL_STATUS_CRITICAL) return 2;
         if (status >= PowerManager.THERMAL_STATUS_SEVERE) return 1;
         return 0;
+    }
+
+    /** Reports whether both hardware-abstracted Android release codecs exist. */
+    public static String mediaEncoderStatus() {
+        try {
+            final MediaCodecList codecs =
+                new MediaCodecList(MediaCodecList.ALL_CODECS);
+            final MediaFormat video = MediaFormat.createVideoFormat(
+                MediaFormat.MIMETYPE_VIDEO_AVC, 1280, 720);
+            video.setInteger(MediaFormat.KEY_COLOR_FORMAT,
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
+            video.setInteger(MediaFormat.KEY_BIT_RATE, 4_000_000);
+            video.setInteger(MediaFormat.KEY_FRAME_RATE, 30);
+            video.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+            if (codecs.findEncoderForFormat(video) == null) {
+                return "Android device has no compatible H.264 encoder";
+            }
+            final MediaFormat audio = MediaFormat.createAudioFormat(
+                MediaFormat.MIMETYPE_AUDIO_AAC, 48_000, 2);
+            audio.setInteger(MediaFormat.KEY_AAC_PROFILE,
+                MediaCodecInfo.CodecProfileLevel.AACObjectLC);
+            audio.setInteger(MediaFormat.KEY_BIT_RATE, 192_000);
+            if (codecs.findEncoderForFormat(audio) == null) {
+                return "Android device has no compatible AAC encoder";
+            }
+            return "";
+        } catch (Throwable error) {
+            return errorMessage(error, "Android MediaCodec probe failed");
+        }
+    }
+
+    public static long createVideoEncoder(String path, int width, int height,
+                                          int bitRate, int frameRate) {
+        if (path == null || path.isEmpty() || width <= 0 || height <= 0 ||
+            bitRate <= 0 || frameRate <= 0) return 0;
+        try {
+            final MediaFormat format = MediaFormat.createVideoFormat(
+                MediaFormat.MIMETYPE_VIDEO_AVC, width, height);
+            format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
+            format.setInteger(MediaFormat.KEY_BIT_RATE, bitRate);
+            format.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate);
+            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+            return registerMediaEncoder(new MediaSegmentEncoder(
+                path, format, true, width, height, 0, 0));
+        } catch (Throwable error) {
+            return 0;
+        }
+    }
+
+    public static long createAudioEncoder(String path, int sampleRate,
+                                          int channels, int bitRate) {
+        if (path == null || path.isEmpty() || sampleRate <= 0 ||
+            channels <= 0 || bitRate <= 0) return 0;
+        try {
+            final MediaFormat format = MediaFormat.createAudioFormat(
+                MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, channels);
+            format.setInteger(MediaFormat.KEY_AAC_PROFILE,
+                MediaCodecInfo.CodecProfileLevel.AACObjectLC);
+            format.setInteger(MediaFormat.KEY_BIT_RATE, bitRate);
+            format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 64 * 1024);
+            return registerMediaEncoder(new MediaSegmentEncoder(
+                path, format, false, 0, 0, sampleRate, channels));
+        } catch (Throwable error) {
+            return 0;
+        }
+    }
+
+    public static String writeVideoEncoderFrame(long handle, ByteBuffer bgra,
+                                                long presentationTimeUs) {
+        final MediaSegmentEncoder encoder = mediaEncoders.get(handle);
+        if (encoder == null) return "Android video encoder handle is stale";
+        try {
+            encoder.writeVideo(bgra, presentationTimeUs);
+            return "";
+        } catch (Throwable error) {
+            return errorMessage(error, "Android video encoding failed");
+        }
+    }
+
+    public static String writeAudioEncoderSamples(long handle, ByteBuffer pcm16,
+                                                  int sampleCount,
+                                                  long presentationTimeUs) {
+        final MediaSegmentEncoder encoder = mediaEncoders.get(handle);
+        if (encoder == null) return "Android audio encoder handle is stale";
+        try {
+            encoder.writeAudio(pcm16, sampleCount, presentationTimeUs);
+            return "";
+        } catch (Throwable error) {
+            return errorMessage(error, "Android audio encoding failed");
+        }
+    }
+
+    public static String finishMediaEncoder(long handle) {
+        final MediaSegmentEncoder encoder = mediaEncoders.remove(handle);
+        if (encoder == null) return "Android media encoder handle is stale";
+        try {
+            encoder.finish();
+            return "";
+        } catch (Throwable error) {
+            encoder.abort();
+            return errorMessage(error, "Android media encoder finalization failed");
+        }
+    }
+
+    public static void abortMediaEncoder(long handle) {
+        final MediaSegmentEncoder encoder = mediaEncoders.remove(handle);
+        if (encoder != null) encoder.abort();
+    }
+
+    private static long registerMediaEncoder(MediaSegmentEncoder encoder) {
+        long handle;
+        do {
+            handle = nextMediaEncoderHandle.getAndIncrement();
+            if (handle <= 0) {
+                nextMediaEncoderHandle.compareAndSet(handle + 1, 1);
+                handle = nextMediaEncoderHandle.getAndIncrement();
+            }
+        } while (mediaEncoders.putIfAbsent(handle, encoder) != null);
+        return handle;
+    }
+
+    private static String errorMessage(Throwable error, String fallback) {
+        final String message = error == null ? null : error.getMessage();
+        return message == null || message.isEmpty() ? fallback : message;
+    }
+
+    private static final class MediaSegmentEncoder {
+        private static final long CODEC_TIMEOUT_US = 10_000;
+        private final String path;
+        private final boolean video;
+        private final int width;
+        private final int height;
+        private final int sampleRate;
+        private final int channels;
+        private final MediaCodec.BufferInfo bufferInfo =
+            new MediaCodec.BufferInfo();
+        private MediaCodec codec;
+        private MediaMuxer muxer;
+        private int muxerTrack = -1;
+        private boolean muxerStarted;
+        private boolean closed;
+        private long lastPresentationTimeUs = -1;
+
+        MediaSegmentEncoder(String path, MediaFormat format, boolean video,
+                            int width, int height, int sampleRate, int channels)
+                throws Exception {
+            this.path = path;
+            this.video = video;
+            this.width = width;
+            this.height = height;
+            this.sampleRate = sampleRate;
+            this.channels = channels;
+            try {
+                codec = MediaCodec.createEncoderByType(format.getString(
+                    MediaFormat.KEY_MIME));
+                codec.configure(format, null, null,
+                    MediaCodec.CONFIGURE_FLAG_ENCODE);
+                muxer = new MediaMuxer(path,
+                    MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+                codec.start();
+            } catch (Throwable error) {
+                release(false);
+                throw error;
+            }
+        }
+
+        void writeVideo(ByteBuffer bgra, long presentationTimeUs)
+                throws Exception {
+            ensureOpen(true);
+            if (bgra == null || !bgra.isDirect() ||
+                bgra.capacity() < width * height * 4L) {
+                throw new IllegalArgumentException("BGRA frame size is invalid");
+            }
+            final int inputIndex = awaitInputBuffer();
+            final Image inputImage = codec.getInputImage(inputIndex);
+            if (inputImage == null) {
+                throw new IllegalStateException(
+                    "H.264 encoder does not expose flexible YUV input");
+            }
+            try {
+                fillYuv420(inputImage, bgra, width, height);
+            } finally {
+                inputImage.close();
+            }
+            final long pts = monotonicPresentationTime(presentationTimeUs);
+            codec.queueInputBuffer(inputIndex, 0, 0, pts, 0);
+            drain(false);
+        }
+
+        void writeAudio(ByteBuffer pcm16, int sampleCount,
+                        long presentationTimeUs) throws Exception {
+            ensureOpen(false);
+            if (pcm16 == null || !pcm16.isDirect() || sampleCount <= 0 ||
+                pcm16.capacity() < sampleCount * 2L) {
+                throw new IllegalArgumentException("PCM16 block size is invalid");
+            }
+            final ByteBuffer source = pcm16.duplicate();
+            source.position(0);
+            source.limit(sampleCount * 2);
+            final int bytesPerFrame = channels * 2;
+            long framesWritten = 0;
+            while (source.hasRemaining()) {
+                final int inputIndex = awaitInputBuffer();
+                final ByteBuffer input = codec.getInputBuffer(inputIndex);
+                if (input == null) {
+                    throw new IllegalStateException(
+                        "AAC encoder input buffer is unavailable");
+                }
+                input.clear();
+                int bytes = Math.min(input.remaining(), source.remaining());
+                bytes -= bytes % bytesPerFrame;
+                if (bytes <= 0) {
+                    throw new IllegalStateException(
+                        "AAC encoder input buffer cannot hold one frame");
+                }
+                final int oldLimit = source.limit();
+                source.limit(source.position() + bytes);
+                input.put(source);
+                source.limit(oldLimit);
+                final long pts = monotonicPresentationTime(
+                    presentationTimeUs + framesWritten * 1_000_000L / sampleRate);
+                codec.queueInputBuffer(inputIndex, 0, bytes, pts, 0);
+                framesWritten += bytes / bytesPerFrame;
+                drain(false);
+            }
+        }
+
+        void finish() throws Exception {
+            ensureOpen(video);
+            final int inputIndex = awaitInputBuffer();
+            codec.queueInputBuffer(inputIndex, 0, 0,
+                Math.max(0, lastPresentationTimeUs + 1),
+                MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+            drain(true);
+            release(true);
+        }
+
+        void abort() {
+            release(false);
+            new File(path).delete();
+        }
+
+        private void ensureOpen(boolean expectedVideo) {
+            if (closed || codec == null || muxer == null || video != expectedVideo) {
+                throw new IllegalStateException("Media encoder is not active");
+            }
+        }
+
+        private int awaitInputBuffer() throws Exception {
+            for (int attempt = 0; attempt < 200; ++attempt) {
+                final int index = codec.dequeueInputBuffer(CODEC_TIMEOUT_US);
+                if (index >= 0) return index;
+                drain(false);
+            }
+            throw new IllegalStateException("MediaCodec input timed out");
+        }
+
+        private long monotonicPresentationTime(long requested) {
+            lastPresentationTimeUs = Math.max(requested,
+                lastPresentationTimeUs + 1);
+            return lastPresentationTimeUs;
+        }
+
+        private void drain(boolean endOfStream) throws Exception {
+            int idleCount = 0;
+            while (true) {
+                final int outputIndex = codec.dequeueOutputBuffer(
+                    bufferInfo, endOfStream ? CODEC_TIMEOUT_US : 0);
+                if (outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    if (!endOfStream) return;
+                    if (++idleCount >= 500) {
+                        throw new IllegalStateException(
+                            "MediaCodec end-of-stream timed out");
+                    }
+                    continue;
+                }
+                if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    if (muxerStarted) {
+                        throw new IllegalStateException(
+                            "MediaCodec output format changed twice");
+                    }
+                    muxerTrack = muxer.addTrack(codec.getOutputFormat());
+                    muxer.start();
+                    muxerStarted = true;
+                    continue;
+                }
+                if (outputIndex < 0) continue;
+                idleCount = 0;
+                final ByteBuffer output = codec.getOutputBuffer(outputIndex);
+                if ((bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                    bufferInfo.size = 0;
+                }
+                if (bufferInfo.size > 0) {
+                    if (!muxerStarted || output == null) {
+                        codec.releaseOutputBuffer(outputIndex, false);
+                        throw new IllegalStateException(
+                            "MediaMuxer was not ready for codec output");
+                    }
+                    output.position(bufferInfo.offset);
+                    output.limit(bufferInfo.offset + bufferInfo.size);
+                    muxer.writeSampleData(muxerTrack, output, bufferInfo);
+                }
+                final boolean eos =
+                    (bufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
+                codec.releaseOutputBuffer(outputIndex, false);
+                if (eos) return;
+                if (!endOfStream) continue;
+            }
+        }
+
+        private void release(boolean completed) {
+            if (closed) return;
+            closed = true;
+            if (codec != null) {
+                try { codec.stop(); } catch (Throwable ignored) {}
+                try { codec.release(); } catch (Throwable ignored) {}
+                codec = null;
+            }
+            if (muxer != null) {
+                if (muxerStarted) {
+                    try { muxer.stop(); } catch (Throwable ignored) {
+                        if (completed) new File(path).delete();
+                    }
+                }
+                try { muxer.release(); } catch (Throwable ignored) {}
+                muxer = null;
+            }
+        }
+
+        private static void fillYuv420(Image image, ByteBuffer bgra,
+                                       int width, int height) {
+            final Image.Plane[] planes = image.getPlanes();
+            if (planes.length < 3) {
+                throw new IllegalStateException("Flexible YUV image has no planes");
+            }
+            final ByteBuffer yPlane = planes[0].getBuffer();
+            final ByteBuffer uPlane = planes[1].getBuffer();
+            final ByteBuffer vPlane = planes[2].getBuffer();
+            final int yRowStride = planes[0].getRowStride();
+            final int yPixelStride = planes[0].getPixelStride();
+            final int uRowStride = planes[1].getRowStride();
+            final int uPixelStride = planes[1].getPixelStride();
+            final int vRowStride = planes[2].getRowStride();
+            final int vPixelStride = planes[2].getPixelStride();
+            final int yBase = yPlane.position();
+            final int uBase = uPlane.position();
+            final int vBase = vPlane.position();
+            for (int y = 0; y < height; ++y) {
+                for (int x = 0; x < width; ++x) {
+                    final int pixel = (y * width + x) * 4;
+                    final int blue = bgra.get(pixel) & 0xff;
+                    final int green = bgra.get(pixel + 1) & 0xff;
+                    final int red = bgra.get(pixel + 2) & 0xff;
+                    final int luma = clamp8(
+                        ((66 * red + 129 * green + 25 * blue + 128) >> 8) + 16);
+                    yPlane.put(yBase + y * yRowStride + x * yPixelStride,
+                        (byte) luma);
+                    if ((x & 1) == 0 && (y & 1) == 0) {
+                        final int chromaX = x / 2;
+                        final int chromaY = y / 2;
+                        final int u = clamp8(
+                            ((-38 * red - 74 * green + 112 * blue + 128) >> 8) + 128);
+                        final int v = clamp8(
+                            ((112 * red - 94 * green - 18 * blue + 128) >> 8) + 128);
+                        uPlane.put(uBase + chromaY * uRowStride +
+                            chromaX * uPixelStride, (byte) u);
+                        vPlane.put(vBase + chromaY * vRowStride +
+                            chromaX * vPixelStride, (byte) v);
+                    }
+                }
+            }
+        }
+
+        private static int clamp8(int value) {
+            return Math.max(0, Math.min(255, value));
+        }
     }
 
     /** Copies a completed private-cache render into a user-selected SAF URI. */
@@ -203,6 +593,81 @@ public class CreatorStudioActivity extends QtActivity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         activeActivity = this;
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0 &&
+            getIntent().getBooleanExtra("creatorstudio.codecSelfTest", false)) {
+            new Thread(this::runMediaEncoderSelfTest,
+                "CreatorStudioCodecSelfTest").start();
+        }
+    }
+
+    private void runMediaEncoderSelfTest() {
+        long videoHandle = 0;
+        long audioHandle = 0;
+        final File videoFile = new File(getCacheDir(), "codec-self-test.mp4");
+        final File audioFile = new File(getCacheDir(), "codec-self-test.m4a");
+        videoFile.delete();
+        audioFile.delete();
+        try {
+            final String status = mediaEncoderStatus();
+            if (!status.isEmpty()) throw new IllegalStateException(status);
+            videoHandle = createVideoEncoder(videoFile.getAbsolutePath(),
+                64, 64, 256_000, 30);
+            if (videoHandle == 0) {
+                throw new IllegalStateException("video encoder creation failed");
+            }
+            final ByteBuffer bgra = ByteBuffer.allocateDirect(64 * 64 * 4);
+            for (int pixel = 0; pixel < 64 * 64; ++pixel) {
+                bgra.put((byte) 0x20);
+                bgra.put((byte) 0x80);
+                bgra.put((byte) 0xe0);
+                bgra.put((byte) 0xff);
+            }
+            for (int frame = 0; frame < 3; ++frame) {
+                final String error = writeVideoEncoderFrame(
+                    videoHandle, bgra, frame * 33_333L);
+                if (!error.isEmpty()) throw new IllegalStateException(error);
+            }
+            final String videoFinish = finishMediaEncoder(videoHandle);
+            videoHandle = 0;
+            if (!videoFinish.isEmpty()) {
+                throw new IllegalStateException(videoFinish);
+            }
+
+            audioHandle = createAudioEncoder(audioFile.getAbsolutePath(),
+                48_000, 2, 96_000);
+            if (audioHandle == 0) {
+                throw new IllegalStateException("audio encoder creation failed");
+            }
+            final int sampleCount = 4_800 * 2;
+            final ByteBuffer pcm = ByteBuffer.allocateDirect(sampleCount * 2)
+                .order(ByteOrder.nativeOrder());
+            for (int sample = 0; sample < sampleCount; ++sample) {
+                pcm.putShort((short) 0);
+            }
+            final String audioWrite = writeAudioEncoderSamples(
+                audioHandle, pcm, sampleCount, 0);
+            if (!audioWrite.isEmpty()) {
+                throw new IllegalStateException(audioWrite);
+            }
+            final String audioFinish = finishMediaEncoder(audioHandle);
+            audioHandle = 0;
+            if (!audioFinish.isEmpty()) {
+                throw new IllegalStateException(audioFinish);
+            }
+            if (videoFile.length() <= 0 || audioFile.length() <= 0) {
+                throw new IllegalStateException("MediaMuxer output is empty");
+            }
+            Log.i("CreatorStudioCodec", "PASS video=" + videoFile.length() +
+                " audio=" + audioFile.length());
+        } catch (Throwable error) {
+            Log.e("CreatorStudioCodec", "FAIL " +
+                errorMessage(error, "unknown codec error"), error);
+        } finally {
+            if (videoHandle != 0) abortMediaEncoder(videoHandle);
+            if (audioHandle != 0) abortMediaEncoder(audioHandle);
+            videoFile.delete();
+            audioFile.delete();
+        }
     }
 
     @Override
