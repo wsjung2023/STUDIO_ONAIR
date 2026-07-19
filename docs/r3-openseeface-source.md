@@ -30,3 +30,9 @@ switches. The supervisor owns the child handle, reaps exit codes without a
 blocking poll, and terminates an owned worker during `stop()`. It does not
 assume a camera, UDP port, timestamp, or model path; pair it with the UDP
 source and bind the selected port in the application layer.
+
+The application layer now also exposes `AvatarFrameTrackingCoordinator`. It
+consumes the existing bounded camera preview mailbox and routes one latest
+`VideoFrame` through an in-process `ITrackingProvider` and the same motion
+pipeline. A capture terminal error wins over any pending frame, and an empty
+mailbox produces no synthetic sample.

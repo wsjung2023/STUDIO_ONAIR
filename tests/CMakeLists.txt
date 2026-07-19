@@ -167,6 +167,7 @@ add_executable(cs_app_tests
     app/DeviceCaptureControllerTest.cpp
     app/ProjectSegmentLifecycleSinkTest.cpp
     app/MultiTrackRecordingServiceTest.cpp
+    app/AvatarFrameTrackingCoordinatorTest.cpp
     app/QmlSmokeTest.cpp
 )
 

@@ -78,6 +78,8 @@ add_library(cs_app STATIC
     ExportWorker.cpp
     ExportController.h
     ExportController.cpp
+    AvatarFrameTrackingCoordinator.h
+    AvatarFrameTrackingCoordinator.cpp
 )
 
 if(CS_ENABLE_FFMPEG)
@@ -122,6 +124,7 @@ target_link_libraries(cs_app
         Qt6::Core
         Qt6::Quick
         cs_capture
+        cs_avatar
         cs_recorder
         cs_domain
         cs_edit_engine
