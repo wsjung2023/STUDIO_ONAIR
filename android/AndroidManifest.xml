@@ -37,6 +37,11 @@
                 android:value="" />
         </activity>
 
+        <service
+            android:name="com.studioonair.creatorstudio.CreatorStudioProjectionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.qtprovider"

@@ -1,6 +1,7 @@
 #include "app/android/AndroidScreenCaptureBackend.h"
 
 #include "capture/AndroidProjectionSession.h"
+#include "capture/ScreenCaptureFrameAssembler.h"
 #include "core/AppError.h"
 #include "domain/Identifiers.h"
 
@@ -10,6 +11,7 @@
 #include <QScreen>
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -24,6 +26,12 @@ constexpr const char* kActivityClass =
 
 class ProjectionConsentState final {
 public:
+    [[nodiscard]] std::optional<std::uint64_t> approvedGeneration() const {
+        std::lock_guard lock(mutex_);
+        return session_.state() == capture::ProjectionSessionState::Starting
+                   ? std::optional<std::uint64_t>{session_.generation()}
+                   : std::nullopt;
+    }
     [[nodiscard]] capture::ScreenCapturePermissionStatus status() const noexcept {
         std::lock_guard lock(mutex_);
         switch (session_.state()) {
@@ -70,6 +78,8 @@ private:
 
 std::mutex callbackMutex;
 std::weak_ptr<ProjectionConsentState> callbackState;
+class AndroidScreenCaptureSource;
+AndroidScreenCaptureSource* callbackSource{};
 
 class AndroidScreenPermission final : public capture::IScreenCapturePermission {
 public:
@@ -128,14 +138,85 @@ public:
     }
 };
 
+class AndroidScreenCaptureSource final : public capture::IScreenCaptureSource {
+public:
+    AndroidScreenCaptureSource(std::shared_ptr<ProjectionConsentState> state,
+                               std::shared_ptr<capture::IVideoFrameSink> sink)
+        : state_(std::move(state)), sink_(std::move(sink)),
+          id_(domain::SourceId::create("android-screen").value()) {}
+    ~AndroidScreenCaptureSource() override { static_cast<void>(stop()); }
+    [[nodiscard]] domain::SourceId id() const override { return id_; }
+    [[nodiscard]] std::string displayName() const override { return "Android display"; }
+    [[nodiscard]] core::Result<void> start(const capture::CaptureConfig& config) override {
+        const auto generation = state_->approvedGeneration();
+        if (!generation) return core::AppError{core::ErrorCode::InvalidState,
+                                                "Android screen recording permission is not active"};
+        generation_ = *generation;
+        {
+            std::lock_guard lock(callbackMutex);
+            callbackSource = this;
+        }
+        QJniObject::callStaticMethod<void>(kActivityClass, "startProjection", "(JII)V",
+                                            static_cast<jlong>(generation_),
+                                            static_cast<jint>(config.targetWidth),
+                                            static_cast<jint>(config.targetHeight));
+        QJniEnvironment environment;
+        if (environment.checkAndClearExceptions()) return core::AppError{
+            core::ErrorCode::IoFailure, "Android could not start MediaProjection"};
+        return core::ok();
+    }
+    [[nodiscard]] core::Result<void> stop() override {
+        std::lock_guard lock(callbackMutex);
+        if (callbackSource == this) callbackSource = nullptr;
+        return core::ok();
+    }
+    void stopAsync(StopCompletion completion) override {
+        const auto result = stop();
+        if (completion) completion(result);
+    }
+    [[nodiscard]] capture::CaptureStats stats() const noexcept override { return stats_; }
+    [[nodiscard]] bool onProjectionFrame(const std::byte* bytes, std::size_t size,
+                                         std::uint32_t width, std::uint32_t height,
+                                         std::uint32_t rowStride, std::uint32_t pixelStride,
+                                         std::int64_t timestampNs) noexcept {
+        if (!bytes || width == 0 || height == 0 || pixelStride < 4 ||
+            rowStride < width * pixelStride || size < static_cast<std::size_t>(rowStride) * height) {
+            ++stats_.invalidFrames; return false;
+        }
+        auto pixels = std::make_shared<std::vector<std::byte>>(static_cast<std::size_t>(width) * height * 4);
+        for (std::uint32_t y = 0; y < height; ++y) for (std::uint32_t x = 0; x < width; ++x) {
+            const auto source = static_cast<std::size_t>(y) * rowStride + x * pixelStride;
+            const auto target = (static_cast<std::size_t>(y) * width + x) * 4;
+            (*pixels)[target] = bytes[source + 2]; (*pixels)[target + 1] = bytes[source + 1];
+            (*pixels)[target + 2] = bytes[source]; (*pixels)[target + 3] = bytes[source + 3];
+        }
+        auto assembled = assembler_.assemble(capture::NativeScreenFrame{
+            .timestamp = {timestampNs, 1'000'000'000}, .width = width, .height = height,
+            .pixelFormat = media::PixelFormat::Bgra8, .platformHandle = std::move(pixels)});
+        if (!assembled.hasValue() || !assembled.value()) { ++stats_.invalidFrames; return false; }
+        if (!started_) { started_ = true; sink_->onCaptureStarted(); }
+        sink_->onVideoFrame(std::move(*assembled.value())); ++stats_.receivedFrames; return true;
+    }
+    void onProjectionRevoked() noexcept {
+        sink_->onCaptureError(core::AppError{core::ErrorCode::InvalidState,
+                                             "Android revoked screen recording permission"});
+    }
+private:
+    std::shared_ptr<ProjectionConsentState> state_; std::shared_ptr<capture::IVideoFrameSink> sink_;
+    domain::SourceId id_; capture::ScreenCaptureFrameAssembler assembler_; capture::CaptureStats stats_{};
+    std::uint64_t generation_{}; bool started_{};
+};
+
 class AndroidScreenSourceFactory final : public capture::IScreenCaptureSourceFactory {
 public:
+    explicit AndroidScreenSourceFactory(std::shared_ptr<ProjectionConsentState> state) : state_(std::move(state)) {}
     [[nodiscard]] core::Result<std::unique_ptr<capture::IScreenCaptureSource>> create(
-        const domain::CaptureTargetId&, std::shared_ptr<capture::IVideoFrameSink>) override {
-        return core::AppError{
-            core::ErrorCode::InvalidState,
-            "Android screen capture is awaiting the MediaProjection frame adapter"};
+        const domain::CaptureTargetId&, std::shared_ptr<capture::IVideoFrameSink> sink) override {
+        if (!sink) return core::AppError{core::ErrorCode::InvalidArgument, "screen capture sink is required"};
+        return std::unique_ptr<capture::IScreenCaptureSource>{
+            std::make_unique<AndroidScreenCaptureSource>(state_, std::move(sink))};
     }
+private: std::shared_ptr<ProjectionConsentState> state_;
 };
 
 std::shared_ptr<ProjectionConsentState> activeCallbackState() {
@@ -153,7 +234,26 @@ AndroidScreenCaptureBackend makeAndroidScreenCaptureBackend() {
     }
     return {.permission = std::make_unique<AndroidScreenPermission>(state),
             .discovery = std::make_unique<AndroidScreenDiscovery>(),
-            .sourceFactory = std::make_unique<AndroidScreenSourceFactory>()};
+            .sourceFactory = std::make_unique<AndroidScreenSourceFactory>(std::move(state))};
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_studioonair_creatorstudio_CreatorStudioActivity_nativeProjectionFrame(
+    JNIEnv* environment, jclass, jlong, jobject buffer, jint width, jint height,
+    jint rowStride, jint pixelStride, jlong timestampNs) {
+    std::lock_guard lock(creator::app::android::callbackMutex);
+    if (!creator::app::android::callbackSource) return JNI_FALSE;
+    auto* bytes = static_cast<std::byte*>(environment->GetDirectBufferAddress(buffer));
+    const auto size = environment->GetDirectBufferCapacity(buffer);
+    return creator::app::android::callbackSource->onProjectionFrame(
+               bytes, size < 0 ? 0 : static_cast<std::size_t>(size), width, height,
+               rowStride, pixelStride, timestampNs) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_studioonair_creatorstudio_CreatorStudioActivity_nativeProjectionRevoked(JNIEnv*, jclass, jlong) {
+    std::lock_guard lock(creator::app::android::callbackMutex);
+    if (creator::app::android::callbackSource) creator::app::android::callbackSource->onProjectionRevoked();
 }
 
 }  // namespace creator::app::android
