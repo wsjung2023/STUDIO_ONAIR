@@ -27,6 +27,10 @@ cs_add_qtfree_library(cs_avatar
         openseeface/OpenSeeFaceParser.cpp
         openseeface/OpenSeeFaceUdpSource.h
         openseeface/OpenSeeFaceUdpSource.cpp
+        openseeface/OpenSeeFaceProcessSupervisor.h
+        openseeface/OpenSeeFaceProcessSupervisor.cpp
+        openseeface/OpenSeeFaceProcessSupervisor.h
+        openseeface/OpenSeeFaceProcessSupervisor.cpp
     DEPENDS
         cs_core
         cs_media

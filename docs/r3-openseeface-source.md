@@ -22,3 +22,11 @@ lifecycle and connects `start → poll → pipeline → stop` without introducin
 hidden thread or clock. Camera pixel readback, MediaPipe/OpenSeeFace model
 process supervision, Inochi2D rendering, and Studio/Editor wiring remain the
 next integration stage; no model weights are bundled by this change.
+
+`OpenSeeFaceProcessSupervisor` now provides the process-lifecycle boundary for
+an optional external worker. The caller supplies the executable and complete
+argument list because OpenSeeFace distributions expose different launch
+switches. The supervisor owns the child handle, reaps exit codes without a
+blocking poll, and terminates an owned worker during `stop()`. It does not
+assume a camera, UDP port, timestamp, or model path; pair it with the UDP
+source and bind the selected port in the application layer.

@@ -83,6 +83,7 @@ add_executable(cs_tests
     avatar/PrimaryFaceSelectorTest.cpp
     avatar/openseeface/OpenSeeFaceParserTest.cpp
     avatar/OpenSeeFaceUdpSourceTest.cpp
+    avatar/OpenSeeFaceProcessSupervisorTest.cpp
     avatar/AvatarMotionPipelineTest.cpp
     avatar/AvatarTrackingSessionTest.cpp
     recorder/RecordingTrackTest.cpp
