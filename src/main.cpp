@@ -22,6 +22,7 @@
 #include "capture/macos/MacScreenCaptureBackend.h"
 #include "capture/macos/MacDeviceCaptureBackend.h"
 #elif defined(ANDROID)
+#include "app/android/AndroidDeviceCaptureBackend.h"
 #include "app/android/AndroidScreenCaptureBackend.h"
 #endif
 #include "project_store/ProjectPackageStore.h"
@@ -105,7 +106,7 @@ int main(int argc, char* argv[]) {
         std::move(screenCaptureBackend.sourceFactory), &app};
 #elif defined(ANDROID)
     creator::app::DeviceCaptureController deviceCaptureController{
-        std::make_unique<creator::capture::UnsupportedDeviceCaptureBackend>(), &app};
+        creator::app::android::makeAndroidDeviceCaptureBackend(), &app};
     auto androidScreenCaptureBackend = creator::app::android::makeAndroidScreenCaptureBackend();
     creator::app::ScreenCaptureController screenCaptureController{
         std::move(androidScreenCaptureBackend.permission),

@@ -119,6 +119,8 @@ endif()
 
 if(ANDROID)
     target_sources(cs_app PRIVATE
+        android/AndroidDeviceCaptureBackend.h
+        android/AndroidDeviceCaptureBackend.cpp
         android/AndroidScreenCaptureBackend.h
         android/AndroidScreenCaptureBackend.cpp
     )

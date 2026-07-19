@@ -608,6 +608,12 @@ if(WIN32)
             -RepositoryRoot "${PROJECT_SOURCE_DIR}"
     )
     add_test(
+        NAME AndroidDeviceCapturePolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidDeviceCapturePolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
         NAME AndroidManifestPolicy
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidManifestPolicyTest.ps1"
