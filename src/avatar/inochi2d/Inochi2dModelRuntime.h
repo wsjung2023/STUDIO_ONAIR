@@ -1,11 +1,13 @@
 #pragma once
 
 #include "avatar/AvatarParameterMapper.h"
+#include "avatar/AvatarSoftwareRasterizer.h"
 #include "core/Result.h"
 
 #include <filesystem>
 #include <memory>
 #include <span>
+#include <vector>
 
 namespace creator::avatar::inochi2d {
 
@@ -27,6 +29,10 @@ public:
     [[nodiscard]] core::Result<void> applyParameters(
         std::span<const AvatarParameterValue> parameters);
     [[nodiscard]] core::Result<void> update(float deltaSeconds);
+    /// Advances the puppet, asks the SDK to build its draw list, and copies
+    /// the default 2D-position draw batches into renderer-neutral storage.
+    [[nodiscard]] core::Result<std::vector<AvatarSoftwareRenderInput>>
+    renderSnapshot(float deltaSeconds);
     void close() noexcept;
 
 private:

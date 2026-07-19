@@ -106,3 +106,10 @@ coupling it to a particular model SDK.
 The rasterizer also composites ordered textured batches with straight-alpha
 source-over blending, which is the shape needed when an Inochi2D draw list
 references more than one texture.
+
+When the optional SDK is present, `Inochi2dModelRuntime::renderSnapshot()` now
+advances physics, invokes `in_puppet_draw`, validates the default 2D vertex and
+32-bit index buffers, converts RGB/RGBA texture bytes to BGRA, and returns
+renderer-neutral batches. Unsupported SDK symbols, layouts, malformed commands,
+or texture failures remain explicit errors; the core build still has no SDK
+link-time dependency.
