@@ -45,7 +45,7 @@ public:
     [[nodiscard]] std::optional<RawCursorSample> poll() override;
 
     /// Returns a startup/runtime error observed by the message thread, if any.
-    [[nodiscard]] std::optional<core::AppError> error() const;
+    [[nodiscard]] std::optional<core::AppError> error() const override;
 
     /// Number of oldest samples discarded when the bounded queue was full.
     [[nodiscard]] std::uint64_t droppedSamples() const noexcept;
@@ -59,4 +59,3 @@ private:
 };
 
 }  // namespace creator::cursor::windows
-
