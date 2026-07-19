@@ -21,6 +21,7 @@ include(GoogleTest)
 
 add_executable(cs_platform_release_tests
     platform_release/PlatformCapabilityTest.cpp
+    platform_release/MobilePerformancePolicyTest.cpp
     platform_release/ReleaseManifestTest.cpp
 )
 target_link_libraries(cs_platform_release_tests
@@ -630,6 +631,12 @@ if(WIN32)
         NAME MobileAdaptiveLayoutPolicy
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tests/scripts/MobileAdaptiveLayoutPolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME AndroidPerformanceBudgetPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidPerformanceBudgetPolicyTest.ps1"
             -RepositoryRoot "${PROJECT_SOURCE_DIR}"
     )
     add_test(

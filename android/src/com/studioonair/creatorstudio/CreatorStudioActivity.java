@@ -1,5 +1,6 @@
 package com.studioonair.creatorstudio;
 
+import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
 import android.Manifest;
@@ -26,6 +27,7 @@ import android.os.Bundle;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.PowerManager;
 import android.util.Size;
 import android.view.Surface;
 
@@ -104,6 +106,43 @@ public class CreatorStudioActivity extends QtActivity {
         int sampleCount, int sampleRate, int channels, long timestampNs);
     public static native void nativeSystemAudioFailed(long generation);
     public static native void nativeSystemAudioStopped(long generation);
+
+    public static int deviceMemoryClassMiB() {
+        final CreatorStudioActivity activity = activeActivity;
+        if (activity == null) return 0;
+        final ActivityManager manager =
+            (ActivityManager) activity.getSystemService(Context.ACTIVITY_SERVICE);
+        return manager == null ? 0 : manager.getMemoryClass();
+    }
+
+    public static boolean isLowRamDevice() {
+        final CreatorStudioActivity activity = activeActivity;
+        if (activity == null) return true;
+        final ActivityManager manager =
+            (ActivityManager) activity.getSystemService(Context.ACTIVITY_SERVICE);
+        return manager == null || manager.isLowRamDevice();
+    }
+
+    public static boolean isPowerSaveMode() {
+        final CreatorStudioActivity activity = activeActivity;
+        if (activity == null) return true;
+        final PowerManager manager =
+            (PowerManager) activity.getSystemService(Context.POWER_SERVICE);
+        return manager == null || manager.isPowerSaveMode();
+    }
+
+    /** Returns 0 nominal, 1 serious, or 2 critical for the shared policy. */
+    public static int thermalState() {
+        final CreatorStudioActivity activity = activeActivity;
+        if (activity == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return 0;
+        final PowerManager manager =
+            (PowerManager) activity.getSystemService(Context.POWER_SERVICE);
+        if (manager == null) return 0;
+        final int status = manager.getCurrentThermalStatus();
+        if (status >= PowerManager.THERMAL_STATUS_CRITICAL) return 2;
+        if (status >= PowerManager.THERMAL_STATUS_SEVERE) return 1;
+        return 0;
+    }
 
     /** Copies a completed private-cache render into a user-selected SAF URI. */
     public static String publishExport(String stagedPath, String destinationUri,

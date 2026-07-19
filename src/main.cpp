@@ -23,6 +23,7 @@
 #include "capture/macos/MacDeviceCaptureBackend.h"
 #elif defined(ANDROID)
 #include "app/android/AndroidDeviceCaptureBackend.h"
+#include "app/android/AndroidDeviceProfile.h"
 #include "app/android/AndroidExportDestinationResolver.h"
 #include "app/android/AndroidScreenCaptureBackend.h"
 #endif
@@ -39,7 +40,6 @@
 #include "audio_dsp/AudioCleanupChain.h"
 #include "audio_dsp/AudioFormat.h"
 #include "rnnoise_adapter/RnnoiseDenoiseProcessor.h"
-#include <QDebug>
 #endif
 #if defined(CS_APP_ENABLE_MLT)
 #include "app/ProjectExportEngine.h"
@@ -47,6 +47,7 @@
 #endif
 
 #include <QGuiApplication>
+#include <QDebug>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <qqml.h>
@@ -222,6 +223,26 @@ int main(int argc, char* argv[]) {
         std::move(exportEngine),
         std::make_unique<creator::app::android::AndroidExportDestinationResolver>(),
         &app};
+    const auto performancePolicy =
+        creator::app::android::currentAndroidPerformancePolicy();
+    if (performancePolicy.hasValue()) {
+        const auto& budget = performancePolicy.value().budget();
+        exportController.setResourceConstraints(
+            budget.maximumExportHeight, budget.foregroundExportRequired,
+            budget.exportAllowed);
+    } else {
+        qWarning().noquote()
+            << QString::fromStdString(performancePolicy.error().message());
+        exportController.setResourceConstraints(1'080, true, true);
+    }
+    exportController.setApplicationActive(
+        app.applicationState() == Qt::ApplicationActive);
+    QObject::connect(
+        &app, &QGuiApplication::applicationStateChanged, &exportController,
+        [&exportController](Qt::ApplicationState state) {
+            exportController.setApplicationActive(
+                state == Qt::ApplicationActive);
+        });
 #else
     creator::app::ExportController exportController{std::move(exportEngine), &app};
 #endif

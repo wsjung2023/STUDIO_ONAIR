@@ -127,6 +127,8 @@ if(ANDROID)
         android/AndroidScreenCaptureBackend.cpp
         android/AndroidExportDestinationResolver.h
         android/AndroidExportDestinationResolver.cpp
+        android/AndroidDeviceProfile.h
+        android/AndroidDeviceProfile.cpp
     )
 endif()
 add_library(CreatorStudio::cs_app ALIAS cs_app)
@@ -144,6 +146,7 @@ target_link_libraries(cs_app
         cs_domain
         cs_edit_engine
         cs_transcription
+        cs_platform_release
     PRIVATE
         cs_project_store
 )

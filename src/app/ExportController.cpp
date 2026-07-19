@@ -37,10 +37,13 @@ ExportController::ExportController(
                 busy_ = false;
                 emit progressChanged();
                 emit busyChanged();
-                setStatus(message.isEmpty()
-                              ? (success ? tr("Export completed")
-                                         : tr("Export stopped"))
-                              : message);
+                const bool constrained = std::exchange(constraintCancellation_, false);
+                setStatus(constrained
+                              ? tr("Export stopped because the app left the foreground")
+                              : message.isEmpty()
+                                    ? (success ? tr("Export completed")
+                                               : tr("Export stopped"))
+                                    : message);
                 emit exportFinished(success);
             });
     workerThread_.start();
@@ -74,6 +77,31 @@ void ExportController::clearSource() {
     emit sourceChanged();
 }
 
+void ExportController::setResourceConstraints(
+    std::uint32_t maximumExportHeight, bool foregroundExportRequired,
+    bool exportAllowed) {
+    maximumExportHeight_ = maximumExportHeight;
+    foregroundExportRequired_ = foregroundExportRequired;
+    exportAllowed_ = exportAllowed;
+    emit constraintsChanged();
+    if (busy_ && !exportAllowed_ && canCancel()) {
+        constraintCancellation_ = true;
+        cancellationRequested_->store(true, std::memory_order_release);
+        setStatus(tr("Stopping export because the device is thermally constrained"));
+    }
+}
+
+void ExportController::setApplicationActive(bool active) {
+    if (applicationActive_ == active) return;
+    applicationActive_ = active;
+    emit constraintsChanged();
+    if (!applicationActive_ && foregroundExportRequired_ && canCancel()) {
+        constraintCancellation_ = true;
+        cancellationRequested_->store(true, std::memory_order_release);
+        setStatus(tr("Stopping export before the app enters the background"));
+    }
+}
+
 bool ExportController::canCancel() const noexcept {
     return busy_ &&
            state_ != static_cast<int>(edit_engine::RenderJobState::Publishing);
@@ -84,6 +112,7 @@ void ExportController::startExport() {
         if (!request_.has_value()) setStatus(tr("No export request is ready"));
         return;
     }
+    if (!constraintsPermitStart()) return;
     busy_ = true;
     progress_ = 0.0;
     state_ = static_cast<int>(edit_engine::RenderJobState::Pending);
@@ -107,6 +136,7 @@ void ExportController::exportTo(const QUrl& destination,
         setStatus(tr("No editable timeline is ready"));
         return;
     }
+    if (!constraintsPermitStart()) return;
     if (!destinations_) {
         setStatus(tr("Export destination service is unavailable"));
         return;
@@ -125,6 +155,10 @@ void ExportController::exportTo(const QUrl& destination,
                                    "unsupported export preset"};
     if (!preset.hasValue()) {
         setStatus(QString::fromStdString(preset.error().message()));
+        return;
+    }
+    if (preset.value().height() > maximumExportHeight_) {
+        setStatus(tr("This export preset exceeds the current device budget"));
         return;
     }
     auto request = edit_engine::RenderRequest::create(
@@ -153,6 +187,18 @@ void ExportController::setStatus(QString message) {
     if (statusMessage_ == message) return;
     statusMessage_ = std::move(message);
     emit statusMessageChanged();
+}
+
+bool ExportController::constraintsPermitStart() {
+    if (!exportAllowed_) {
+        setStatus(tr("Export is unavailable while the device is thermally constrained"));
+        return false;
+    }
+    if (foregroundExportRequired_ && !applicationActive_) {
+        setStatus(tr("Bring Creator Studio to the foreground before exporting"));
+        return false;
+    }
+    return true;
 }
 
 }  // namespace creator::app

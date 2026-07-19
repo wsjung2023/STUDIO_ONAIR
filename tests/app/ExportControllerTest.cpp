@@ -262,6 +262,58 @@ TEST_F(ExportControllerTest, PublishesResolvedContentDestinationOffUiThread) {
     EXPECT_NE(state_->publishThread.load(), QThread::currentThreadId());
 }
 
+TEST_F(ExportControllerTest, RejectsPresetAboveDeviceExportBudget) {
+    app::ExportController controller{
+        std::make_unique<ControllerEditEngine>(state_)};
+    auto source = request(root_);
+    controller.setSource(source.projectId(), source.snapshot());
+    controller.setResourceConstraints(1'080, true, true);
+
+    controller.exportTo(QUrl::fromLocalFile(
+                            QString::fromStdWString((root_ / "four-k.mp4").wstring())),
+                        QStringLiteral("h264-2160p30"), false);
+
+    EXPECT_FALSE(controller.busy());
+    EXPECT_EQ(state_->renderThread.load(), nullptr);
+    EXPECT_TRUE(controller.statusMessage().contains(QStringLiteral("device"),
+                                                     Qt::CaseInsensitive));
+}
+
+TEST_F(ExportControllerTest, ForegroundConstraintBlocksNewBackgroundExport) {
+    app::ExportController controller{
+        std::make_unique<ControllerEditEngine>(state_)};
+    auto source = request(root_);
+    controller.setSource(source.projectId(), source.snapshot());
+    controller.setResourceConstraints(1'080, true, true);
+    controller.setApplicationActive(false);
+
+    controller.exportTo(QUrl::fromLocalFile(
+                            QString::fromStdWString((root_ / "output.mp4").wstring())),
+                        QStringLiteral("h264-1080p30"), false);
+
+    EXPECT_FALSE(controller.busy());
+    EXPECT_EQ(state_->renderThread.load(), nullptr);
+    EXPECT_TRUE(controller.statusMessage().contains(QStringLiteral("foreground"),
+                                                     Qt::CaseInsensitive));
+}
+
+TEST_F(ExportControllerTest, MovingToBackgroundCancelsActiveConstrainedExport) {
+    state_->waitsForCancellation = true;
+    app::ExportController controller{
+        std::make_unique<ControllerEditEngine>(state_)};
+    controller.setRequest(request(root_));
+    controller.setResourceConstraints(1'080, true, true);
+    QSignalSpy finished{&controller, &app::ExportController::exportFinished};
+    controller.startExport();
+    while (state_->renderThread.load() == nullptr) QThread::yieldCurrentThread();
+
+    controller.setApplicationActive(false);
+
+    ASSERT_TRUE(finished.wait(3000));
+    EXPECT_TRUE(state_->cancelled);
+    EXPECT_FALSE(finished.at(0).at(0).toBool());
+}
+
 TEST_F(ExportControllerTest, RejectsUnsupportedPresetWithoutStartingWorker) {
     app::ExportController controller{
         std::make_unique<ControllerEditEngine>(state_)};

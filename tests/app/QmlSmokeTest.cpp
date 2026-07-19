@@ -107,6 +107,10 @@ class FakeExportController final : public QObject {
     Q_PROPERTY(int state READ state NOTIFY changed)
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY changed)
     Q_PROPERTY(bool ready READ ready NOTIFY changed)
+    Q_PROPERTY(quint32 maximumExportHeight READ maximumExportHeight NOTIFY changed)
+    Q_PROPERTY(bool foregroundExportRequired READ foregroundExportRequired NOTIFY changed)
+    Q_PROPERTY(bool exportAllowed READ exportAllowed NOTIFY changed)
+    Q_PROPERTY(bool applicationActive READ applicationActive NOTIFY changed)
 
 public:
     using QObject::QObject;
@@ -118,12 +122,26 @@ public:
         return busy_ ? QStringLiteral("Exporting") : QString{};
     }
     [[nodiscard]] bool ready() const noexcept { return true; }
+    [[nodiscard]] quint32 maximumExportHeight() const noexcept {
+        return maximumExportHeight_;
+    }
+    [[nodiscard]] bool foregroundExportRequired() const noexcept { return true; }
+    [[nodiscard]] bool exportAllowed() const noexcept { return exportAllowed_; }
+    [[nodiscard]] bool applicationActive() const noexcept { return applicationActive_; }
     Q_INVOKABLE void exportTo(const QUrl&, const QString&, bool) {
         ++exportCalls_;
     }
     Q_INVOKABLE void cancelExport() { ++cancelCalls_; }
     void setBusy(bool value) {
         busy_ = value;
+        emit changed();
+    }
+    void setMaximumExportHeight(quint32 value) {
+        maximumExportHeight_ = value;
+        emit changed();
+    }
+    void setExportAllowed(bool value) {
+        exportAllowed_ = value;
         emit changed();
     }
     [[nodiscard]] int exportCalls() const noexcept { return exportCalls_; }
@@ -134,6 +152,9 @@ signals:
 
 private:
     bool busy_{};
+    quint32 maximumExportHeight_{2'160};
+    bool exportAllowed_{true};
+    bool applicationActive_{true};
     int exportCalls_{};
     int cancelCalls_{};
 };
@@ -1149,6 +1170,14 @@ TEST(QmlSmokeTest, ExportPageExposesProductPresetsProgressAndCancellation) {
     EXPECT_DOUBLE_EQ(progress->property("value").toDouble(), 0.4);
     ASSERT_TRUE(QMetaObject::invokeMethod(cancel, "clicked"));
     EXPECT_EQ(controller.cancelCalls(), 1);
+
+    controller.setBusy(false);
+    controller.setMaximumExportHeight(1'080);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(preset->property("count").toInt(), 1);
+    controller.setExportAllowed(false);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(start->property("enabled").toBool());
 }
 
 TEST(QmlSmokeTest, EditorPageRendersTypedModelsAndPreviewState) {

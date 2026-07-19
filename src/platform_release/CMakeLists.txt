@@ -4,6 +4,8 @@ cs_add_qtfree_library(cs_platform_release
         PlatformCapability.cpp
         PlatformCapabilityRegistry.h
         PlatformCapabilityRegistry.cpp
+        MobilePerformancePolicy.h
+        MobilePerformancePolicy.cpp
         ReleaseManifest.h
         ReleaseManifest.cpp
         ReleaseManifestStore.h
