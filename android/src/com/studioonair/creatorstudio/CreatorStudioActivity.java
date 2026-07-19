@@ -25,6 +25,8 @@ public class CreatorStudioActivity extends QtActivity {
     private MediaProjection projection;
     private ImageReader projectionReader;
     private VirtualDisplay projectionDisplay;
+    private boolean releasingProjection;
+    private long revokedGeneration;
 
     public static native void nativeProjectionResult(long generation, boolean granted);
     public static native boolean nativeProjectionFrame(long generation, java.nio.ByteBuffer bytes,
@@ -66,12 +68,18 @@ public class CreatorStudioActivity extends QtActivity {
         if (generation == 0) {
             return;
         }
-        nativeProjectionResult(generation, resultCode == RESULT_OK && data != null);
         if (resultCode == RESULT_OK && data != null) {
             approvedGeneration = generation;
             projectionResultCode = resultCode;
             projectionData = data;
+        } else {
+            approvedGeneration = 0;
+            projectionResultCode = 0;
+            projectionData = null;
         }
+        // The native side may start its source synchronously when this callback
+        // returns, so publish the consent token before notifying it.
+        nativeProjectionResult(generation, resultCode == RESULT_OK && data != null);
     }
 
     private void requestProjectionOnUiThread(long generation) {
@@ -103,13 +111,17 @@ public class CreatorStudioActivity extends QtActivity {
     }
 
     private void startProjectionOnUiThread(long generation, int width, int height) {
-        if (generation != approvedGeneration || projectionData == null || projection != null) return;
+        if (generation != approvedGeneration || projectionData == null || projection != null ||
+            releasingProjection) return;
         CreatorStudioProjectionService.start(this);
         MediaProjectionManager manager = (MediaProjectionManager)
             getSystemService(Context.MEDIA_PROJECTION_SERVICE);
         projection = manager.getMediaProjection(projectionResultCode, projectionData);
         projection.registerCallback(new MediaProjection.Callback() {
-            @Override public void onStop() { nativeProjectionRevoked(generation); releaseProjection(); }
+            @Override public void onStop() {
+                notifyProjectionRevoked(generation);
+                releaseProjection();
+            }
         }, null);
         projectionReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
         projectionReader.setOnImageAvailableListener(reader -> {
@@ -127,9 +139,23 @@ public class CreatorStudioActivity extends QtActivity {
     }
 
     private void releaseProjection() {
+        if (releasingProjection) return;
+        releasingProjection = true;
         if (projectionDisplay != null) { projectionDisplay.release(); projectionDisplay = null; }
         if (projectionReader != null) { projectionReader.close(); projectionReader = null; }
-        if (projection != null) { projection.stop(); projection = null; }
+        final MediaProjection projectionToStop = projection;
+        projection = null;
+        approvedGeneration = 0;
+        projectionResultCode = 0;
+        projectionData = null;
+        if (projectionToStop != null) projectionToStop.stop();
         CreatorStudioProjectionService.stop(this);
+        releasingProjection = false;
+    }
+
+    private void notifyProjectionRevoked(long generation) {
+        if (generation == 0 || revokedGeneration == generation) return;
+        revokedGeneration = generation;
+        nativeProjectionRevoked(generation);
     }
 }

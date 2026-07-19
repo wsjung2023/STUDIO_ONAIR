@@ -15,10 +15,13 @@ $checks = @(
     @{ Path = $activity; Pattern = 'createVirtualDisplay'; Name = 'VirtualDisplay capture output' },
     @{ Path = $activity; Pattern = 'nativeProjectionFrame'; Name = 'native frame callback' },
     @{ Path = $activity; Pattern = 'nativeProjectionRevoked'; Name = 'projection revoke callback' },
+    @{ Path = $activity; Pattern = 'publish the consent token before notifying it'; Name = 'consent callback ordering' },
+    @{ Path = $activity; Pattern = 'releasingProjection'; Name = 'single projection release guard' },
     @{ Path = $activity; Pattern = 'stopProjection'; Name = 'projection stop request' },
     @{ Path = $service; Pattern = 'FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION'; Name = 'Android 14 projection foreground service' },
     @{ Path = $backend; Pattern = 'AndroidScreenCaptureSource'; Name = 'screen capture source' },
     @{ Path = $backend; Pattern = 'onProjectionFrame'; Name = 'frame routing' },
+    @{ Path = $backend; Pattern = 'generation != generation_'; Name = 'generation-scoped frame routing' },
     @{ Path = $backend; Pattern = 'stopAsync'; Name = 'asynchronous capture stop' },
     @{ Path = $manifest; Pattern = 'CreatorStudioProjectionService'; Name = 'projection service manifest entry' }
 )

@@ -180,11 +180,11 @@ public:
         if (completion) completion(result);
     }
     [[nodiscard]] capture::CaptureStats stats() const noexcept override { return stats_; }
-    [[nodiscard]] bool onProjectionFrame(const std::byte* bytes, std::size_t size,
+    [[nodiscard]] bool onProjectionFrame(std::uint64_t generation, const std::byte* bytes, std::size_t size,
                                          std::uint32_t width, std::uint32_t height,
                                          std::uint32_t rowStride, std::uint32_t pixelStride,
                                          std::int64_t timestampNs) noexcept {
-        if (!bytes || width == 0 || height == 0 || pixelStride < 4 ||
+        if (generation != generation_ || !bytes || width == 0 || height == 0 || pixelStride < 4 ||
             rowStride < width * pixelStride || size < static_cast<std::size_t>(rowStride) * height) {
             ++stats_.invalidFrames; return false;
         }
@@ -202,7 +202,8 @@ public:
         if (!started_) { started_ = true; sink_->onCaptureStarted(); }
         sink_->onVideoFrame(std::move(*assembled.value())); ++stats_.receivedFrames; return true;
     }
-    void onProjectionRevoked() noexcept {
+    void onProjectionRevoked(std::uint64_t generation) noexcept {
+        if (generation != generation_) return;
         sink_->onCaptureError(core::AppError{core::ErrorCode::InvalidState,
                                              "Android revoked screen recording permission"});
     }
@@ -244,21 +245,26 @@ AndroidScreenCaptureBackend makeAndroidScreenCaptureBackend() {
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_studioonair_creatorstudio_CreatorStudioActivity_nativeProjectionFrame(
-    JNIEnv* environment, jclass, jlong, jobject buffer, jint width, jint height,
+    JNIEnv* environment, jclass, jlong generation, jobject buffer, jint width, jint height,
     jint rowStride, jint pixelStride, jlong timestampNs) {
     std::lock_guard lock(creator::app::android::callbackMutex);
     if (!creator::app::android::callbackSource) return JNI_FALSE;
     auto* bytes = static_cast<std::byte*>(environment->GetDirectBufferAddress(buffer));
     const auto size = environment->GetDirectBufferCapacity(buffer);
     return creator::app::android::callbackSource->onProjectionFrame(
-               bytes, size < 0 ? 0 : static_cast<std::size_t>(size), width, height,
+               static_cast<std::uint64_t>(generation), bytes,
+               size < 0 ? 0 : static_cast<std::size_t>(size), width, height,
                rowStride, pixelStride, timestampNs) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_studioonair_creatorstudio_CreatorStudioActivity_nativeProjectionRevoked(JNIEnv*, jclass, jlong) {
+Java_com_studioonair_creatorstudio_CreatorStudioActivity_nativeProjectionRevoked(
+    JNIEnv*, jclass, jlong generation) {
     std::lock_guard lock(creator::app::android::callbackMutex);
-    if (creator::app::android::callbackSource) creator::app::android::callbackSource->onProjectionRevoked();
+    if (creator::app::android::callbackSource) {
+        creator::app::android::callbackSource->onProjectionRevoked(
+            static_cast<std::uint64_t>(generation));
+    }
 }
 
 }  // namespace creator::app::android
