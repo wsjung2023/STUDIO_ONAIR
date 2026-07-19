@@ -1,0 +1,18 @@
+cs_add_qtfree_library(cs_cursor
+    SOURCES
+        CursorPoint.h
+        CursorButton.h
+        CursorMoveEvent.h
+        CursorClickEvent.h
+        CursorNormalizer.h
+        CursorNormalizer.cpp
+        ICursorSource.h
+        CursorEventSerializer.h
+        CursorEventSerializer.cpp
+        CursorNdjsonSink.h
+        CursorNdjsonSink.cpp
+    DEPENDS
+        cs_core
+        cs_domain
+        nlohmann_json::nlohmann_json
+)

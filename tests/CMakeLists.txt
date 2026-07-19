@@ -120,6 +120,46 @@ cs_apply_warnings(cs_tests)
 
 gtest_discover_tests(cs_tests)
 
+# cs_cursor (R2-01 cursor telemetry core) is Qt-free, so its tests live in their
+# own binary that links no Qt: a standing check that the cursor module really
+# does build below the application boundary. The schema path is injected so the
+# pipeline test validates serialized events against the single shipped
+# schemas/event.schema.json, mirroring ManifestSchemaValidator.
+add_executable(cs_cursor_tests
+    cursor/CursorValueTest.cpp
+    cursor/CursorNormalizerTest.cpp
+    cursor/FakeCursorSourceTest.cpp
+    cursor/CursorPipelineTest.cpp
+    cursor/CursorNdjsonSinkTest.cpp
+)
+
+target_link_libraries(cs_cursor_tests
+    PRIVATE
+        cs_core
+        cs_domain
+        cs_cursor
+        cs_fakes
+        nlohmann_json::nlohmann_json
+        nlohmann_json_schema_validator::validator
+        GTest::gtest_main
+)
+
+target_include_directories(cs_cursor_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cursor)
+
+target_compile_definitions(cs_cursor_tests PRIVATE
+    CS_EVENT_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/event.schema.json"
+)
+
+set_target_properties(cs_cursor_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+
+cs_apply_warnings(cs_cursor_tests)
+
+gtest_discover_tests(cs_cursor_tests)
+
 # Separate binary: these need a QCoreApplication, so they cannot use
 # gtest_main. Keeping them apart also keeps cs_tests Qt-free, which is a
 # standing check that the layers below the application really do build without

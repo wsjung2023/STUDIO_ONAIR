@@ -11,8 +11,11 @@ cs_add_qtfree_library(cs_fakes
         FakeRecorder.cpp
         FakeEditEngine.h
         FakeEditEngine.cpp
+        FakeCursorSource.h
+        FakeCursorSource.cpp
     DEPENDS
         cs_capture
         cs_recorder
         cs_edit_engine
+        cs_cursor
 )
