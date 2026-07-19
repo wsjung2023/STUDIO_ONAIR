@@ -1,6 +1,8 @@
 cs_add_qtfree_library(cs_avatar
     SOURCES
         ExpressionParameters.h
+        AvatarParameterMapper.h
+        AvatarParameterMapper.cpp
         TrackingResult.h
         AvatarProviderId.h
         ITrackingProvider.h

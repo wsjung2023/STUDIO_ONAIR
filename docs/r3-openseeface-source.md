@@ -36,3 +36,10 @@ consumes the existing bounded camera preview mailbox and routes one latest
 `VideoFrame` through an in-process `ITrackingProvider` and the same motion
 pipeline. A capture terminal error wins over any pending frame, and an empty
 mailbox produces no synthetic sample.
+
+`AvatarParameterMapper` is the renderer-neutral model mapping boundary. A
+model adapter supplies its parameter names plus scale/offset/range rules; the
+mapper validates uniqueness and finite ranges, then emits deterministic,
+clamped values from the canonical nine tracking channels. This makes the
+Inochi2D adapter a replaceable consumer instead of leaking model-library types
+into `cs_avatar`.
