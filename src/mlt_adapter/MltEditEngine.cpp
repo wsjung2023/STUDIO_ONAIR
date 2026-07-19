@@ -838,7 +838,7 @@ class MltEditEngine::Impl final {
             std::max<std::int64_t>(1, plan.durationFrames);
         auto graph = std::make_unique<Graph>(Graph{
             std::make_unique<Mlt::Profile>(), nullptr, {}, {}, {}, {}, {}, {},
-            {},
+            {}, {},
             plan.revision, plan.frameRate, graphDurationFrames,
             0, 0, 0, plan.visualBranches.size(), 0, 0, 0});
         graph->profile->set_explicit(1);
