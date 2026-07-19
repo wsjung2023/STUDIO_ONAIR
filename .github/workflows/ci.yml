@@ -73,6 +73,35 @@ jobs:
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
 
+      # This is deliberately unsigned and non-publishable evidence, not a
+      # release upload. It proves the binary CI just built has a deterministic
+      # manifest and SHA-256 before R4-04 adds signing/notarization/store steps.
+      - name: Generate release manifest
+        shell: pwsh
+        run: |
+          $artifact = if ($env:RUNNER_OS -eq 'Windows') {
+            'creator_studio.exe'
+          } else {
+            'creator_studio.app/Contents/MacOS/creator_studio'
+          }
+          & scripts/write_release_manifest.ps1 `
+            -ArtifactRoot "build/${{ matrix.preset }}" `
+            -OutputPath "build/${{ matrix.preset }}/release-manifest.json" `
+            -ProductVersion '0.1.0' `
+            -SourceRevision '${{ github.sha }}' `
+            -Target '${{ matrix.preset }}' `
+            -Artifact $artifact
+
+      - name: Upload unsigned release evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-release-evidence-${{ matrix.preset }}
+          path: |
+            build/${{ matrix.preset }}/release-manifest.json
+            build/${{ matrix.preset }}/creator_studio.exe
+            build/${{ matrix.preset }}/creator_studio.app
+          if-no-files-found: error
+
       - name: Upload test logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
