@@ -3,6 +3,8 @@
 #include "core/Utc.h"
 #include "core/Uuid.h"
 #include "domain/ProjectManifest.h"
+#include "project_store/ManifestSchemaValidator.h"
+#include "project_store/internal/DurableFile.h"
 
 #include <nlohmann/json.hpp>
 
@@ -26,52 +28,6 @@ using domain::CanvasSettings;
 using domain::ProjectDirectories;
 using domain::ProjectId;
 using domain::ProjectManifest;
-
-/// Writes through a .part file and an atomic rename (CLAUDE.md 4).
-///
-/// The manifest is the file a crash is most likely to catch mid-write, and a
-/// half-written manifest.json is an unopenable project. Renaming is atomic on
-/// both NTFS and APFS, so a reader sees either the old file or the new one.
-///
-/// flush() pushes to the OS, not to the platter: a power cut can still lose the
-/// write. Real durability needs fsync/FlushFileBuffers, which is platform code
-/// this task does not open. Atomicity is what protects us here, and it holds.
-Result<void> writeFileAtomically(const fs::path& target, const std::string& contents) {
-    // += on a path, NOT target.string() + ".part". On Windows fs::path holds
-    // UTF-16 natively and .string() converts it through the process ANSI
-    // codepage, which is lossy for anything outside it - this machine's is 949,
-    // so a package directory containing Japanese, Chinese or emoji comes back
-    // with '?' in it, and '?' is not even a legal path character. Appending
-    // ASCII to the path object touches none of that.
-    fs::path temporary = target;
-    temporary += ".part";
-
-    {
-        std::ofstream out{temporary, std::ios::binary | std::ios::trunc};
-        if (!out.is_open()) {
-            return AppError{ErrorCode::IoFailure,
-                            "cannot open '" + temporary.string() + "' for writing"};
-        }
-        out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-        out.flush();
-        if (!out.good()) {
-            out.close();
-            std::error_code ignored;
-            fs::remove(temporary, ignored);
-            return AppError{ErrorCode::IoFailure, "failed writing '" + temporary.string() + "'"};
-        }
-    }
-
-    std::error_code ec;
-    fs::rename(temporary, target, ec);
-    if (ec) {
-        std::error_code ignored;
-        fs::remove(temporary, ignored);
-        return AppError{ErrorCode::IoFailure,
-                        "cannot move '" + temporary.string() + "' into place: " + ec.message()};
-    }
-    return core::ok();
-}
 
 Result<std::string> readFile(const fs::path& path) {
     std::error_code ec;
@@ -121,9 +77,13 @@ nlohmann::json toJson(const ProjectManifest& manifest) {
 /// sequence. validate() counts lead bytes for the length limit but never
 /// checks well-formedness, so a bad sequence reaches here intact. Catch it:
 /// an exception escaping this adapter is exactly what CLAUDE.md 4 forbids.
-Result<std::string> serialiseManifest(const ProjectManifest& manifest) {
+Result<std::string> validateAndSerialiseManifest(const ProjectManifest& manifest) {
     try {
-        return toJson(manifest).dump(2);
+        const nlohmann::json json = toJson(manifest);
+        if (auto valid = validateManifestJson(json); !valid.hasValue()) {
+            return valid.error();
+        }
+        return json.dump(2);
     } catch (const nlohmann::json::exception& error) {
         return AppError{ErrorCode::InvalidArgument,
                         "manifest contains text that is not valid UTF-8: " +
@@ -305,10 +265,10 @@ Result<ProjectManifest> JsonProjectStore::create(const fs::path& packageDirector
     // Serialise before touching the disk too: validate() only counts UTF-8
     // lead bytes for the length limit (see domain::utf8Length), so a name that
     // is a malformed byte sequence passes it and is only caught when dump()
-    // rejects it inside serialiseManifest. This must happen before
+    // rejects it inside validateAndSerialiseManifest. This must happen before
     // create_directories below, or a rejected name leaves a directory tree
     // behind - the same property the validate() call above protects.
-    auto serialised = serialiseManifest(manifest);
+    auto serialised = validateAndSerialiseManifest(manifest);
     if (!serialised.hasValue()) {
         return serialised.error();
     }
@@ -330,7 +290,7 @@ Result<ProjectManifest> JsonProjectStore::create(const fs::path& packageDirector
         }
     }
 
-    if (auto written = writeFileAtomically(manifestPath, serialised.value());
+    if (auto written = internal::writeFileDurably(manifestPath, serialised.value());
         !written.hasValue()) {
         return written.error();
     }
@@ -351,6 +311,20 @@ Result<ProjectManifest> JsonProjectStore::load(const fs::path& packageDirectory)
         return AppError{ErrorCode::ParseFailure,
                         "manifest is not valid JSON: " + std::string{error.what()}};
     }
+
+    // Keep the compatibility error more useful than a shape error: a future
+    // schema may legitimately add properties this Draft 7 schema rejects.
+    if (json.is_object()) {
+        const auto version = json.find("schemaVersion");
+        if (version != json.end() && version->is_number_integer() &&
+            version->get<std::int64_t>() > ProjectManifest::kCurrentSchemaVersion) {
+            return AppError{ErrorCode::UnsupportedVersion,
+                            "project was written by a newer version of Creator Studio"};
+        }
+    }
+    if (auto valid = validateManifestJson(json); !valid.hasValue()) {
+        return valid.error();
+    }
     return fromJson(json);
 }
 
@@ -361,11 +335,12 @@ Result<void> JsonProjectStore::save(const fs::path& packageDirectory,
     if (auto valid = domain::validate(manifest); !valid.hasValue()) {
         return valid.error();
     }
-    auto serialised = serialiseManifest(manifest);
+    auto serialised = validateAndSerialiseManifest(manifest);
     if (!serialised.hasValue()) {
         return serialised.error();
     }
-    return writeFileAtomically(packageDirectory / kManifestFileName, serialised.value());
+    return internal::writeFileDurably(packageDirectory / kManifestFileName,
+                                      serialised.value());
 }
 
 }  // namespace creator::project_store

@@ -12,6 +12,11 @@
 #include <fstream>
 #include <string>
 
+#ifdef _WIN32
+#define NOMINMAX
+#include <Windows.h>
+#endif
+
 namespace {
 
 namespace fs = std::filesystem;
@@ -148,25 +153,30 @@ TEST_F(JsonProjectStoreTest, RoundTripsThroughNonAsciiPath) {
     fs::remove_all(unicodeDir, ec);
 }
 
-TEST_F(JsonProjectStoreTest, SaveIsAtomicAndLeavesNoPartFile) {
+TEST_F(JsonProjectStoreTest, FailedDurableSavePreservesOriginalAndLeavesNoPartFile) {
     const auto created = store_.create(packageDir_, "MyTutorial");
     ASSERT_TRUE(created.hasValue());
 
-    // This used to pass with writeFileAtomically replaced by a plain
-    // ofstream straight over the target: with no failure injected, there is
-    // no .part file to find left behind either way, so the old version of
-    // this test could not tell "atomic" from "not atomic". Pre-creating
-    // manifest.json.part as a directory forces the write path to fail (a
-    // directory cannot stand in for the regular file writeFileAtomically
-    // expects), which is what actually exercises the property this class
-    // promises: a failed write must not destroy the good file already there.
-    const fs::path partFile =
-        packageDir_ / (std::string{JsonProjectStore::kManifestFileName} + ".part");
-    fs::create_directory(partFile);
-
     ProjectManifest updated = created.value();
     updated.name = "Renamed";
+#ifdef _WIN32
+    // Denying FILE_SHARE_DELETE lets the temporary file be fully written and
+    // flushed, then deterministically fails only the replacement step.
+    const fs::path manifestPath = packageDir_ / JsonProjectStore::kManifestFileName;
+    HANDLE lock = CreateFileW(manifestPath.c_str(), GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(lock, INVALID_HANDLE_VALUE);
     const auto saved = store_.save(packageDir_, updated);
+    ASSERT_TRUE(CloseHandle(lock));
+#else
+    // POSIX advisory locks do not block rename. Removing directory write
+    // permission instead prevents creation of the unique sibling temp file.
+    fs::permissions(packageDir_, fs::perms::owner_read | fs::perms::owner_exec,
+                    fs::perm_options::replace);
+    const auto saved = store_.save(packageDir_, updated);
+    fs::permissions(packageDir_, fs::perms::owner_all, fs::perm_options::replace);
+#endif
 
     ASSERT_FALSE(saved.hasValue());
     EXPECT_EQ(saved.error().code(), ErrorCode::IoFailure);
@@ -175,6 +185,28 @@ TEST_F(JsonProjectStoreTest, SaveIsAtomicAndLeavesNoPartFile) {
     const auto loaded = store_.load(packageDir_);
     ASSERT_TRUE(loaded.hasValue()) << loaded.error().message();
     EXPECT_EQ(loaded.value().name, "MyTutorial");
+
+    for (const auto& entry : fs::directory_iterator{packageDir_}) {
+        EXPECT_EQ(entry.path().filename().string().find(".manifest.json.part-"),
+                  std::string::npos);
+    }
+}
+
+TEST_F(JsonProjectStoreTest, SuccessfulDurableSaveReplacesManifestWithoutPartFile) {
+    auto created = store_.create(packageDir_, "MyTutorial");
+    ASSERT_TRUE(created.hasValue());
+    ProjectManifest updated = created.value();
+    updated.name = "Renamed";
+
+    ASSERT_TRUE(store_.save(packageDir_, updated).hasValue());
+
+    const auto loaded = store_.load(packageDir_);
+    ASSERT_TRUE(loaded.hasValue());
+    EXPECT_EQ(loaded.value().name, "Renamed");
+    for (const auto& entry : fs::directory_iterator{packageDir_}) {
+        EXPECT_EQ(entry.path().filename().string().find(".manifest.json.part-"),
+                  std::string::npos);
+    }
 }
 
 TEST_F(JsonProjectStoreTest, CreateRefusesToOverwriteExistingProject) {
@@ -325,6 +357,23 @@ TEST_F(JsonProjectStoreTest, LoadReportsFutureSchemaVersion) {
     EXPECT_EQ(loaded.error().code(), ErrorCode::UnsupportedVersion);
 }
 
+TEST_F(JsonProjectStoreTest, FutureSchemaVersionTakesPrecedenceOverUnknownProperties) {
+    const auto created = store_.create(packageDir_, "MyTutorial");
+    ASSERT_TRUE(created.hasValue());
+
+    std::ifstream in{packageDir_ / JsonProjectStore::kManifestFileName, std::ios::binary};
+    auto json = nlohmann::json::parse(in);
+    in.close();
+    json["schemaVersion"] = ProjectManifest::kCurrentSchemaVersion + 1;
+    json["futureProperty"] = true;
+    writeManifestText(json.dump());
+
+    const auto loaded = store_.load(packageDir_);
+
+    ASSERT_FALSE(loaded.hasValue());
+    EXPECT_EQ(loaded.error().code(), ErrorCode::UnsupportedVersion);
+}
+
 TEST_F(JsonProjectStoreTest, LoadReportsUnknownColorSpace) {
     const auto created = store_.create(packageDir_, "MyTutorial");
     ASSERT_TRUE(created.hasValue());
@@ -338,7 +387,7 @@ TEST_F(JsonProjectStoreTest, LoadReportsUnknownColorSpace) {
     const auto loaded = store_.load(packageDir_);
 
     ASSERT_FALSE(loaded.hasValue());
-    EXPECT_EQ(loaded.error().code(), ErrorCode::UnsupportedVersion);
+    EXPECT_EQ(loaded.error().code(), ErrorCode::ParseFailure);
 }
 
 TEST_F(JsonProjectStoreTest, LoadReportsInvalidUuid) {
@@ -354,7 +403,7 @@ TEST_F(JsonProjectStoreTest, LoadReportsInvalidUuid) {
     const auto loaded = store_.load(packageDir_);
 
     ASSERT_FALSE(loaded.hasValue());
-    EXPECT_EQ(loaded.error().code(), ErrorCode::InvalidArgument);
+    EXPECT_EQ(loaded.error().code(), ErrorCode::ParseFailure);
 }
 
 TEST_F(JsonProjectStoreTest, SaveRejectsInvalidManifest) {

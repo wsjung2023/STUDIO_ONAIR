@@ -29,6 +29,26 @@
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
     },
     {
+      "name": "windows-ffmpeg-debug",
+      "displayName": "Windows Debug with audited FFmpeg",
+      "inherits": "windows-debug",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CS_ENABLE_FFMPEG": "ON",
+        "CS_FFMPEG_ROOT": "${sourceDir}/build/ffmpeg/vcpkg_installed/x64-windows"
+      }
+    },
+    {
+      "name": "windows-ffmpeg-release",
+      "displayName": "Windows Release with audited FFmpeg",
+      "inherits": "windows-release",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CS_ENABLE_FFMPEG": "ON",
+        "CS_FFMPEG_ROOT": "${sourceDir}/build/ffmpeg/vcpkg_installed/x64-windows"
+      }
+    },
+    {
       "name": "macos-debug",
       "displayName": "macOS Debug (AppleClang + Ninja)",
       "inherits": "base",
@@ -52,6 +72,8 @@
   "buildPresets": [
     { "name": "windows-debug", "configurePreset": "windows-debug" },
     { "name": "windows-release", "configurePreset": "windows-release" },
+    { "name": "windows-ffmpeg-debug", "configurePreset": "windows-ffmpeg-debug" },
+    { "name": "windows-ffmpeg-release", "configurePreset": "windows-ffmpeg-release" },
     { "name": "macos-debug", "configurePreset": "macos-debug" },
     { "name": "macos-release", "configurePreset": "macos-release" }
   ],
@@ -64,6 +86,8 @@
     },
     { "name": "windows-debug", "inherits": "test-base", "configurePreset": "windows-debug" },
     { "name": "windows-release", "inherits": "test-base", "configurePreset": "windows-release" },
+    { "name": "windows-ffmpeg-debug", "inherits": "test-base", "configurePreset": "windows-ffmpeg-debug" },
+    { "name": "windows-ffmpeg-release", "inherits": "test-base", "configurePreset": "windows-ffmpeg-release" },
     { "name": "macos-debug", "inherits": "test-base", "configurePreset": "macos-debug" },
     { "name": "macos-release", "inherits": "test-base", "configurePreset": "macos-release" }
   ]

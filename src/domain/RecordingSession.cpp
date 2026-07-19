@@ -4,6 +4,16 @@
 
 namespace creator::domain {
 
+std::optional<core::TimestampNs> RecordingSession::startedAt() const noexcept {
+    if (state_ == SessionState::Idle) return std::nullopt;
+    return startedAt_;
+}
+
+std::optional<core::TimestampNs> RecordingSession::stoppedAt() const noexcept {
+    if (state_ != SessionState::Stopped) return std::nullopt;
+    return stoppedAt_;
+}
+
 using core::AppError;
 using core::DurationNs;
 using core::ErrorCode;

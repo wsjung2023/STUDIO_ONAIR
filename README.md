@@ -30,19 +30,35 @@
 
 ## 현재 코드 골격
 
-R0-01이 완료되어, 애플리케이션(`creator_studio.exe`)을 실행하면 다음이 동작합니다.
+R0-01과 R0-02가 완료되었고 R0-03 macOS 화면 캡처, R0-04 카메라·오디오 캡처,
+R0-05 소스 분리 녹화 코드는 현재 브랜치에 구현되어,
+애플리케이션(`creator_studio.exe`)에서 다음 흐름이 연결됩니다.
 
-- Home / Studio / Editor 세 화면 전환
-- Studio에서 test pattern 표시, Record/Stop으로 fake 녹화 세션 시작·종료
-- Stop 시 세그먼트 개수와 duration 표시
+- Home에서 로컬 `.cstudio` 프로젝트 생성·열기와 최근 프로젝트 표시
+- JSON Schema 검증을 거친 `manifest.json`과 SQLite `project.db` 생성
+- 프로젝트가 열린 뒤에만 Studio로 이동하고 Record/Stop 허용
+- 녹화 시작 전 세션 상태를 SQLite에 먼저 기록하고, 종료 저장이 성공한 뒤에만 `Stopped` 표시
+- 비정상 종료로 남은 세션을 시작 시 스캔하고 Recovery 화면에서 복구 또는 나중에 처리
+- 카메라·마이크 장치 열거, 독립 권한 요청, hotplug 격리, 시스템 오디오, 입력 레벨 표시
+- 화면·카메라·마이크·시스템 오디오를 독립 트랙으로 기록하는 실제 Record/Stop 경로
+- 감사된 동적 LGPL FFmpeg의 2초 Matroska 세그먼트와 SQLite 실시간 인덱스
+- 인코더, 디스크 여유, 트랙 큐, 녹화 드롭, 세그먼트 개수와 duration 진단
 
-다음은 라이브러리 코드와 단위 테스트로는 존재하지만, **애플리케이션은 아직 호출하지 않는** 기능입니다. `creator_studio.exe`를 실행해 보아도 아래 동작은 눈에 보이지 않습니다.
+프로젝트 URL은 반드시 **로컬 파일시스템 경로**여야 합니다. 원격 URL이나 네트워크 API는 지원하지 않습니다. 저장 계층은 SQLite **3.53.3**과 pboettch JSON Schema Validator **2.4.0**을 고정 버전으로 사용합니다.
 
-- 프로젝트 manifest 생성·읽기 (`manifest.json`, `cs_project_store`/`JsonProjectStore`) — 라이브러리 자체는 동작하고 테스트도 통과하지만, `src/app`, `src/main.cpp`, QML 어디에서도 호출하지 않습니다. R0-02에서 StudioController와 연결할 예정입니다.
+2026-07-16 이 Windows 머신에서 R0-05 FFmpeg Debug `/WX` 빌드, 실제 앱 부팅,
+소스별 재생 가능한 파일/DB 일치 테스트, 화면+마이크 production-engine 통합 테스트와
+30분 가속 멀티트랙 인덱스 테스트를 통과했습니다. 저수준 테스트는 **262개 중 261개 통과,
+1개 조건부 symlink skip**이었고, 이어 실행한 앱/QML/FFmpeg CTest 86개도 모두
+통과했습니다. symlink skip은 일반 권한 Windows에서 fixture를 만들 수 없어 발생하며,
+같은 외부 파일 연결 위험은 권한이 필요 없는 hard-link 테스트로 통과합니다.
 
-단위 테스트는 통과하고 있고 (`ctest`로 실행), CI 워크플로(`.github/workflows/ci.yml`)도 작성되어 있습니다. 다만 이 CI는 **아직 한 번도 실행된 적이 없습니다** — push할 원격 저장소가 없었고, macOS 잡은 특히 검증된 적이 없습니다. `ci.yml` 자체에도 "이 파일을 draft로 취급하라"는 주석이 있습니다.
-
-아직 실제 화면 캡처·녹화·편집은 구현하지 않았습니다. 다음 대상은 `IMPLEMENTATION_ROADMAP.md`의 R0-02 프로젝트 패키지입니다.
+macOS ScreenCaptureKit 프레임 수신, Metal zero-copy 프리뷰, AVFoundation 카메라·마이크,
+ScreenCaptureKit 시스템 오디오 경로는 구현했지만, 이 저장소를 작업한 Windows 머신에서는
+Apple 전용 코드를 컴파일하거나 실기 측정할 수 없어 R0-03/R0-04 제품 완료 증거로 간주하지
+않습니다. 실제 미디어 기록·인코딩은 production 경로에 연결되었지만, macOS VideoToolbox와
+CVPixelBuffer 실기 녹화, 30분 실시간 발열·처리량 soak는 별도 Apple 인수 증거가 필요합니다.
+비선형 편집은 아직 구현되지 않았습니다.
 
 모듈은 CMake static library로 분리되어 있고, application 계층 아래(`cs_core`, `cs_domain`, `cs_media`, `cs_capture`, `cs_recorder`, `cs_project_store`, `cs_fakes`)는 Qt를 링크하지 않습니다. `cmake/CreatorStudioTargets.cmake`의 `cs_add_qtfree_library()`가 configure 단계에서 이를 강제합니다.
 
@@ -109,7 +125,7 @@ ctest --preset windows-debug
 겪어보지 않으면 놓치기 쉬운 것이 두 가지 있습니다.
 
 - `vcvars64.bat`는 반드시 `call`로 실행합니다. 이 블록을 `.bat` 스크립트 파일로 저장해 실행할 경우, `call` 없이 부르면 vcvars64.bat 실행 후 나머지 줄이 조용히 실행되지 않고 스크립트가 끝나버립니다(대화형 프롬프트에 한 줄씩 입력할 때는 `call` 유무가 문제되지 않지만, 스크립트로 저장하는 사람이 있으므로 항상 붙입니다).
-- `ctest` 전에 Qt의 `bin`을 PATH에 추가해야 합니다. `cs_app_tests`가 Qt를 링크하기 때문입니다. 빠뜨리면 `StudioControllerTest`에 속한 11개 테스트가 전부 `Exit code 0xc0000135`(DLL을 찾을 수 없음)로 실패합니다 — 빌드는 성공하고 ctest만 실패하므로 원인을 오해하기 쉽습니다.
+- `ctest` 전에 Qt의 `bin`을 PATH에 추가해야 합니다. `cs_app_tests`와 `cs_qml_tests`가 Qt를 링크하기 때문입니다. 빠뜨리면 Qt 기반 테스트가 `Exit code 0xc0000135`(DLL을 찾을 수 없음)로 실패합니다 — 빌드는 성공하고 ctest만 실패하므로 원인을 오해하기 쉽습니다.
 
 **PowerShell을 쓴다면**: 위 블록은 `cmd.exe` 문법(`set VAR=값`)이라 PowerShell에 그대로 붙여 넣으면 안 됩니다(`set`이 `Set-Variable`로 해석되어 환경 변수가 설정되지 않습니다). 그리고 `vcvars64.bat`를 PowerShell에서 직접 실행하면(`& $vcvars`) 배치 파일이 자식 `cmd.exe` 프로세스에서 실행되므로, 그 프로세스가 끝나는 순간 환경 변수 변경도 함께 사라져 PowerShell 세션에는 반영되지 않습니다. 두 가지 중 하나를 씁니다.
 

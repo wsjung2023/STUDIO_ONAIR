@@ -352,6 +352,53 @@ Timeline
  └─ CaptionTrack
 ```
 
+#### 9.1.1 R1-01 구현 상태
+
+R1-01에서 제품 기준 모델의 첫 구현을 완료했다. `domain`은 Qt, SQLite,
+FFmpeg, MLT 타입을 포함하지 않으며 다음을 소유한다.
+
+- 안정적인 asset/timeline/track/clip/command 식별자와 검증된 시간 범위
+- 화면·카메라 transform, 오디오 gain/fade를 포함한 멀티트랙 타임라인
+- split, trim, range delete/ripple 명령과 제한된 Undo/Redo 이력
+
+`project_store`의 migration 002는 미디어 자산, 타임라인 스냅샷, 트랙,
+클립, transform, audio envelope, edit event, checkpoint를 정규화해 저장한다.
+편집 한 번은 materialized snapshot, audit event, revision, history cursor를
+하나의 `BEGIN IMMEDIATE` 트랜잭션으로 기록한다. 다시 열 때는 deferred read
+transaction 하나에서 snapshot과 history를 함께 읽어 서로 다른 revision이
+섞이지 않게 한다.
+
+`TimelineEditService`는 명령을 메모리 복사본에 먼저 적용한 뒤 durable commit이
+성공한 경우에만 현재 상태를 교체한다. 따라서 저장 실패는 UI가 보게 되는
+타임라인을 부분 변경하지 않는다. 이 서비스는 Qt-free이므로 이후
+`EditorController`가 worker 경계에서 호출한다.
+
+#### 9.1.2 R1-02 구현 상태
+
+R1-02는 제품 기준 타임라인과 실제 편집 엔진 사이에 Qt-free `IEditEngine`
+port를 추가했다. 이 port는 revision이 붙은 immutable snapshot/change set,
+중립 `VideoFrame` preview, 재생·탐색 명령, 검증된 render request/job만 노출한다.
+Qt, MLT, FFmpeg 타입은 이 경계를 통과하지 않는다.
+
+`EditorController`는 UI 스레드에서 `MediaBinModel`과
+`TimelineTrackModel`만 소유한다. 모든 엔진 호출은 전용 `QThread`의
+`EditorEngineWorker`에서 직렬 실행되며, 각 호출에는 session generation과
+command identity가 붙는다. 따라서 이전 프로젝트의 늦은 callback은 새
+프로젝트 상태를 덮을 수 없다.
+
+durable timeline 변경은 모델에 먼저 게시된 뒤 엔진에 전달된다. 엔진의
+incremental update가 실패해도 저장된 revision과 UI 모델은 롤백하지 않는다.
+대신 preview를 stale로 표시하고 현재 durable snapshot으로 전체 graph load를
+예약한다. `FakeEditEngine`은 이 실패·복구 순서를 결정적으로 검증하지만 배포
+앱에는 링크되지 않는다. 감사된 MLT adapter가 들어오기 전 배포 앱은
+`UnavailableEditEngine`을 사용해 지원되지 않는 preview를 성공처럼 보이지
+않게 한다.
+
+QML은 anonymous `QVariantList` 복사본 대신 안정적인 `QAbstractListModel`
+role을 사용한다. 미디어 빈은 asset identity/path/type/duration/availability와
+stream metadata를, 타임라인은 track identity/state와 source/timeline range,
+transform, audio envelope가 포함된 clip DTO를 소비한다.
+
 ### 9.2 MLT Adapter
 
 - Domain Timeline을 MLT producer/playlist/tractor/filter로 변환

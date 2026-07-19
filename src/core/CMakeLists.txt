@@ -3,6 +3,8 @@ cs_add_qtfree_library(cs_core
         AppError.h
         AppError.cpp
         Result.h
+        Sha256.h
+        Sha256.cpp
         Timebase.h
         Timebase.cpp
         Utc.h

@@ -1,9 +1,47 @@
 cs_add_qtfree_library(cs_project_store
     SOURCES
         IProjectStore.h
+        ITimelineStore.h
+        IProjectPackageStore.h
+        IStudioStore.h
+        IRenderJobStore.h
+        PersistentRenderJobLifecycle.h
+        PersistentRenderJobLifecycle.cpp
+        RenderJobRecovery.h
+        RenderJobRecovery.cpp
         JsonProjectStore.h
         JsonProjectStore.cpp
+        ManifestSchemaValidator.h
+        ManifestSchemaValidator.cpp
+        MigrationRunner.h
+        MigrationRunner.cpp
+        ProjectPackage.h
+        ProjectPackageStore.h
+        ProjectPackageStore.cpp
+        SqliteProjectDatabase.h
+        SqliteProjectDatabase.cpp
+        SqliteTimelineStore.h
+        SqliteTimelineStore.cpp
+        SqliteStudioStore.h
+        SqliteStudioStore.cpp
+        SqliteRenderJobStore.h
+        SqliteRenderJobStore.cpp
+        migrations/001_initial.sql
+        migrations/002_timeline_editing.sql
+        migrations/003_studio_workflow.sql
+        migrations/004_render_jobs.sql
+        internal/SqliteConnection.h
+        internal/SqliteConnection.cpp
+        internal/EditCommandCodec.h
+        internal/EditCommandCodec.cpp
+        internal/DurableFile.h
+        internal/DurableFile.cpp
     DEPENDS
         cs_domain
+        cs_edit_engine
         nlohmann_json::nlohmann_json
+        nlohmann_json_schema_validator::validator
 )
+
+target_include_directories(cs_project_store PRIVATE ${PROJECT_BINARY_DIR}/generated)
+target_link_libraries(cs_project_store PRIVATE cs_sqlite3)

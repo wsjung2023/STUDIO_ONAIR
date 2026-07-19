@@ -1,4 +1,5 @@
 #include "app/StudioController.h"
+#include "app/RecordingPersistenceFake.h"
 
 #include "core/AppError.h"
 #include "domain/Identifiers.h"
@@ -15,23 +16,25 @@
 namespace {
 
 using creator::app::StudioController;
+using creator::app::test::RecordingPersistenceFake;
 using creator::core::AppError;
 using creator::core::ErrorCode;
 using creator::domain::SourceId;
 using creator::fakes::FakeCaptureSource;
 using creator::fakes::FakeRecorder;
 
-std::unique_ptr<StudioController> makeController() {
+std::unique_ptr<StudioController> makeController(RecordingPersistenceFake* persistence) {
     return std::make_unique<StudioController>(
         std::make_unique<FakeCaptureSource>(SourceId::create("screen-1").value(), "Fake Screen"),
-        std::make_unique<FakeRecorder>());
+        std::make_unique<FakeRecorder>(), persistence);
 }
 
 /// Q_PROPERTY notification and QSignalSpy need a QCoreApplication to exist.
 class StudioControllerTest : public ::testing::Test {
 protected:
-    void SetUp() override { controller_ = makeController(); }
+    void SetUp() override { controller_ = makeController(&persistence_); }
 
+    RecordingPersistenceFake persistence_;
     std::unique_ptr<StudioController> controller_;
 };
 
@@ -44,6 +47,7 @@ TEST_F(StudioControllerTest, RecordStartsASession) {
     QSignalSpy spy{controller_.get(), &StudioController::recordingChanged};
 
     controller_->startRecording();
+    persistence_.succeedBegin();
 
     EXPECT_TRUE(controller_->isRecording());
     EXPECT_EQ(spy.count(), 1);
@@ -51,20 +55,24 @@ TEST_F(StudioControllerTest, RecordStartsASession) {
 
 TEST_F(StudioControllerTest, StopEndsTheSession) {
     controller_->startRecording();
+    persistence_.succeedBegin();
 
     controller_->stopRecording();
+    persistence_.succeedComplete();
 
     EXPECT_FALSE(controller_->isRecording());
 }
 
 TEST_F(StudioControllerTest, StopReportsSegmentsAndDuration) {
     controller_->startRecording();
+    persistence_.succeedBegin();
 
     // 6 seconds of 60fps frames at the 2s default segment length = 3 segments.
     for (int i = 0; i < 60 * 6; ++i) {
         controller_->onCaptureTick();
     }
     controller_->stopRecording();
+    persistence_.succeedComplete();
 
     EXPECT_EQ(controller_->segmentCount(), 3);
     EXPECT_EQ(controller_->takeDuration(), QStringLiteral("00:00:06"));
@@ -72,12 +80,14 @@ TEST_F(StudioControllerTest, StopReportsSegmentsAndDuration) {
 
 TEST_F(StudioControllerTest, FormatsLongDurations) {
     controller_->startRecording();
+    persistence_.succeedBegin();
 
     // One hour, one minute, one second of frames.
     for (int i = 0; i < 60 * 3661; ++i) {
         controller_->onCaptureTick();
     }
     controller_->stopRecording();
+    persistence_.succeedComplete();
 
     EXPECT_EQ(controller_->takeDuration(), QStringLiteral("01:01:01"));
 }
@@ -85,11 +95,13 @@ TEST_F(StudioControllerTest, FormatsLongDurations) {
 TEST_F(StudioControllerTest, EmitsTakeSummaryOnStop) {
     QSignalSpy spy{controller_.get(), &StudioController::takeSummaryChanged};
     controller_->startRecording();
+    persistence_.succeedBegin();
     for (int i = 0; i < 60 * 3; ++i) {
         controller_->onCaptureTick();
     }
 
     controller_->stopRecording();
+    persistence_.succeedComplete();
 
     EXPECT_GE(spy.count(), 1);
 }
@@ -105,6 +117,7 @@ TEST_F(StudioControllerTest, IgnoresTickWhileIdle) {
 
 TEST_F(StudioControllerTest, IgnoresDoubleRecord) {
     controller_->startRecording();
+    persistence_.succeedBegin();
     QSignalSpy spy{controller_.get(), &StudioController::recordingChanged};
 
     controller_->startRecording();
@@ -155,21 +168,58 @@ TEST_F(StudioControllerTest, FailedStartStopsTheSourceAndLeavesControllerIdle) {
 
 TEST_F(StudioControllerTest, ClearsPreviousTakeOnRestart) {
     controller_->startRecording();
+    persistence_.succeedBegin();
     for (int i = 0; i < 60 * 4; ++i) {
         controller_->onCaptureTick();
     }
     controller_->stopRecording();
+    persistence_.succeedComplete();
     ASSERT_EQ(controller_->segmentCount(), 2);
 
     controller_->startRecording();
+    persistence_.succeedBegin();
 
     EXPECT_EQ(controller_->segmentCount(), 0);
 }
 
-}  // namespace
+TEST_F(StudioControllerTest, DoesNotStartRecorderBeforeSessionCommit) {
+    controller_->startRecording();
 
-int main(int argc, char** argv) {
-    QCoreApplication app{argc, argv};
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+    EXPECT_TRUE(controller_->isBusy());
+    EXPECT_FALSE(controller_->isRecording());
+    EXPECT_TRUE(persistence_.beginPending());
+
+    persistence_.succeedBegin();
+
+    EXPECT_TRUE(controller_->isRecording());
+    EXPECT_FALSE(controller_->isBusy());
 }
+
+TEST_F(StudioControllerTest, BeginFailureNeverStartsCapture) {
+    controller_->startRecording();
+
+    persistence_.failBegin(AppError{ErrorCode::IoFailure, "database full"});
+
+    EXPECT_FALSE(controller_->isRecording());
+    EXPECT_FALSE(controller_->isBusy());
+    EXPECT_EQ(controller_->statusMessage(), QStringLiteral("database full"));
+}
+
+TEST_F(StudioControllerTest, StopShowsStoppedOnlyAfterDatabaseCommit) {
+    controller_->startRecording();
+    persistence_.succeedBegin();
+    controller_->onCaptureTick();
+
+    controller_->stopRecording();
+
+    EXPECT_TRUE(controller_->isBusy());
+    EXPECT_NE(controller_->statusMessage(), QStringLiteral("Stopped"));
+    EXPECT_TRUE(persistence_.completePending());
+
+    persistence_.succeedComplete();
+
+    EXPECT_FALSE(controller_->isBusy());
+    EXPECT_EQ(controller_->statusMessage(), QStringLiteral("Stopped"));
+}
+
+}  // namespace

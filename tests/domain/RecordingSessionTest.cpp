@@ -60,6 +60,8 @@ TEST(RecordingSessionTest, StopMovesToStopped) {
 
     ASSERT_TRUE(session.stop(at(10)).hasValue());
     EXPECT_EQ(session.state(), SessionState::Stopped);
+    EXPECT_EQ(session.startedAt(), at(0));
+    EXPECT_EQ(session.stoppedAt(), at(10));
 }
 
 TEST(RecordingSessionTest, ReportsDurationAfterStop) {

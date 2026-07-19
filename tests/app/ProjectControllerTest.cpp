@@ -1,0 +1,327 @@
+#include "app/ProjectController.h"
+#include "app/StudioController.h"
+
+#include "app/FakeProjectPackageStore.h"
+#include "app/RecentProjectRegistry.h"
+#include "core/Utc.h"
+#include "core/Uuid.h"
+#include "fakes/FakeCaptureSource.h"
+#include "fakes/FakeRecorder.h"
+#include "project_store/ProjectPackageStore.h"
+
+#include <QSignalSpy>
+#include <QThread>
+#include <QEventLoop>
+#include <QTimer>
+#include <QUrl>
+
+#include <gtest/gtest.h>
+
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <string>
+
+namespace {
+
+namespace fs = std::filesystem;
+
+using creator::app::ProjectController;
+using creator::app::test::FakeProjectPackageStore;
+using creator::domain::SessionId;
+using creator::project_store::OpenProjectResult;
+using creator::project_store::ProjectPackage;
+using creator::project_store::RecoveryCandidate;
+using creator::project_store::RecoveryResult;
+
+class ProjectControllerTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        root_ = fs::temp_directory_path() /
+                ("cs_project_controller_" + creator::core::generateUuidV4());
+        std::error_code ec;
+        fs::remove_all(root_, ec);
+        fs::create_directories(root_);
+        packagePath_ = root_ / "lesson.cstudio";
+        otherPath_ = root_ / "other.cstudio";
+        auto fake = std::make_unique<FakeProjectPackageStore>();
+        fake_ = fake.get();
+        controller_ = std::make_unique<ProjectController>(
+            std::move(fake), root_ / "recent-projects.json", false);
+    }
+
+    void TearDown() override {
+        controller_.reset();
+        std::error_code ec;
+        fs::remove_all(root_, ec);
+    }
+
+    fs::path root_;
+    fs::path packagePath_;
+    fs::path otherPath_;
+    FakeProjectPackageStore* fake_{};
+    std::unique_ptr<ProjectController> controller_;
+};
+
+TEST_F(ProjectControllerTest, CreateRunsStoreOffUiThreadAndPublishesProject) {
+    QSignalSpy opened{controller_.get(), &ProjectController::projectOpened};
+
+    controller_->createProject(QUrl::fromLocalFile(
+                                   QString::fromStdWString(packagePath_.wstring())),
+                               QStringLiteral("강의"));
+
+    ASSERT_TRUE(opened.wait(3000));
+    EXPECT_NE(fake_->lastThreadId(), QThread::currentThreadId());
+    EXPECT_TRUE(controller_->hasOpenProject());
+    EXPECT_FALSE(controller_->projectId().isEmpty());
+    EXPECT_EQ(controller_->projectName(), QStringLiteral("강의"));
+    ASSERT_TRUE(controller_->recordingPackagePath().has_value());
+    EXPECT_EQ(*controller_->recordingPackagePath(), packagePath_);
+    EXPECT_FALSE(controller_->busy());
+}
+
+TEST_F(ProjectControllerTest, OpenPublishesRecoveryCandidates) {
+    auto result = fake_->create(packagePath_, "Recovery").value();
+    result.recoveryCandidates.push_back(RecoveryCandidate{
+        .packagePath = packagePath_,
+        .projectName = "Recovery",
+        .sessionId = SessionId::create("session-1").value(),
+        .createdAt = creator::core::Utc::parseRfc3339("2026-07-16T12:00:00Z").value(),
+        .readySegments = 1,
+        .writingSegments = 1,
+    });
+    fake_->setOpenResult(std::move(result));
+    QSignalSpy required{controller_.get(), &ProjectController::recoveryRequired};
+
+    controller_->openProject(
+        QUrl::fromLocalFile(QString::fromStdWString(packagePath_.wstring())));
+
+    ASSERT_TRUE(required.wait(3000));
+    EXPECT_EQ(controller_->recoveries().size(), 1);
+}
+
+TEST_F(ProjectControllerTest, RecoveryPublishesQuarantineSummary) {
+    auto result = fake_->create(packagePath_, "Recovery").value();
+    result.recoveryCandidates.push_back(RecoveryCandidate{
+        .packagePath = packagePath_,
+        .projectName = "Recovery",
+        .sessionId = SessionId::create("session-1").value(),
+        .createdAt = creator::core::Utc::parseRfc3339("2026-07-16T12:00:00Z").value(),
+        .readySegments = 2,
+        .writingSegments = 1,
+    });
+    fake_->setOpenResult(std::move(result));
+    fake_->setRecoveryResult(RecoveryResult{
+        .sessionId = SessionId::create("session-1").value(),
+        .readySegments = 2,
+        .failedSegments = 1,
+        .quarantinedParts = 1,
+        .orphanParts = 3,
+    });
+    QSignalSpy required{controller_.get(), &ProjectController::recoveryRequired};
+    QSignalSpy opened{controller_.get(), &ProjectController::projectOpened};
+
+    controller_->openProject(
+        QUrl::fromLocalFile(QString::fromStdWString(packagePath_.wstring())));
+    ASSERT_TRUE(required.wait(3000));
+    controller_->recoverSession(QStringLiteral("session-1"));
+
+    ASSERT_TRUE(opened.wait(3000));
+    EXPECT_EQ(controller_->statusMessage(),
+              QStringLiteral("Recovered 2 ready segments; quarantined 1 interrupted and 3 orphan part files"));
+}
+
+TEST_F(ProjectControllerTest, RejectsSecondCommandWhileBusy) {
+    fake_->holdNextCall();
+    QSignalSpy opened{controller_.get(), &ProjectController::projectOpened};
+    controller_->openProject(
+        QUrl::fromLocalFile(QString::fromStdWString(packagePath_.wstring())));
+    controller_->openProject(
+        QUrl::fromLocalFile(QString::fromStdWString(otherPath_.wstring())));
+
+    EXPECT_EQ(controller_->statusMessage(),
+              QStringLiteral("A project operation is already running"));
+    fake_->releaseHeldCall();
+    if (controller_->busy()) EXPECT_TRUE(opened.wait(3000));
+}
+
+TEST_F(ProjectControllerTest, StartupScansRegisteredProjectsForRecoveries) {
+    controller_.reset();
+    fs::create_directories(packagePath_);
+    creator::app::RecentProjectRegistry registry{root_ / "recent-projects.json"};
+    ASSERT_TRUE(registry.remember(
+                            packagePath_,
+                            creator::core::Utc::parseRfc3339("2026-07-16T12:00:00Z").value())
+                    .hasValue());
+    auto fake = std::make_unique<FakeProjectPackageStore>();
+    fake_ = fake.get();
+    auto result = fake_->create(packagePath_, "Recovery").value();
+    result.recoveryCandidates.push_back(RecoveryCandidate{
+        .packagePath = packagePath_,
+        .projectName = "Recovery",
+        .sessionId = SessionId::create("startup-session").value(),
+        .createdAt = creator::core::Utc::parseRfc3339("2026-07-16T12:00:00Z").value(),
+        .readySegments = 2,
+        .writingSegments = 1,
+    });
+    fake_->setOpenResult(std::move(result));
+    controller_ = std::make_unique<ProjectController>(
+        std::move(fake), root_ / "recent-projects.json", true);
+    QSignalSpy required{controller_.get(), &ProjectController::recoveryRequired};
+
+    ASSERT_TRUE(required.wait(3000));
+    ASSERT_EQ(controller_->recoveries().size(), 1);
+    EXPECT_EQ(controller_->recentProjects().size(), 1);
+    EXPECT_NE(fake_->lastThreadId(), QThread::currentThreadId());
+}
+
+TEST_F(ProjectControllerTest, RegistryBacksUpMalformedFileOnNextRemember) {
+    controller_.reset();
+    const fs::path registryPath = root_ / "recent-projects.json";
+    std::ofstream{registryPath} << "not json";
+    creator::app::RecentProjectRegistry registry{registryPath};
+
+    ASSERT_TRUE(registry.remember(
+                            packagePath_,
+                            creator::core::Utc::parseRfc3339("2026-07-16T12:00:00Z").value())
+                    .hasValue());
+
+    const auto loaded = registry.load();
+    ASSERT_TRUE(loaded.hasValue());
+    ASSERT_EQ(loaded.value().size(), 1u);
+    bool foundBackup = false;
+    for (const auto& entry : fs::directory_iterator{root_}) {
+        if (entry.path().filename().string().find("recent-projects.json.corrupt-") == 0) {
+            foundBackup = true;
+        }
+    }
+    EXPECT_TRUE(foundBackup);
+}
+
+TEST_F(ProjectControllerTest, NoOpenProjectFailsAsynchronouslyExactlyOnce) {
+    int completionCount = 0;
+    creator::core::ErrorCode errorCode = creator::core::ErrorCode::Unknown;
+    Qt::HANDLE completionThread = nullptr;
+    QEventLoop loop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+
+    controller_->begin(SessionId::create("session-1").value(), {},
+                       [&](creator::core::Result<void> result) {
+                           ++completionCount;
+                           completionThread = QThread::currentThreadId();
+                           if (!result.hasValue()) errorCode = result.error().code();
+                           loop.quit();
+                       });
+
+    EXPECT_EQ(completionCount, 0);
+    timeout.start(3000);
+    loop.exec();
+    EXPECT_EQ(completionCount, 1);
+    EXPECT_EQ(errorCode, creator::core::ErrorCode::InvalidState);
+    EXPECT_EQ(completionThread, QThread::currentThreadId());
+}
+
+TEST_F(ProjectControllerTest, RecordingPersistenceLeavesAndReturnsToUiThread) {
+    QSignalSpy opened{controller_.get(), &ProjectController::projectOpened};
+    controller_->createProject(
+        QUrl::fromLocalFile(QString::fromStdWString(packagePath_.wstring())),
+        QStringLiteral("Recording"));
+    ASSERT_TRUE(opened.wait(3000));
+    fake_->holdNextCall();
+
+    int completionCount = 0;
+    Qt::HANDLE completionThread = nullptr;
+    QEventLoop loop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    controller_->begin(SessionId::create("session-1").value(), {},
+                       [&](creator::core::Result<void> result) {
+                           EXPECT_TRUE(result.hasValue());
+                           ++completionCount;
+                           completionThread = QThread::currentThreadId();
+                           loop.quit();
+                       });
+
+    EXPECT_EQ(completionCount, 0);
+    fake_->releaseHeldCall();
+    timeout.start(3000);
+    loop.exec();
+    EXPECT_EQ(completionCount, 1);
+    EXPECT_NE(fake_->lastThreadId(), QThread::currentThreadId());
+    EXPECT_EQ(completionThread, QThread::currentThreadId());
+}
+
+TEST_F(ProjectControllerTest, DestructionCompletesPendingPersistenceExactlyOnce) {
+    QSignalSpy opened{controller_.get(), &ProjectController::projectOpened};
+    controller_->createProject(
+        QUrl::fromLocalFile(QString::fromStdWString(packagePath_.wstring())),
+        QStringLiteral("Recording"));
+    ASSERT_TRUE(opened.wait(3000));
+    fake_->holdNextCall();
+    int completionCount = 0;
+    creator::core::ErrorCode errorCode = creator::core::ErrorCode::Unknown;
+    Qt::HANDLE completionThread = nullptr;
+    controller_->begin(SessionId::create("session-pending").value(), {},
+                       [&](creator::core::Result<void> result) {
+                           ++completionCount;
+                           completionThread = QThread::currentThreadId();
+                           if (!result.hasValue()) errorCode = result.error().code();
+                       });
+    ASSERT_TRUE(fake_->waitUntilHeldCallEntered());
+    fake_->releaseHeldCall();
+
+    controller_.reset();
+
+    EXPECT_EQ(completionCount, 1);
+    EXPECT_EQ(errorCode, creator::core::ErrorCode::InvalidState);
+    EXPECT_EQ(completionThread, QThread::currentThreadId());
+}
+
+TEST(ProjectPersistenceIntegrationTest, RecordsAgainAfterControllersAreRecreated) {
+    const fs::path root = fs::temp_directory_path() / "cs_project_restart_recording";
+    const fs::path packagePath = root / "lesson.cstudio";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root);
+
+    auto recordOneTake = [&](bool create) {
+        auto store = std::make_unique<creator::project_store::ProjectPackageStore>();
+        ProjectController project{std::move(store), root / "recent-projects.json", false};
+        QSignalSpy opened{&project, &ProjectController::projectOpened};
+        const QUrl url = QUrl::fromLocalFile(QString::fromStdWString(packagePath.wstring()));
+        if (create) {
+            project.createProject(url, QStringLiteral("Restart Recording"));
+        } else {
+            project.openProject(url);
+        }
+        ASSERT_TRUE(opened.wait(3000));
+
+        creator::app::StudioController studio{
+            std::make_unique<creator::fakes::FakeCaptureSource>(
+                creator::domain::SourceId::create("screen-1").value(), "Fake Screen"),
+            std::make_unique<creator::fakes::FakeRecorder>(),
+            static_cast<creator::app::IRecordingPersistence*>(&project)};
+        QSignalSpy recordingChanged{&studio,
+                                    &creator::app::StudioController::recordingChanged};
+        studio.startRecording();
+        ASSERT_TRUE(recordingChanged.wait(3000))
+            << "create=" << create << " status=" << studio.statusMessage().toStdString();
+        ASSERT_TRUE(studio.isRecording()) << studio.statusMessage().toStdString();
+
+        QSignalSpy operationChanged{&studio,
+                                    &creator::app::StudioController::operationStateChanged};
+        studio.stopRecording();
+        while (studio.isBusy()) ASSERT_TRUE(operationChanged.wait(3000));
+        EXPECT_EQ(studio.statusMessage(), QStringLiteral("Stopped"));
+    };
+
+    recordOneTake(true);
+    recordOneTake(false);
+
+    fs::remove_all(root, ec);
+}
+
+}  // namespace

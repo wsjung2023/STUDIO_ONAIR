@@ -1,0 +1,12 @@
+#pragma once
+
+#include <cstdint>
+#include <string_view>
+
+namespace creator::project_store::embedded {
+inline constexpr std::int32_t kMigration001Version = 1;
+inline constexpr std::string_view kMigration001Name = "001_initial";
+inline constexpr std::string_view kMigration001Sha256 = "@CS_MIGRATION_001_SHA256@";
+inline constexpr std::string_view kMigration001Sql =
+    R"CS_MIGRATION(@CS_MIGRATION_001_SQL@)CS_MIGRATION";
+}  // namespace creator::project_store::embedded

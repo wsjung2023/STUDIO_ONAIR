@@ -1,6 +1,15 @@
 cs_add_qtfree_library(cs_recorder
     SOURCES
         IRecorder.h
+        RecordingTrack.h
+        RecordingTrack.cpp
+        TrackSegmentPorts.h
+        DiskSpaceMonitor.h
+        DiskSpaceMonitor.cpp
+        DurableSegmentPublisher.h
+        DurableSegmentPublisher.cpp
+        AsyncTrackRecorder.h
+        AsyncTrackRecorder.cpp
     DEPENDS
         cs_domain
         cs_media

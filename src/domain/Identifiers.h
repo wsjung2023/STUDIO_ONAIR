@@ -48,9 +48,37 @@ private:
 struct ProjectIdTag;
 struct SourceIdTag;
 struct SessionIdTag;
+struct CaptureTargetIdTag;
+struct CaptureDeviceIdTag;
+struct AssetIdTag;
+struct TimelineIdTag;
+struct TrackIdTag;
+struct ClipIdTag;
+struct CueIdTag;
+struct MarkerIdTag;
+struct SceneIdTag;
+struct CommandIdTag;
+struct RenderJobIdTag;
 
 using ProjectId = Identifier<ProjectIdTag>;
 using SourceId = Identifier<SourceIdTag>;
 using SessionId = Identifier<SessionIdTag>;
+/// Opaque, session-scoped identity supplied by a screen-capture adapter.
+/// It is deliberately distinct from SourceId: a selected OS window may become
+/// a project source, but the two lifetimes and persistence rules are different.
+using CaptureTargetId = Identifier<CaptureTargetIdTag>;
+/// Opaque identity supplied by a native camera/microphone discovery adapter.
+/// Device identity is not project source identity and is never inferred from a
+/// user-visible device name.
+using CaptureDeviceId = Identifier<CaptureDeviceIdTag>;
+using AssetId = Identifier<AssetIdTag>;
+using TimelineId = Identifier<TimelineIdTag>;
+using TrackId = Identifier<TrackIdTag>;
+using ClipId = Identifier<ClipIdTag>;
+using CueId = Identifier<CueIdTag>;
+using MarkerId = Identifier<MarkerIdTag>;
+using SceneId = Identifier<SceneIdTag>;
+using CommandId = Identifier<CommandIdTag>;
+using RenderJobId = Identifier<RenderJobIdTag>;
 
 }  // namespace creator::domain

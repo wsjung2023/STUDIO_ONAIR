@@ -20,11 +20,15 @@ struct CaptureConfig final {
 
 /// Live counters for the diagnostics surface.
 ///
-/// droppedFrames is not an internal detail: "녹화 실패를 숨기지 않는다"
-/// (CLAUDE.md 9) means this reaches the UI while recording, not just the log.
+/// droppedFrames counts native dropped-frame markers reported by the source;
+/// it must not include normal idle frames, malformed input, or preview mailbox
+/// replacement. "녹화 실패를 숨기지 않는다" (CLAUDE.md 9) means each category
+/// reaches the UI rather than being folded into a reassuring zero.
 struct CaptureStats final {
     std::uint64_t receivedFrames{0};
     std::uint64_t droppedFrames{0};
+    std::uint64_t ignoredFrames{0};
+    std::uint64_t invalidFrames{0};
     double currentFps{0.0};
 };
 
@@ -41,19 +45,9 @@ struct CaptureStats final {
 /// reaches into the DB makes the capture layer untestable and couples it to
 /// storage.
 ///
-/// Frame delivery is deliberately not on this interface yet. Real OS capture
-/// pushes - ScreenCaptureKit and Windows.Graphics.Capture call us when a frame
-/// is ready - so a push source needs some way to hand frames onward, and this
-/// port does not define one. IPullCaptureSource covers the pull path, which is
-/// all R0-01 needs.
-///
-/// The shape is left open on purpose rather than guessed at: designing a
-/// callback without the real SCK/WGC APIs in front of us would be speculation,
-/// and R0-01 is explicitly barred from implementing either. R0-03 decides it,
-/// with two candidates already visible - constructor-injecting a sink into the
-/// concrete source (keeps the port minimal), or adding sink registration here
-/// (makes delivery part of the contract). Whoever picks: the layers above must
-/// not have to know which kind of source they hold.
+/// Push implementations constructor-inject IVideoFrameSink; pull test sources
+/// derive through IPullCaptureSource. Delivery stays off this lifecycle port so
+/// platform callback types cannot leak across the boundary.
 class ICaptureSource {
 public:
     virtual ~ICaptureSource() = default;
@@ -68,9 +62,12 @@ public:
 
     [[nodiscard]] virtual creator::core::Result<void> start(const CaptureConfig& config) = 0;
 
-    /// Must be safe to call on a source that was never started, and must release
-    /// every OS handle it holds (CLAUDE.md 8 requires resource cleanup to be
-    /// verified, so this has to be idempotent to be testable).
+    /// Must be safe to call on a source that was never started and immediately
+    /// bar further frame callbacks. Purely synchronous sources release all
+    /// handles before return. Native screen/device sources additionally expose
+    /// asynchronous stop ports so OS completion and error remain observable
+    /// without blocking the UI thread; their synchronous barrier must keep any
+    /// still-running native teardown state alive independently of this object.
     [[nodiscard]] virtual creator::core::Result<void> stop() = 0;
 
     [[nodiscard]] virtual CaptureStats stats() const noexcept = 0;

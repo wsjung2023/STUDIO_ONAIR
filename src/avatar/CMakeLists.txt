@@ -1,0 +1,64 @@
+cs_add_qtfree_library(cs_avatar
+    SOURCES
+        ExpressionParameters.h
+        AvatarParameterMapper.h
+        AvatarParameterMapper.cpp
+        AvatarModelDescriptor.h
+        AvatarModelDescriptor.cpp
+        AvatarRenderFrame.h
+        AvatarRenderFrame.cpp
+        AvatarSoftwareRasterizer.h
+        AvatarSoftwareRasterizer.cpp
+        AvatarSoftwareRenderer.h
+        AvatarSoftwareRenderer.cpp
+        IAvatarRenderer.h
+        AvatarRenderPipeline.h
+        AvatarRenderPipeline.cpp
+        TrackingResult.h
+        AvatarProviderId.h
+        ITrackingProvider.h
+        CalibrationProfile.h
+        CalibrationProfile.cpp
+        CalibrationCapture.h
+        CalibrationCapture.cpp
+        ExpressionNormalizer.h
+        ExpressionNormalizer.cpp
+        ExpressionSmoother.h
+        ExpressionSmoother.cpp
+        AvatarMotionSample.h
+        AvatarMotionSerializer.h
+        AvatarMotionSerializer.cpp
+        AvatarMotionNdjsonSink.h
+        AvatarMotionNdjsonSink.cpp
+        AvatarMotionPlayback.h
+        AvatarMotionPlayback.cpp
+        AvatarMotionPlaybackRenderer.h
+        AvatarMotionPlaybackRenderer.cpp
+        AvatarMotionPipeline.h
+        AvatarMotionPipeline.cpp
+        AvatarTrackingSession.h
+        AvatarTrackingSession.cpp
+        PrimaryFaceSelector.h
+        PrimaryFaceSelector.cpp
+        openseeface/OpenSeeFaceParser.h
+        openseeface/OpenSeeFaceParser.cpp
+        openseeface/OpenSeeFaceUdpSource.h
+        openseeface/OpenSeeFaceUdpSource.cpp
+        openseeface/OpenSeeFaceProcessSupervisor.h
+        openseeface/OpenSeeFaceProcessSupervisor.cpp
+        inochi2d/Inochi2dModelRuntime.h
+        inochi2d/Inochi2dModelRuntime.cpp
+        inochi2d/Inochi2dAvatarRenderer.h
+        inochi2d/Inochi2dAvatarRenderer.cpp
+    DEPENDS
+        cs_core
+        cs_media
+        cs_domain
+        nlohmann_json::nlohmann_json
+)
+
+if(WIN32)
+    target_link_libraries(cs_avatar PUBLIC ws2_32)
+elseif(UNIX)
+    target_link_libraries(cs_avatar PRIVATE dl)
+endif()

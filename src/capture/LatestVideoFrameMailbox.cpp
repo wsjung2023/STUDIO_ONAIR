@@ -1,0 +1,72 @@
+#include "capture/LatestVideoFrameMailbox.h"
+
+#include <utility>
+
+namespace creator::capture {
+
+void LatestVideoFrameMailbox::onCaptureStarted() noexcept {
+    std::scoped_lock lock{mutex_};
+    if (terminal_) return;
+    ++stats_.startNotifications;
+    startedPending_ = true;
+}
+
+void LatestVideoFrameMailbox::onVideoFrame(media::VideoFrame frame) noexcept {
+    std::scoped_lock lock{mutex_};
+    if (terminal_) {
+        ++stats_.framesAfterTerminalError;
+        return;
+    }
+    ++stats_.publishedFrames;
+    stats_.lastWidth = frame.contentWidth != 0
+                           ? frame.contentWidth
+                           : (frame.visibleRect.width != 0 ? frame.visibleRect.width : frame.width);
+    stats_.lastHeight = frame.contentHeight != 0
+                            ? frame.contentHeight
+                            : (frame.visibleRect.height != 0 ? frame.visibleRect.height
+                                                             : frame.height);
+    if (pendingFrame_) {
+        ++stats_.replacedFrames;
+    }
+    pendingFrame_ = std::move(frame);
+}
+
+void LatestVideoFrameMailbox::onCaptureError(core::AppError error) noexcept {
+    std::scoped_lock lock{mutex_};
+    ++stats_.terminalErrors;
+    if (terminal_) {
+        return;
+    }
+    terminal_ = true;
+    startedPending_ = false;
+    pendingFrame_.reset();
+    pendingError_ = std::move(error);
+}
+
+bool LatestVideoFrameMailbox::takeStarted() noexcept {
+    std::scoped_lock lock{mutex_};
+    const bool started = startedPending_;
+    startedPending_ = false;
+    return started;
+}
+
+std::optional<media::VideoFrame> LatestVideoFrameMailbox::takeLatest() {
+    std::scoped_lock lock{mutex_};
+    auto frame = std::move(pendingFrame_);
+    pendingFrame_.reset();
+    return frame;
+}
+
+std::optional<core::AppError> LatestVideoFrameMailbox::takeError() {
+    std::scoped_lock lock{mutex_};
+    auto error = std::move(pendingError_);
+    pendingError_.reset();
+    return error;
+}
+
+LatestVideoFrameMailboxStats LatestVideoFrameMailbox::stats() const noexcept {
+    std::scoped_lock lock{mutex_};
+    return stats_;
+}
+
+}  // namespace creator::capture

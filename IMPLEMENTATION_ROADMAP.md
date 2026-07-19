@@ -91,6 +91,37 @@
 
 목적: 실제 튜토리얼 한 편을 촬영하고 편집해 출력할 수 있다.
 
+현재 전달 상태:
+
+- [x] R1-01 타임라인 도메인, migration 002, split/trim/ripple 명령,
+  durable Undo/Redo·autosave 기반
+- [x] R1-02 Qt-free 편집 엔진 port, 결정적 fake, 비동기 Editor controller,
+  미디어 빈·멀티트랙 view model과 model-driven QML
+- [x] R1-03 감사된 MLT 동적 adapter와 실제 preview/playback
+  - MLT 7.40.0 core/avformat runtime-only staging and SHA-256 verification
+  - real multitrack composite/audio-mix graph, seek, bounded async playback
+  - Unicode package and physical tamper acceptance coverage
+- [x] R1-04 화면 구성 편집
+  - 영속 split/trim/lift/ripple 편집, Undo/Redo·명시적 저장
+  - 화면·카메라 transform, 오디오 gain/fade, 한글 제목·기본 자막
+  - 실제 MLT preview, `.cstudio` 재열기·실패 원자성·30분 그래프 물리 검증
+- [x] R1-05 Studio 실사용 기능
+  - scene/source 패널, 장면 전환, 마커·단축키, 녹화 HUD
+  - source 분리 녹화 결과의 원자적 타임라인 연결·복구·정확한 재열기
+- [x] R1-06 Export
+  - H.264 MP4, 1080p·4K, 하드웨어 인코더 탐지와 소프트웨어 폴백
+  - 진행률·취소·실패 복구
+- [ ] R1-07 전체 검증
+  - 30분 실제 촬영·편집·MP4 출력과 A/V 동기 검증
+
+위 체크는 R1을 축소한 것이 아니다. R1 완료 기준은 아래 Studio, Editor,
+Export 항목과 30분 실제 촬영·편집·출력 검증을 모두 만족할 때까지 유지한다.
+
+번호 기준은 위 R1-01~R1-07이 유일한 기준이다. 과거 구현 문서의
+`R1-05 effects/titles`와 `R1-06 Studio` 표기는 내부 작업을 별도 릴리스처럼
+번호 매긴 기록상의 오류이며, 각각 공식 R1-04와 R1-05 범위로 해석한다.
+R1-08 단계는 없다.
+
 ### Studio
 
 - scene/source 패널
@@ -130,6 +161,19 @@
 ## R2 — Creator Intelligence
 
 목적: 일반 편집기와 다른 화면 녹화 전용 생산성을 만든다.
+
+현재 진행 순서:
+
+- [ ] R2-01 커서 좌표·클릭 이벤트 소스 분리 기록
+- [ ] R2-02 클릭 강조·커서 숨김/교체
+- [ ] R2-03 자동 줌 후보·줌 구간 편집
+- [ ] R2-04 whisper.cpp 로컬 자막·단어/문장 타임스탬프
+- [ ] R2-05 transcript 비파괴 컷·침묵/필러 제안
+- [ ] R2-06 오디오 정리·음량 표준화
+- [ ] R2-07 전체 로컬 AI·승인/취소·실패 원자성 검증
+
+R1-06 Export와 R1-07 전체 검증을 순서대로 완료한 뒤 R2를 진행한다.
+R2 구현은 R1의 완료된 저장·편집·출력 기반 위에 통합하고 검증 후 병합한다.
 
 ### 커서
 

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://creator-studio.local/schemas/zoom_candidate.schema.json",
+  "title": "Creator Studio Auto-Zoom Candidate",
+  "type": "object",
+  "required": ["schemaVersion", "span", "region", "score"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "span": {
+      "type": "object",
+      "required": ["startNs", "durationNs"],
+      "additionalProperties": false,
+      "properties": {
+        "startNs": { "type": "integer", "minimum": 0 },
+        "durationNs": { "type": "integer", "exclusiveMinimum": 0 }
+      }
+    },
+    "region": {
+      "type": "object",
+      "required": ["centerX", "centerY", "zoomFactor"],
+      "additionalProperties": false,
+      "properties": {
+        "centerX": { "type": "number", "minimum": 0, "maximum": 1 },
+        "centerY": { "type": "number", "minimum": 0, "maximum": 1 },
+        "zoomFactor": { "type": "number", "minimum": 1 }
+      }
+    },
+    "score": { "type": "number", "minimum": 0, "maximum": 1 }
+  }
+}

@@ -10,6 +10,8 @@ namespace {
 
 using creator::core::ErrorCode;
 using creator::domain::ProjectId;
+using creator::domain::CueId;
+using creator::domain::MarkerId;
 using creator::domain::SessionId;
 using creator::domain::SourceId;
 
@@ -19,6 +21,8 @@ using creator::domain::SourceId;
 static_assert(!std::is_same_v<ProjectId, SourceId>);
 static_assert(!std::is_same_v<ProjectId, SessionId>);
 static_assert(!std::is_same_v<SourceId, SessionId>);
+static_assert(!std::is_same_v<CueId, SourceId>);
+static_assert(!std::is_same_v<MarkerId, CueId>);
 static_assert(!std::is_convertible_v<ProjectId, SourceId>);
 static_assert(!std::is_convertible_v<SourceId, ProjectId>);
 static_assert(!std::is_constructible_v<SourceId, ProjectId>);
@@ -28,6 +32,8 @@ static_assert(!std::is_constructible_v<SourceId, ProjectId>);
 static_assert(!std::is_default_constructible_v<ProjectId>);
 static_assert(!std::is_default_constructible_v<SourceId>);
 static_assert(!std::is_default_constructible_v<SessionId>);
+static_assert(!std::is_default_constructible_v<CueId>);
+static_assert(!std::is_default_constructible_v<MarkerId>);
 
 // Ids are copied into domain structs constantly; they must stay cheap to move.
 static_assert(std::is_nothrow_move_constructible_v<ProjectId>);
@@ -62,6 +68,20 @@ TEST(IdentifiersTest, RejectsEmptyString) {
 
     ASSERT_FALSE(id.hasValue());
     EXPECT_EQ(id.error().code(), ErrorCode::InvalidArgument);
+}
+
+TEST(IdentifiersTest, CreatesTypedCaptionCueIdentity) {
+    const auto cue = CueId::create("caption-cue-1");
+
+    ASSERT_TRUE(cue.hasValue());
+    EXPECT_EQ(cue.value().value(), "caption-cue-1");
+}
+
+TEST(IdentifiersTest, CreatesTypedTimelineMarkerIdentity) {
+    const auto marker = MarkerId::create("marker-1");
+
+    ASSERT_TRUE(marker.hasValue());
+    EXPECT_EQ(marker.value().value(), "marker-1");
 }
 
 TEST(IdentifiersTest, ComparesByValue) {

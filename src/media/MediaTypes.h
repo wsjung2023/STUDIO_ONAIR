@@ -24,6 +24,16 @@ enum class ColorSpace {
     Rec709Sdr,
 };
 
+/// Pixel-space crop inside a video frame's backing surface.
+struct PixelRect final {
+    std::uint32_t x{0};
+    std::uint32_t y{0};
+    std::uint32_t width{0};
+    std::uint32_t height{0};
+
+    friend bool operator==(const PixelRect&, const PixelRect&) = default;
+};
+
 /// A single video frame in the internal neutral representation.
 ///
 /// Carries no FFmpeg, Qt or MLT type: this struct crosses module boundaries and
@@ -40,6 +50,11 @@ struct VideoFrame final {
     creator::core::TimestampNs timestamp{};
     std::uint32_t width{0};
     std::uint32_t height{0};
+    PixelRect visibleRect{};
+    std::uint32_t contentWidth{0};
+    std::uint32_t contentHeight{0};
+    double contentScale{1.0};
+    double pointPixelScale{1.0};
     PixelFormat pixelFormat{PixelFormat::Unknown};
     ColorSpace colorSpace{ColorSpace::Rec709Sdr};
     std::shared_ptr<void> platformHandle;
@@ -55,6 +70,9 @@ struct AudioBlock final {
     std::uint32_t sampleRate{48000};
     std::uint32_t channels{2};
     std::uint32_t frameCount{0};
+    // Output samples per input sample. Synchronisation keeps this within
+    // +/-1000 ppm; adapters may reject wider ratios instead of hiding damage.
+    double sampleRateRatio{1.0};
     std::shared_ptr<const float[]> samples;
 };
 
