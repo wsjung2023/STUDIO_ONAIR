@@ -49,6 +49,7 @@ add_executable(cs_tests
     edit_engine/EditEngineTypesTest.cpp
     mlt_adapter/MltGraphPlanTest.cpp
     mlt_adapter/FrameEffectsTest.cpp
+    mlt_adapter/CursorVisualEffectsTest.cpp
     domain/ProjectManifestTest.cpp
     domain/RecordingSessionTest.cpp
     media/MediaTypesTest.cpp

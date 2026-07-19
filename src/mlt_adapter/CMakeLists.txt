@@ -4,8 +4,12 @@ cs_add_qtfree_library(cs_mlt_graph_plan
         MltGraphPlan.cpp
         FrameEffects.h
         FrameEffects.cpp
+        CursorVisualEffects.h
+        CursorVisualEffects.cpp
     DEPENDS
         cs_edit_engine
+        cs_autozoom
+        cs_cursor_emphasis
 )
 
 if(CS_ENABLE_MLT)

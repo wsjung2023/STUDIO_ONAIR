@@ -28,6 +28,7 @@ public:
 
     [[nodiscard]] bool aliasesInput() const noexcept { return owned_.empty(); }
     [[nodiscard]] std::span<const std::uint8_t> bytes() const noexcept;
+    [[nodiscard]] std::span<std::uint8_t> mutableBytes() noexcept;
     [[nodiscard]] std::uint32_t width() const noexcept { return width_; }
     [[nodiscard]] std::uint32_t height() const noexcept { return height_; }
     [[nodiscard]] std::uint32_t stride() const noexcept { return stride_; }

@@ -120,6 +120,10 @@ std::span<const std::uint8_t> ProcessedBgraFrame::bytes() const noexcept {
     return owned_;
 }
 
+std::span<std::uint8_t> ProcessedBgraFrame::mutableBytes() noexcept {
+    return owned_;
+}
+
 core::Result<ProcessedBgraFrame> applyVisualTransform(
     BgraFrameView source, std::uint32_t canvasWidth,
     std::uint32_t canvasHeight, const domain::VisualTransform& transform) {
