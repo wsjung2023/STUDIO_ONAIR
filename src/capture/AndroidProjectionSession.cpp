@@ -52,8 +52,7 @@ bool AndroidProjectionSession::onProjectionRevoked(std::uint64_t generation) noe
 
 bool AndroidProjectionSession::markStopped(std::uint64_t generation) noexcept {
     if (generation != generation_ ||
-        (state_ != ProjectionSessionState::Starting &&
-         state_ != ProjectionSessionState::Streaming && state_ != ProjectionSessionState::Revoked)) {
+        (state_ != ProjectionSessionState::Streaming && state_ != ProjectionSessionState::Revoked)) {
         return false;
     }
     state_ = ProjectionSessionState::Stopped;
