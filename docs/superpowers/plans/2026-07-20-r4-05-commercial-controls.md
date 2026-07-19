@@ -27,9 +27,9 @@
 **Interfaces:**
 - Produces: `EntitlementPolicy::evaluate(EntitlementAssertion, EntitlementClockState)` returning `EntitlementDecision`.
 
-- [ ] Write tests for active, expired, grace-active, grace-expired, revoked, product mismatch, clock rollback, and community-build decisions.
-- [ ] Run RED before the header exists.
-- [ ] Implement explicit states:
+- [x] Write tests for active, expired, grace-active, grace-expired, revoked, product mismatch, clock rollback, and community-build decisions.
+- [x] Run RED before the header exists.
+- [x] Implement explicit states:
 
 ```cpp
 enum class EntitlementState { Active, OfflineGrace, Unavailable };
@@ -40,8 +40,8 @@ struct EntitlementDecision final {
 };
 ```
 
-- [ ] Run `ctest --test-dir build/windows-debug -R EntitlementPolicyTest --output-on-failure`.
-- [ ] Commit with `git commit -m "feat(r4): enforce offline entitlement policy"`.
+- [x] Run `ctest --test-dir build/windows-debug -R EntitlementPolicyTest --output-on-failure`.
+- [x] Commit with `git commit -m "feat(r4): enforce offline entitlement policy"`.
 
 ### Task 2: Receipt/provider boundary and durable state
 
