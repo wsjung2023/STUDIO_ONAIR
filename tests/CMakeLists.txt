@@ -332,6 +332,49 @@ gtest_discover_tests(cs_app_tests
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
 )
 
+# R2-06 audio DSP core: a dedicated Qt-free test binary. Kept separate from
+# cs_tests so it links only cs_audio_dsp (+ the synthetic-signal test support),
+# proving the DSP module stands on its own without the rest of the tree.
+add_executable(cs_audio_dsp_tests
+    audio_dsp/support/SyntheticAudio.cpp
+    audio_dsp/AudioFormatTest.cpp
+    audio_dsp/AudioBufferTest.cpp
+    audio_dsp/SyntheticAudioTest.cpp
+    audio_dsp/GainProcessorTest.cpp
+    audio_dsp/CompressorProcessorTest.cpp
+    audio_dsp/LimiterProcessorTest.cpp
+    audio_dsp/AudioProcessingChainTest.cpp
+    audio_dsp/LoudnessNormalizerTest.cpp
+    audio_dsp/KWeightingFilterTest.cpp
+    audio_dsp/LoudnessMeterTest.cpp
+    audio_dsp/AudioLoudnessSerializerTest.cpp
+    audio_dsp/AudioLoudnessNdjsonSinkTest.cpp
+)
+target_link_libraries(cs_audio_dsp_tests
+    PRIVATE
+        cs_audio_dsp
+        # Test-only: the loudness telemetry tests validate serialized events
+        # against schemas/event.schema.json. The validator (MIT, already
+        # vendored, no Qt) is linked into the TEST binary only — cs_audio_dsp
+        # itself stays free of it, keeping the shipped DSP module lean.
+        nlohmann_json_schema_validator::validator
+        GTest::gtest_main
+)
+target_include_directories(cs_audio_dsp_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/tests
+    ${PROJECT_SOURCE_DIR}/tests/audio_dsp
+)
+target_compile_definitions(cs_audio_dsp_tests PRIVATE
+    CS_EVENT_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/event.schema.json"
+)
+set_target_properties(cs_audio_dsp_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+cs_apply_warnings(cs_audio_dsp_tests)
+gtest_discover_tests(cs_audio_dsp_tests)
+
 add_executable(cs_r1_durable_edit_acceptance_tests
     acceptance/R1DurableEditAcceptanceTest.cpp
 )

@@ -7,7 +7,8 @@
     { "$ref": "#/$defs/cursorClick" },
     { "$ref": "#/$defs/sceneChanged" },
     { "$ref": "#/$defs/marker" },
-    { "$ref": "#/$defs/avatarMotion" }
+    { "$ref": "#/$defs/avatarMotion" },
+    { "$ref": "#/$defs/audioLoudness" }
   ],
   "$defs": {
     "base": {
@@ -89,6 +90,23 @@
             }
           },
           "required": ["provider", "parameters"]
+        }
+      ]
+    },
+    "audioLoudness": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "properties": {
+            "type": { "const": "audio.loudness" },
+            "integratedLufs": { "type": ["number", "null"] },
+            "momentaryLufs": { "type": ["number", "null"] },
+            "shortTermLufs": { "type": ["number", "null"] },
+            "truePeakDbtp": { "type": ["number", "null"] },
+            "sourceId": { "type": "string" }
+          },
+          "required": ["type", "integratedLufs", "momentaryLufs",
+                       "shortTermLufs", "truePeakDbtp"]
         }
       ]
     }
