@@ -1,0 +1,14 @@
+cs_add_qtfree_library(cs_platform_release
+    SOURCES
+        PlatformCapability.h
+        PlatformCapability.cpp
+        PlatformCapabilityRegistry.h
+        PlatformCapabilityRegistry.cpp
+        ReleaseManifest.h
+        ReleaseManifest.cpp
+        ReleaseManifestStore.h
+        ReleaseManifestStore.cpp
+    DEPENDS
+        cs_core
+        nlohmann_json::nlohmann_json
+)

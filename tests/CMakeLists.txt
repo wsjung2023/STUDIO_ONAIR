@@ -19,6 +19,25 @@ FetchContent_MakeAvailable(googletest)
 
 include(GoogleTest)
 
+add_executable(cs_platform_release_tests
+    platform_release/PlatformCapabilityTest.cpp
+    platform_release/ReleaseManifestTest.cpp
+)
+target_link_libraries(cs_platform_release_tests
+    PRIVATE
+        cs_core
+        cs_platform_release
+        nlohmann_json::nlohmann_json
+        GTest::gtest_main
+)
+set_target_properties(cs_platform_release_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+cs_apply_warnings(cs_platform_release_tests)
+gtest_discover_tests(cs_platform_release_tests)
+
 add_executable(cs_crash_recovery_fixture
     helpers/CrashRecoveryFixture.cpp
 )
@@ -575,6 +594,12 @@ if(CS_ENABLE_WHISPER)
 endif()
 
 if(WIN32)
+    add_test(
+        NAME ReleaseManifestScript
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/ReleaseManifestScriptTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
     add_test(
         NAME MltBootstrapPolicy
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
