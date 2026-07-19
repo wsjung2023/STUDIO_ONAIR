@@ -89,3 +89,10 @@ library remains a deploy-time artifact. Missing libraries, missing symbols, and
 model-load failures become explicit `AppError` values rather than crashing the
 core build or silently rendering a fake model. GPU/draw-list rasterization is
 still a separate renderer-backend step.
+
+`AvatarSoftwareRasterizer` is that backend's CPU fallback boundary. It accepts
+copied BGRA texture bytes plus validated textured triangles and emits the same
+immutable `AvatarRenderFrame` used by preview and recording. It rejects malformed
+indices, non-finite vertices, storage mismatches, and dimension overflow before
+allocating a frame; GPU acceleration can replace this implementation without
+changing the model descriptor or capture contracts.

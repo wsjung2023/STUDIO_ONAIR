@@ -76,6 +76,7 @@ add_executable(cs_tests
     avatar/AvatarModelDescriptorTest.cpp
     avatar/AvatarRenderPipelineTest.cpp
     avatar/AvatarRenderFrameMediaTest.cpp
+    avatar/AvatarSoftwareRasterizerTest.cpp
     avatar/TrackingPortContractTest.cpp
     avatar/CalibrationProfileTest.cpp
     avatar/CalibrationCaptureTest.cpp
