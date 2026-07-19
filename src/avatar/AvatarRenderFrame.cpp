@@ -80,4 +80,25 @@ std::span<const std::uint8_t> AvatarRenderFrame::bytes() const noexcept {
                   : std::span<const std::uint8_t>{};
 }
 
+core::Result<media::VideoFrame> AvatarRenderFrame::toVideoFrame() const {
+    if (!bytes_ || bytes_->empty() || stride_ != width_ * 4U) {
+        return core::AppError{core::ErrorCode::InvalidState,
+                              "avatar frame is not tightly packed for media handoff"};
+    }
+    const auto owner = bytes_;
+    std::shared_ptr<void> handle{
+        const_cast<std::uint8_t*>(owner->data()),
+        [owner](void*) noexcept { /* owner keeps immutable pixels alive */ }};
+    media::VideoFrame frame{};
+    frame.timestamp = timestamp_;
+    frame.width = width_;
+    frame.height = height_;
+    frame.visibleRect = media::PixelRect{0, 0, width_, height_};
+    frame.contentWidth = width_;
+    frame.contentHeight = height_;
+    frame.pixelFormat = media::PixelFormat::Bgra8;
+    frame.platformHandle = std::move(handle);
+    return frame;
+}
+
 }  // namespace creator::avatar

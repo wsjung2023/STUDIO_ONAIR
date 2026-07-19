@@ -60,3 +60,8 @@ Studio scene sources now include the persisted `avatar` role. It is treated as
 a visual source (so transform, PIP, z-order, and enable/disable operations use
 the same scene rules as camera/screen) without changing the R1 default scene
 or pretending that a real model is bundled.
+
+`AvatarRenderFrame::toVideoFrame()` bridges tightly packed BGRA output into the
+existing timestamped media frame contract while retaining immutable pixel
+ownership. Preview and recording can therefore consume an avatar render frame
+without a second copy or a renderer-specific handle.

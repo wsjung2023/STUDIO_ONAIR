@@ -2,6 +2,7 @@
 
 #include "core/Result.h"
 #include "core/Timebase.h"
+#include "media/MediaTypes.h"
 
 #include <cstdint>
 #include <memory>
@@ -31,6 +32,8 @@ public:
     [[nodiscard]] std::uint32_t height() const noexcept { return height_; }
     [[nodiscard]] std::uint32_t stride() const noexcept { return stride_; }
     [[nodiscard]] std::span<const std::uint8_t> bytes() const noexcept;
+    /// Bridges a tightly packed BGRA frame into the shared media boundary.
+    [[nodiscard]] core::Result<media::VideoFrame> toVideoFrame() const;
 
     friend bool operator==(const AvatarRenderFrame&, const AvatarRenderFrame&) = default;
 
