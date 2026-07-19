@@ -79,6 +79,7 @@ add_executable(cs_tests
     capture/PortContractTest.cpp
     capture/CaptureTimestampMapperTest.cpp
     capture/AndroidProjectionSessionTest.cpp
+    capture/AndroidDeviceSessionTest.cpp
     capture/ScreenCapturePortsTest.cpp
     capture/LatestVideoFrameMailboxTest.cpp
     capture/CaptureFanoutSinksTest.cpp

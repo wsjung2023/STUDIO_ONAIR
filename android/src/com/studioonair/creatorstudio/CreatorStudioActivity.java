@@ -63,15 +63,24 @@ public class CreatorStudioActivity extends QtActivity {
     private CameraDevice cameraDevice;
     private CameraCaptureSession cameraSession;
     private ImageReader cameraReader;
-    private long cameraGeneration;
+    private volatile long cameraGeneration;
+    private volatile boolean cameraStopping;
+    private volatile long stoppingCameraGeneration;
+    private volatile long stoppedCameraGeneration;
     private AudioRecord microphoneRecord;
     private Thread microphoneThread;
     private volatile boolean microphoneRunning;
-    private long microphoneGeneration;
+    private volatile long microphoneGeneration;
+    private volatile boolean microphoneStopping;
+    private volatile long stoppingMicrophoneGeneration;
+    private volatile long stoppedMicrophoneGeneration;
     private AudioRecord playbackRecord;
     private Thread playbackThread;
     private volatile boolean playbackRunning;
-    private long playbackGeneration;
+    private volatile long playbackGeneration;
+    private volatile boolean playbackStopping;
+    private volatile long stoppingPlaybackGeneration;
+    private volatile long stoppedPlaybackGeneration;
 
     public static native void nativeProjectionResult(long generation, boolean granted);
     public static native boolean nativeProjectionFrame(long generation, java.nio.ByteBuffer bytes,
@@ -85,9 +94,12 @@ public class CreatorStudioActivity extends QtActivity {
         int sampleCount, int sampleRate, int channels, long timestampNs);
     public static native void nativeCameraFailed(long generation);
     public static native void nativeMicrophoneFailed(long generation);
+    public static native void nativeCameraStopped(long generation);
+    public static native void nativeMicrophoneStopped(long generation);
     public static native void nativeSystemAudioPcm16(long generation, ByteBuffer bytes,
         int sampleCount, int sampleRate, int channels, long timestampNs);
     public static native void nativeSystemAudioFailed(long generation);
+    public static native void nativeSystemAudioStopped(long generation);
 
     public static int mediaPermissionStatus(int kind) {
         final CreatorStudioActivity activity = activeActivity;
@@ -346,33 +358,41 @@ public class CreatorStudioActivity extends QtActivity {
 
     public static void startCamera(long generation, int requestedWidth, int requestedHeight, int requestedFps) {
         final CreatorStudioActivity activity = activeActivity;
-        if (activity == null) { nativeCameraFailed(generation); return; }
+        if (activity == null) {
+            nativeCameraFailed(generation);
+            nativeCameraStopped(generation);
+            return;
+        }
         activity.runOnUiThread(() -> activity.startCameraOnUiThread(
             generation, requestedWidth, requestedHeight, requestedFps));
     }
 
     public static void stopCamera(long generation) {
         final CreatorStudioActivity activity = activeActivity;
-        if (activity != null) activity.runOnUiThread(() -> activity.stopCameraOnUiThread(generation));
+        if (activity == null) {
+            nativeCameraStopped(generation);
+            return;
+        }
+        activity.runOnUiThread(() -> activity.stopCameraOnUiThread(generation));
     }
 
     private void startCameraOnUiThread(long generation, int requestedWidth, int requestedHeight,
                                        int requestedFps) {
-        if (cameraDevice != null || cameraGeneration != 0 ||
+        if (cameraDevice != null || cameraGeneration != 0 || cameraStopping ||
             checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            nativeCameraFailed(generation); return;
+            failCamera(generation); return;
         }
         try {
             final CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
-            if (manager == null) { nativeCameraFailed(generation); return; }
+            if (manager == null) { failCamera(generation); return; }
             final String[] ids = manager.getCameraIdList();
-            if (ids.length == 0) { nativeCameraFailed(generation); return; }
+            if (ids.length == 0) { failCamera(generation); return; }
             final String cameraId = ids[0];
             final StreamConfigurationMap map = manager.getCameraCharacteristics(cameraId)
                 .get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
             final Size chosen = chooseCameraSize(map == null ? null :
                 map.getOutputSizes(ImageReader.class), requestedWidth, requestedHeight);
-            if (chosen == null) { nativeCameraFailed(generation); return; }
+            if (chosen == null) { failCamera(generation); return; }
             cameraGeneration = generation;
             cameraThread = new HandlerThread("CreatorStudioCamera");
             cameraThread.start();
@@ -387,7 +407,7 @@ public class CreatorStudioActivity extends QtActivity {
                     rgba.order(ByteOrder.nativeOrder());
                     yuv420ToBgra(image, rgba);
                     rgba.rewind();
-                    nativeCameraFrame(cameraGeneration, rgba, image.getWidth(), image.getHeight(),
+                    nativeCameraFrame(generation, rgba, image.getWidth(), image.getHeight(),
                         image.getTimestamp());
                 } finally { image.close(); }
             }, cameraHandler);
@@ -407,31 +427,64 @@ public class CreatorStudioActivity extends QtActivity {
                                     if (cameraGeneration != generation) { session.close(); return; }
                                     cameraSession = session;
                                     try { session.setRepeatingRequest(request.build(), null, cameraHandler); }
-                                    catch (CameraAccessException error) { nativeCameraFailed(generation); }
+                                    catch (CameraAccessException error) { failCamera(generation); }
                                 }
                                 @Override public void onConfigureFailed(CameraCaptureSession session) {
-                                    nativeCameraFailed(generation);
+                                    failCamera(generation);
                                 }
                             }, cameraHandler);
-                    } catch (CameraAccessException error) { nativeCameraFailed(generation); }
+                    } catch (CameraAccessException error) { failCamera(generation); }
                 }
                 @Override public void onDisconnected(CameraDevice camera) {
-                    camera.close(); nativeCameraFailed(generation);
+                    camera.close(); failCamera(generation);
                 }
                 @Override public void onError(CameraDevice camera, int error) {
-                    camera.close(); nativeCameraFailed(generation);
+                    camera.close(); failCamera(generation);
                 }
             }, cameraHandler);
-        } catch (SecurityException | CameraAccessException error) { nativeCameraFailed(generation); }
+        } catch (SecurityException | CameraAccessException error) { failCamera(generation); }
+    }
+
+    private void failCamera(long generation) {
+        nativeCameraFailed(generation);
+        runOnUiThread(() -> stopCameraOnUiThread(generation));
     }
 
     private void stopCameraOnUiThread(long generation) {
-        if (generation != 0 && generation != cameraGeneration) return;
+        if (generation == 0) generation = cameraGeneration;
+        if (generation == 0 || stoppedCameraGeneration == generation) return;
+        if (cameraStopping && stoppingCameraGeneration == generation) return;
+        if (generation != cameraGeneration) {
+            stoppedCameraGeneration = generation;
+            nativeCameraStopped(generation);
+            return;
+        }
+        cameraStopping = true;
+        stoppingCameraGeneration = generation;
         cameraGeneration = 0;
         if (cameraSession != null) { cameraSession.close(); cameraSession = null; }
         if (cameraDevice != null) { cameraDevice.close(); cameraDevice = null; }
-        if (cameraReader != null) { cameraReader.close(); cameraReader = null; }
-        if (cameraThread != null) { cameraThread.quitSafely(); cameraThread = null; cameraHandler = null; }
+        if (cameraReader != null) {
+            cameraReader.setOnImageAvailableListener(null, null);
+            cameraReader.close();
+            cameraReader = null;
+        }
+        final HandlerThread thread = cameraThread;
+        cameraThread = null;
+        cameraHandler = null;
+        if (thread != null) thread.quitSafely();
+        final long stoppedGeneration = generation;
+        new Thread(() -> {
+            if (thread != null) {
+                try { thread.join(); } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            cameraStopping = false;
+            stoppingCameraGeneration = 0;
+            stoppedCameraGeneration = stoppedGeneration;
+            nativeCameraStopped(stoppedGeneration);
+        }, "CreatorStudioCameraStop").start();
     }
 
     private static Size chooseCameraSize(Size[] sizes, int requestedWidth, int requestedHeight) {
@@ -470,30 +523,39 @@ public class CreatorStudioActivity extends QtActivity {
 
     public static void startMicrophone(long generation) {
         final CreatorStudioActivity activity = activeActivity;
-        if (activity == null) { nativeMicrophoneFailed(generation); return; }
+        if (activity == null) {
+            nativeMicrophoneFailed(generation);
+            nativeMicrophoneStopped(generation);
+            return;
+        }
         activity.runOnUiThread(() -> activity.startMicrophoneOnUiThread(generation));
     }
 
     public static void stopMicrophone(long generation) {
         final CreatorStudioActivity activity = activeActivity;
-        if (activity != null) activity.runOnUiThread(() -> activity.stopMicrophoneOnUiThread(generation));
+        if (activity == null) {
+            nativeMicrophoneStopped(generation);
+            return;
+        }
+        activity.runOnUiThread(() -> activity.stopMicrophoneOnUiThread(generation));
     }
 
     private void startMicrophoneOnUiThread(long generation) {
-        if (microphoneRunning || checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
-            PackageManager.PERMISSION_GRANTED) { nativeMicrophoneFailed(generation); return; }
+        if (microphoneRunning || microphoneStopping ||
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED) { failMicrophone(generation); return; }
         final int sampleRate = 48000;
         final int channelMask = AudioFormat.CHANNEL_IN_MONO;
         final int minimum = AudioRecord.getMinBufferSize(sampleRate, channelMask,
             AudioFormat.ENCODING_PCM_16BIT);
-        if (minimum <= 0) { nativeMicrophoneFailed(generation); return; }
+        if (minimum <= 0) { failMicrophone(generation); return; }
         try {
+            microphoneGeneration = generation;
             microphoneRecord = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION,
                 sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT, Math.max(minimum, 4096));
             if (microphoneRecord.getState() != AudioRecord.STATE_INITIALIZED) {
-                microphoneRecord.release(); microphoneRecord = null; nativeMicrophoneFailed(generation); return;
+                failMicrophone(generation); return;
             }
-            microphoneGeneration = generation;
             microphoneRunning = true;
             microphoneRecord.startRecording();
             final AudioRecord recorder = microphoneRecord;
@@ -502,47 +564,86 @@ public class CreatorStudioActivity extends QtActivity {
                 while (microphoneRunning && microphoneGeneration == generation) {
                     pcm.clear();
                     final int read = recorder.read(pcm, 1920 * 2, AudioRecord.READ_BLOCKING);
-                    if (read <= 0) { if (microphoneRunning) nativeMicrophoneFailed(generation); break; }
+                    if (read <= 0) { if (microphoneRunning) failMicrophone(generation); break; }
                     pcm.rewind();
                     nativeMicrophonePcm16(generation, pcm, read / 2, sampleRate, 1, System.nanoTime());
                 }
             }, "CreatorStudioMicrophone");
             microphoneThread.start();
-        } catch (IllegalStateException | SecurityException error) { nativeMicrophoneFailed(generation); }
+        } catch (IllegalStateException | SecurityException error) { failMicrophone(generation); }
+    }
+
+    private void failMicrophone(long generation) {
+        nativeMicrophoneFailed(generation);
+        runOnUiThread(() -> stopMicrophoneOnUiThread(generation));
     }
 
     private void stopMicrophoneOnUiThread(long generation) {
-        if (generation != 0 && generation != microphoneGeneration) return;
+        if (generation == 0) generation = microphoneGeneration;
+        if (generation == 0 || stoppedMicrophoneGeneration == generation) return;
+        if (microphoneStopping && stoppingMicrophoneGeneration == generation) return;
+        if (generation != microphoneGeneration) {
+            stoppedMicrophoneGeneration = generation;
+            nativeMicrophoneStopped(generation);
+            return;
+        }
+        microphoneStopping = true;
+        stoppingMicrophoneGeneration = generation;
         microphoneRunning = false;
         microphoneGeneration = 0;
-        if (microphoneRecord != null) {
-            try { microphoneRecord.stop(); } catch (IllegalStateException ignored) { }
-            microphoneRecord.release(); microphoneRecord = null;
-        }
+        final AudioRecord recorder = microphoneRecord;
+        final Thread worker = microphoneThread;
+        microphoneRecord = null;
         microphoneThread = null;
+        if (recorder != null) {
+            try { recorder.stop(); } catch (IllegalStateException ignored) { }
+        }
+        final long stoppedGeneration = generation;
+        new Thread(() -> {
+            if (worker != null && worker != Thread.currentThread()) {
+                try { worker.join(); } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            if (recorder != null) recorder.release();
+            microphoneStopping = false;
+            stoppingMicrophoneGeneration = 0;
+            stoppedMicrophoneGeneration = stoppedGeneration;
+            nativeMicrophoneStopped(stoppedGeneration);
+        }, "CreatorStudioMicrophoneStop").start();
     }
 
     public static void startPlaybackAudio(long generation) {
         final CreatorStudioActivity activity = activeActivity;
-        if (activity == null) { nativeSystemAudioFailed(generation); return; }
+        if (activity == null) {
+            nativeSystemAudioFailed(generation);
+            nativeSystemAudioStopped(generation);
+            return;
+        }
         activity.runOnUiThread(() -> activity.startPlaybackAudioOnUiThread(generation));
     }
 
     public static void stopPlaybackAudio(long generation) {
         final CreatorStudioActivity activity = activeActivity;
-        if (activity != null) activity.runOnUiThread(() -> activity.stopPlaybackAudioOnUiThread(generation));
+        if (activity == null) {
+            nativeSystemAudioStopped(generation);
+            return;
+        }
+        activity.runOnUiThread(() -> activity.stopPlaybackAudioOnUiThread(generation));
     }
 
     private void startPlaybackAudioOnUiThread(long generation) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || playbackRunning || projection == null) {
-            nativeSystemAudioFailed(generation); return;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || playbackRunning ||
+            playbackStopping || projection == null) {
+            failPlaybackAudio(generation); return;
         }
         final int sampleRate = 48000;
         final int channelMask = AudioFormat.CHANNEL_IN_STEREO;
         final int minimum = AudioRecord.getMinBufferSize(sampleRate, channelMask,
             AudioFormat.ENCODING_PCM_16BIT);
-        if (minimum <= 0) { nativeSystemAudioFailed(generation); return; }
+        if (minimum <= 0) { failPlaybackAudio(generation); return; }
         try {
+            playbackGeneration = generation;
             final AudioPlaybackCaptureConfiguration config =
                 new AudioPlaybackCaptureConfiguration.Builder(projection)
                     .addMatchingUsage(android.media.AudioAttributes.USAGE_MEDIA)
@@ -555,9 +656,8 @@ public class CreatorStudioActivity extends QtActivity {
                 .setAudioPlaybackCaptureConfig(config)
                 .build();
             if (playbackRecord.getState() != AudioRecord.STATE_INITIALIZED) {
-                playbackRecord.release(); playbackRecord = null; nativeSystemAudioFailed(generation); return;
+                failPlaybackAudio(generation); return;
             }
-            playbackGeneration = generation;
             playbackRunning = true;
             playbackRecord.startRecording();
             final AudioRecord recorder = playbackRecord;
@@ -566,23 +666,52 @@ public class CreatorStudioActivity extends QtActivity {
                 while (playbackRunning && playbackGeneration == generation) {
                     pcm.clear();
                     final int read = recorder.read(pcm, 1920 * 4, AudioRecord.READ_BLOCKING);
-                    if (read <= 0) { if (playbackRunning) nativeSystemAudioFailed(generation); break; }
+                    if (read <= 0) { if (playbackRunning) failPlaybackAudio(generation); break; }
                     pcm.rewind();
                     nativeSystemAudioPcm16(generation, pcm, read / 2, sampleRate, 2, System.nanoTime());
                 }
             }, "CreatorStudioPlaybackAudio");
             playbackThread.start();
-        } catch (IllegalStateException | SecurityException error) { nativeSystemAudioFailed(generation); }
+        } catch (IllegalStateException | SecurityException error) { failPlaybackAudio(generation); }
+    }
+
+    private void failPlaybackAudio(long generation) {
+        nativeSystemAudioFailed(generation);
+        runOnUiThread(() -> stopPlaybackAudioOnUiThread(generation));
     }
 
     private void stopPlaybackAudioOnUiThread(long generation) {
-        if (generation != 0 && generation != playbackGeneration) return;
+        if (generation == 0) generation = playbackGeneration;
+        if (generation == 0 || stoppedPlaybackGeneration == generation) return;
+        if (playbackStopping && stoppingPlaybackGeneration == generation) return;
+        if (generation != playbackGeneration) {
+            stoppedPlaybackGeneration = generation;
+            nativeSystemAudioStopped(generation);
+            return;
+        }
+        playbackStopping = true;
+        stoppingPlaybackGeneration = generation;
         playbackRunning = false;
         playbackGeneration = 0;
-        if (playbackRecord != null) {
-            try { playbackRecord.stop(); } catch (IllegalStateException ignored) { }
-            playbackRecord.release(); playbackRecord = null;
-        }
+        final AudioRecord recorder = playbackRecord;
+        final Thread worker = playbackThread;
+        playbackRecord = null;
         playbackThread = null;
+        if (recorder != null) {
+            try { recorder.stop(); } catch (IllegalStateException ignored) { }
+        }
+        final long stoppedGeneration = generation;
+        new Thread(() -> {
+            if (worker != null && worker != Thread.currentThread()) {
+                try { worker.join(); } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            if (recorder != null) recorder.release();
+            playbackStopping = false;
+            stoppingPlaybackGeneration = 0;
+            stoppedPlaybackGeneration = stoppedGeneration;
+            nativeSystemAudioStopped(stoppedGeneration);
+        }, "CreatorStudioPlaybackAudioStop").start();
     }
 }
