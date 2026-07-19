@@ -26,6 +26,8 @@ cs_add_qtfree_library(cs_avatar
         AvatarMotionSerializer.cpp
         AvatarMotionNdjsonSink.h
         AvatarMotionNdjsonSink.cpp
+        AvatarMotionPlayback.h
+        AvatarMotionPlayback.cpp
         AvatarMotionPipeline.h
         AvatarMotionPipeline.cpp
         AvatarTrackingSession.h

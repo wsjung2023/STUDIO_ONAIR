@@ -65,3 +65,9 @@ or pretending that a real model is bundled.
 existing timestamped media frame contract while retaining immutable pixel
 ownership. Preview and recording can therefore consume an avatar render frame
 without a second copy or a renderer-specific handle.
+
+`AvatarMotionPlayback` provides the editor-side telemetry reader. It validates
+the recorded NDJSON sequence and samples canonical parameters by project time,
+linearly interpolating between adjacent samples while clamping before/after
+the recorded range. The result can feed the same `AvatarRenderPipeline` used
+by live tracking.
