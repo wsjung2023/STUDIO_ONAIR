@@ -147,4 +147,48 @@ core::Result<AvatarRenderFrame> AvatarSoftwareRasterizer::render(
                                        std::move(pixels));
 }
 
+core::Result<AvatarRenderFrame> AvatarSoftwareRasterizer::renderBatches(
+    core::TimestampNs timestamp, std::uint32_t width, std::uint32_t height,
+    std::span<const AvatarSoftwareRenderInput> batches) {
+    if (batches.empty()) {
+        return core::AppError{core::ErrorCode::InvalidArgument,
+                              "avatar rasterizer received no draw batches"};
+    }
+    const auto frameWidth = static_cast<std::uint64_t>(width);
+    const auto frameHeight = static_cast<std::uint64_t>(height);
+    if (width == 0U || height == 0U ||
+        frameWidth > std::numeric_limits<std::uint64_t>::max() /
+                         (frameHeight * 4U)) {
+        return core::AppError{core::ErrorCode::InvalidArgument,
+                              "avatar rasterizer frame dimensions overflow storage"};
+    }
+    const auto frameBytes = frameWidth * frameHeight * 4U;
+    if (frameBytes > std::numeric_limits<std::size_t>::max()) {
+        return core::AppError{core::ErrorCode::InvalidArgument,
+                              "avatar rasterizer frame is too large"};
+    }
+    std::vector<std::uint8_t> composited(static_cast<std::size_t>(frameBytes), 0U);
+    for (const auto& batch : batches) {
+        auto rendered = render(timestamp, width, height, batch.vertices,
+                               batch.indices, batch.texture);
+        if (!rendered.hasValue()) return rendered.error();
+        const auto bytes = rendered.value().bytes();
+        for (std::size_t offset = 0; offset < composited.size(); offset += 4U) {
+            const float sourceAlpha = bytes[offset + 3U] / 255.0F;
+            const float destinationAlpha = composited[offset + 3U] / 255.0F;
+            const float outputAlpha = sourceAlpha +
+                                      destinationAlpha * (1.0F - sourceAlpha);
+            for (std::size_t channel = 0; channel < 3U; ++channel) {
+                composited[offset + channel] = blendChannel(
+                    bytes[offset + channel], composited[offset + channel],
+                    sourceAlpha, destinationAlpha, outputAlpha);
+            }
+            composited[offset + 3U] = static_cast<std::uint8_t>(
+                std::clamp(outputAlpha * 255.0F, 0.0F, 255.0F));
+        }
+    }
+    return AvatarRenderFrame::fromBgra(timestamp, width, height, width * 4U,
+                                       std::move(composited));
+}
+
 }  // namespace creator::avatar

@@ -102,3 +102,7 @@ Its mesh-provider callback receives the mapped model parameters, returns one
 validated mesh/texture snapshot, and the adapter emits an ordinary immutable
 avatar frame. This closes the common live/playback render pipeline without
 coupling it to a particular model SDK.
+
+The rasterizer also composites ordered textured batches with straight-alpha
+source-over blending, which is the shape needed when an Inochi2D draw list
+references more than one texture.

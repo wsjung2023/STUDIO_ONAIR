@@ -4,15 +4,9 @@
 #include "avatar/IAvatarRenderer.h"
 
 #include <functional>
-#include <vector>
+#include <utility>
 
 namespace creator::avatar {
-
-struct AvatarSoftwareRenderInput final {
-    std::vector<AvatarMeshVertex> vertices;
-    std::vector<std::uint32_t> indices;
-    AvatarTexture texture;
-};
 
 /// IAvatarRenderer implementation backed by the validated CPU rasterizer.
 /// Model adapters provide one frame's already-decoded mesh and texture data;

@@ -21,6 +21,12 @@ struct AvatarTexture final {
     std::vector<std::uint8_t> bgra;
 };
 
+struct AvatarSoftwareRenderInput final {
+    std::vector<AvatarMeshVertex> vertices;
+    std::vector<std::uint32_t> indices;
+    AvatarTexture texture;
+};
+
 /// Small CPU fallback for draw-list triangles. It is deliberately independent
 /// of Inochi2D headers: an adapter converts the SDK's vertices, indices, and
 /// texture bytes into this stable representation before calling render().
@@ -30,6 +36,9 @@ public:
         core::TimestampNs timestamp, std::uint32_t width,
         std::uint32_t height, std::span<const AvatarMeshVertex> vertices,
         std::span<const std::uint32_t> indices, const AvatarTexture& texture);
+    [[nodiscard]] static core::Result<AvatarRenderFrame> renderBatches(
+        core::TimestampNs timestamp, std::uint32_t width,
+        std::uint32_t height, std::span<const AvatarSoftwareRenderInput> batches);
 };
 
 }  // namespace creator::avatar
