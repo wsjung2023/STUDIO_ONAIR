@@ -36,6 +36,14 @@ core::Result<AvatarMotionSample> AvatarMotionPipeline::process(
     return sample;
 }
 
+core::Result<AvatarMotionSample> AvatarMotionPipeline::processFrame(
+    ITrackingProvider& provider, const media::VideoFrame& frame) {
+    auto result = provider.process(frame);
+    if (!result.hasValue()) return result.error();
+    const auto& tracking = result.value();
+    return process(std::span<const TrackingResult>{&tracking, 1});
+}
+
 void AvatarMotionPipeline::reset() noexcept { smoother_.reset(); }
 
 }  // namespace creator::avatar

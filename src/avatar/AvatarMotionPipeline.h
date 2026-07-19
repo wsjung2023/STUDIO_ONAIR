@@ -4,6 +4,7 @@
 #include "avatar/AvatarProviderId.h"
 #include "avatar/ExpressionNormalizer.h"
 #include "avatar/ExpressionSmoother.h"
+#include "avatar/ITrackingProvider.h"
 #include "avatar/TrackingResult.h"
 #include "core/Result.h"
 
@@ -32,6 +33,12 @@ public:
     /// empty poll is rejected so a missing UDP packet cannot fabricate time.
     [[nodiscard]] core::Result<AvatarMotionSample> process(
         std::span<const TrackingResult> candidates);
+
+    /// Processes one in-process provider frame through the same policy as an
+    /// asynchronous source. The provider owns pixel interpretation; this
+    /// boundary owns timestamp-preserving normalization and persistence.
+    [[nodiscard]] core::Result<AvatarMotionSample> processFrame(
+        ITrackingProvider& provider, const media::VideoFrame& frame);
 
     /// Starts a fresh tracking session without allowing the prior expression
     /// to bleed into the first sample of the next recording.

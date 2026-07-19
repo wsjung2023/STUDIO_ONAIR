@@ -1,4 +1,5 @@
 #include "avatar/AvatarMotionPipeline.h"
+#include "fakes/FakeTrackingProvider.h"
 
 #include <gtest/gtest.h>
 
@@ -104,6 +105,25 @@ TEST_F(AvatarMotionPipelineTest, ResetMakesNextSampleColdStartAgain) {
         std::span<const TrackingResult>{&second, 1});
     ASSERT_TRUE(afterReset.hasValue()) << afterReset.error().message();
     EXPECT_FLOAT_EQ(afterReset.value().parameters.mouthOpen, 1.0F);
+}
+
+TEST_F(AvatarMotionPipelineTest, ProcessesInProcessProviderFrameThroughSamePipeline) {
+    AvatarMotionNdjsonSink sink(root_ / "telemetry");
+    AvatarMotionPipeline pipeline{
+        creator::avatar::AvatarProviderId::create("fake").value(),
+        CalibrationProfile::identity(), sink};
+    creator::fakes::FakeTrackingProvider provider{
+        {creator::fakes::FakeTrackingProvider::ScriptedFrame{
+            .parameters = ExpressionParameters{.mouthOpen = 0.4F}}},
+        creator::avatar::AvatarProviderId::create("fake").value()};
+    creator::media::VideoFrame frame{};
+    frame.timestamp = TimestampNs{DurationNs{42'000'000}};
+
+    const auto sample = pipeline.processFrame(provider, frame);
+
+    ASSERT_TRUE(sample.hasValue()) << sample.error().message();
+    EXPECT_FLOAT_EQ(sample.value().parameters.mouthOpen, 0.4F);
+    EXPECT_EQ(sample.value().timestamp, frame.timestamp);
 }
 
 }  // namespace
