@@ -154,6 +154,122 @@ cs_apply_warnings(cs_tests)
 
 gtest_discover_tests(cs_tests)
 
+# cs_cursor (R2-01 cursor telemetry core) is Qt-free, so its tests live in their
+# own binary that links no Qt: a standing check that the cursor module really
+# does build below the application boundary. The schema path is injected so the
+# pipeline test validates serialized events against the single shipped
+# schemas/event.schema.json, mirroring ManifestSchemaValidator.
+add_executable(cs_cursor_tests
+    cursor/CursorValueTest.cpp
+    cursor/CursorNormalizerTest.cpp
+    cursor/FakeCursorSourceTest.cpp
+    cursor/CursorPipelineTest.cpp
+    cursor/CursorNdjsonSinkTest.cpp
+)
+
+target_link_libraries(cs_cursor_tests
+    PRIVATE
+        cs_core
+        cs_domain
+        cs_cursor
+        cs_fakes
+        nlohmann_json::nlohmann_json
+        nlohmann_json_schema_validator::validator
+        GTest::gtest_main
+)
+
+target_include_directories(cs_cursor_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cursor)
+
+target_compile_definitions(cs_cursor_tests PRIVATE
+    CS_EVENT_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/event.schema.json"
+)
+
+set_target_properties(cs_cursor_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+
+cs_apply_warnings(cs_cursor_tests)
+
+gtest_discover_tests(cs_cursor_tests)
+
+# cs_autozoom (R2-03 auto-zoom candidate generation core) is Qt-free like
+# cs_cursor, so its tests get their own Qt-free binary. The zoom-candidate schema
+# path is injected so the serializer test validates against the single shipped
+# schemas/zoom_candidate.schema.json, mirroring the cursor pipeline test.
+add_executable(cs_autozoom_tests
+    autozoom/ZoomValueTest.cpp
+    autozoom/AutoZoomAnalyzerTest.cpp
+    autozoom/ZoomCandidateSerializerTest.cpp
+)
+
+target_link_libraries(cs_autozoom_tests
+    PRIVATE
+        cs_core
+        cs_domain
+        cs_cursor
+        cs_autozoom
+        nlohmann_json::nlohmann_json
+        nlohmann_json_schema_validator::validator
+        GTest::gtest_main
+)
+
+target_include_directories(cs_autozoom_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/autozoom)
+
+target_compile_definitions(cs_autozoom_tests PRIVATE
+    CS_ZOOM_CANDIDATE_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/zoom_candidate.schema.json"
+)
+
+set_target_properties(cs_autozoom_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+
+cs_apply_warnings(cs_autozoom_tests)
+
+gtest_discover_tests(cs_autozoom_tests)
+
+# cs_cursor_emphasis (R2-02 click-emphasis + cursor hide/replace plan core) is
+# Qt-free like cs_cursor, so its tests get their own Qt-free binary. The
+# emphasis-plan schema path is injected so the serializer test validates against
+# the single shipped schemas/emphasis_plan.schema.json, mirroring the cursor and
+# auto-zoom pipeline tests.
+add_executable(cs_cursor_emphasis_tests
+    cursor_emphasis/EmphasisValueTest.cpp
+    cursor_emphasis/EmphasisPlannerTest.cpp
+    cursor_emphasis/EmphasisPlanSerializerTest.cpp
+)
+
+target_link_libraries(cs_cursor_emphasis_tests
+    PRIVATE
+        cs_core
+        cs_domain
+        cs_cursor
+        cs_cursor_emphasis
+        nlohmann_json::nlohmann_json
+        nlohmann_json_schema_validator::validator
+        GTest::gtest_main
+)
+
+target_include_directories(cs_cursor_emphasis_tests
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cursor_emphasis)
+
+target_compile_definitions(cs_cursor_emphasis_tests PRIVATE
+    CS_EMPHASIS_PLAN_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/emphasis_plan.schema.json"
+)
+
+set_target_properties(cs_cursor_emphasis_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+
+cs_apply_warnings(cs_cursor_emphasis_tests)
+
+gtest_discover_tests(cs_cursor_emphasis_tests)
+
 # Separate binary: these need a QCoreApplication, so they cannot use
 # gtest_main. Keeping them apart also keeps cs_tests Qt-free, which is a
 # standing check that the layers below the application really do build without

@@ -1,0 +1,16 @@
+cs_add_qtfree_library(cs_autozoom
+    SOURCES
+        ZoomRegion.h
+        ZoomCandidate.h
+        ZoomCandidate.cpp
+        AutoZoomParameters.h
+        AutoZoomAnalyzer.h
+        AutoZoomAnalyzer.cpp
+        ZoomCandidateSerializer.h
+        ZoomCandidateSerializer.cpp
+    DEPENDS
+        cs_core
+        cs_domain
+        cs_cursor
+        nlohmann_json::nlohmann_json
+)

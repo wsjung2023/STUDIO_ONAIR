@@ -1,0 +1,19 @@
+cs_add_qtfree_library(cs_cursor_emphasis
+    SOURCES
+        ClickEmphasis.h
+        ClickEmphasis.cpp
+        CursorHideSpan.h
+        CursorHideSpan.cpp
+        EmphasisPlanParameters.h
+        EmphasisPlan.h
+        EmphasisPlan.cpp
+        EmphasisPlanner.h
+        EmphasisPlanner.cpp
+        EmphasisPlanSerializer.h
+        EmphasisPlanSerializer.cpp
+    DEPENDS
+        cs_core
+        cs_domain
+        cs_cursor
+        nlohmann_json::nlohmann_json
+)

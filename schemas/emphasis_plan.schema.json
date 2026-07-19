@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://creator-studio.local/schemas/emphasis_plan.schema.json",
+  "title": "Creator Studio Cursor Emphasis Plan",
+  "type": "object",
+  "required": ["schemaVersion", "clicks", "hideSpans"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "clicks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["startNs", "durationNs", "x", "y", "button", "style", "radius"],
+        "additionalProperties": false,
+        "properties": {
+          "startNs": { "type": "integer", "minimum": 0 },
+          "durationNs": { "type": "integer", "exclusiveMinimum": 0 },
+          "x": { "type": "number", "minimum": 0, "maximum": 1 },
+          "y": { "type": "number", "minimum": 0, "maximum": 1 },
+          "button": { "type": "string", "enum": ["left", "right", "middle"] },
+          "style": { "type": "string", "enum": ["ripple", "highlight"] },
+          "radius": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "hideSpans": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["startNs", "durationNs", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "startNs": { "type": "integer", "minimum": 0 },
+          "durationNs": { "type": "integer", "exclusiveMinimum": 0 },
+          "reason": { "type": "string", "enum": ["idle", "explicit_region"] }
+        }
+      }
+    }
+  }
+}
