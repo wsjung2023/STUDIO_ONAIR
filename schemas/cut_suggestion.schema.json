@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://creator-studio.local/schemas/cut_suggestion.schema.json",
+  "title": "Creator Studio Cut Suggestion",
+  "type": "object",
+  "required": ["schemaVersion", "span", "reason", "score"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "span": {
+      "type": "object",
+      "required": ["startNs", "durationNs"],
+      "additionalProperties": false,
+      "properties": {
+        "startNs": { "type": "integer", "minimum": 0 },
+        "durationNs": { "type": "integer", "exclusiveMinimum": 0 }
+      }
+    },
+    "reason": { "type": "string", "enum": ["silence", "filler"] },
+    "score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "label": { "type": "string", "minLength": 1 }
+  }
+}

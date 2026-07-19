@@ -170,6 +170,7 @@ endif()
 add_subdirectory(src/mlt_adapter)
 add_subdirectory(src/project_store)
 add_subdirectory(src/transcription)
+add_subdirectory(src/cut_suggest)
 add_subdirectory(src/fakes)
 
 # The application boundary: cs_app is the first, and only, library allowed to

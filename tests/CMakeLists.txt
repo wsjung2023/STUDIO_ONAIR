@@ -429,6 +429,42 @@ set_target_properties(cs_transcription_tests PROPERTIES
 cs_apply_warnings(cs_transcription_tests)
 gtest_discover_tests(cs_transcription_tests)
 
+# R2-05 cut-suggestion core. Qt-free like cs_autozoom/cs_transcription, so its
+# tests get their own Qt-free binary that links no Qt: a standing check that the
+# module builds below the application boundary. json-schema-validator is linked
+# test-only; the committed cut_suggestion schema path is injected so the
+# serializer test validates against the single shipped schema.
+add_executable(cs_cut_suggest_tests
+    cut_suggest/CutValueTest.cpp
+    cut_suggest/SilenceDetectorTest.cpp
+    cut_suggest/FillerDetectorTest.cpp
+    cut_suggest/CutSuggestionAnalyzerTest.cpp
+    cut_suggest/CutSuggestionSerializerTest.cpp
+)
+target_link_libraries(cs_cut_suggest_tests
+    PRIVATE
+        cs_core
+        cs_domain
+        cs_audio_dsp
+        cs_transcription
+        cs_cut_suggest
+        nlohmann_json::nlohmann_json
+        nlohmann_json_schema_validator::validator
+        GTest::gtest_main
+)
+target_include_directories(cs_cut_suggest_tests
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cut_suggest)
+target_compile_definitions(cs_cut_suggest_tests PRIVATE
+    CS_CUT_SUGGESTION_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/cut_suggestion.schema.json"
+)
+set_target_properties(cs_cut_suggest_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+cs_apply_warnings(cs_cut_suggest_tests)
+gtest_discover_tests(cs_cut_suggest_tests)
+
 if(WIN32)
     add_test(
         NAME MltBootstrapPolicy
