@@ -19,6 +19,7 @@ import android.media.AudioPlaybackCaptureConfiguration;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
+import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
 import android.media.MediaRecorder;
@@ -265,6 +266,32 @@ public class CreatorStudioActivity extends QtActivity {
         if (encoder != null) encoder.abort();
     }
 
+    public static long startTimelineExport(String specification) {
+        final CreatorStudioActivity activity = activeActivity;
+        return activity == null ? 0
+                                : AndroidTimelineExporter.start(activity, specification);
+    }
+
+    public static int timelineExportState(long handle) {
+        return AndroidTimelineExporter.state(handle);
+    }
+
+    public static double timelineExportProgress(long handle) {
+        return AndroidTimelineExporter.progress(handle);
+    }
+
+    public static String timelineExportError(long handle) {
+        return AndroidTimelineExporter.error(handle);
+    }
+
+    public static void cancelTimelineExport(long handle) {
+        AndroidTimelineExporter.cancel(handle);
+    }
+
+    public static void releaseTimelineExport(long handle) {
+        AndroidTimelineExporter.release(handle);
+    }
+
     private static long registerMediaEncoder(MediaSegmentEncoder encoder) {
         long handle;
         do {
@@ -282,7 +309,7 @@ public class CreatorStudioActivity extends QtActivity {
         return message == null || message.isEmpty() ? fallback : message;
     }
 
-    private static final class MediaSegmentEncoder {
+    static final class MediaSegmentEncoder {
         private static final long CODEC_TIMEOUT_US = 10_000;
         private final String path;
         private final boolean video;
@@ -341,7 +368,8 @@ public class CreatorStudioActivity extends QtActivity {
                 inputImage.close();
             }
             final long pts = monotonicPresentationTime(presentationTimeUs);
-            codec.queueInputBuffer(inputIndex, 0, 0, pts, 0);
+            codec.queueInputBuffer(inputIndex, 0,
+                width * height * 3 / 2, pts, 0);
             drain(false);
         }
 
@@ -391,6 +419,7 @@ public class CreatorStudioActivity extends QtActivity {
                 MediaCodec.BUFFER_FLAG_END_OF_STREAM);
             drain(true);
             release(true);
+            validateOutputTrack();
         }
 
         void abort() {
@@ -483,6 +512,28 @@ public class CreatorStudioActivity extends QtActivity {
                 try { muxer.release(); } catch (Throwable ignored) {}
                 muxer = null;
             }
+        }
+
+        private void validateOutputTrack() throws Exception {
+            final File output = new File(path);
+            if (!output.isFile() || output.length() <= 0) {
+                throw new IllegalStateException("MediaMuxer output is empty");
+            }
+            final MediaExtractor extractor = new MediaExtractor();
+            try {
+                extractor.setDataSource(path);
+                final String prefix = video ? "video/" : "audio/";
+                for (int index = 0; index < extractor.getTrackCount(); ++index) {
+                    final String mime = extractor.getTrackFormat(index).getString(
+                        MediaFormat.KEY_MIME);
+                    if (mime != null && mime.startsWith(prefix)) return;
+                }
+            } finally {
+                extractor.release();
+            }
+            output.delete();
+            throw new IllegalStateException(
+                "MediaMuxer output has no " + (video ? "video" : "audio") + " track");
         }
 
         private static void fillYuv420(Image image, ByteBuffer bgra,
@@ -593,10 +644,16 @@ public class CreatorStudioActivity extends QtActivity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         activeActivity = this;
+        AndroidTimelineExporter.cleanupStaleWork(this);
         if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0 &&
             getIntent().getBooleanExtra("creatorstudio.codecSelfTest", false)) {
             new Thread(this::runMediaEncoderSelfTest,
                 "CreatorStudioCodecSelfTest").start();
+        }
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0 &&
+            getIntent().getBooleanExtra("creatorstudio.exportSelfTest", false)) {
+            new Thread(() -> AndroidTimelineExporter.runSelfTest(this),
+                "CreatorStudioExportSelfTest").start();
         }
     }
 
@@ -690,6 +747,7 @@ public class CreatorStudioActivity extends QtActivity {
         stopCameraOnUiThread(cameraGeneration);
         stopMicrophoneOnUiThread(microphoneGeneration);
         stopPlaybackAudioOnUiThread(playbackGeneration);
+        AndroidTimelineExporter.cancelAll();
         if (activeActivity == this) {
             activeActivity = null;
         }

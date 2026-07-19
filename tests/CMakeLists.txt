@@ -345,6 +345,7 @@ add_executable(cs_app_tests
     app/MultiTrackRecordingServiceTest.cpp
     app/AvatarFrameTrackingCoordinatorTest.cpp
     app/TranscriptionProviderFactoryTest.cpp
+    app/AndroidTimelineExportPlanTest.cpp
     app/QmlSmokeTest.cpp
 )
 
@@ -662,6 +663,12 @@ if(WIN32)
         NAME AndroidMediaCodecPolicy
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidMediaCodecPolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME AndroidTimelineExportPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidTimelineExportPolicyTest.ps1"
             -RepositoryRoot "${PROJECT_SOURCE_DIR}"
     )
     add_test(

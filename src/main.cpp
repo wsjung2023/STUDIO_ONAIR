@@ -25,6 +25,7 @@
 #include "app/android/AndroidDeviceCaptureBackend.h"
 #include "app/android/AndroidDeviceProfile.h"
 #include "app/android/AndroidExportDestinationResolver.h"
+#include "app/android/AndroidMediaCodecEditEngine.h"
 #include "app/android/AndroidScreenCaptureBackend.h"
 #endif
 #include "project_store/ProjectPackageStore.h"
@@ -211,6 +212,11 @@ int main(int argc, char* argv[]) {
                 .audioProcessingChain = std::move(audioProcessingChain)});
     std::unique_ptr<creator::edit_engine::IEditEngine> exportEngine =
         std::make_unique<creator::app::ProjectExportEngine>(mltRuntimeRoot);
+#elif defined(ANDROID)
+    std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
+        std::make_unique<creator::edit_engine::UnavailableEditEngine>();
+    std::unique_ptr<creator::edit_engine::IEditEngine> exportEngine =
+        std::make_unique<creator::app::android::AndroidMediaCodecEditEngine>();
 #else
     std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
         std::make_unique<creator::edit_engine::UnavailableEditEngine>();

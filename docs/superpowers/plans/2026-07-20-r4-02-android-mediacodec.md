@@ -20,11 +20,11 @@
 
 ### Task 3: MediaCodec export path
 
-- [ ] Add an Android render job that accepts the existing immutable `RenderRequest` and publishes only after MediaMuxer completion.
-- [ ] Keep unsupported timeline constructs explicit; never report a successful export with omitted media, audio, titles, captions, or effects.
-- [ ] Verify cancellation, background interruption, scoped destination publication, both ABIs, and emulator smoke.
+- [x] Add an Android render job that accepts the existing immutable `RenderRequest` and publishes only after MediaMuxer completion.
+- [x] Keep unsupported timeline constructs explicit; never report a successful export with omitted media, audio, titles, captions, or effects.
+- [x] Verify cancellation, background interruption, scoped destination publication, both ABIs, and emulator smoke.
 
 ### Task 4: Acceptance evidence
 
-- [ ] Add an adb/device matrix for screen/camera/microphone segments, reopen/recovery, timeline export, deny/revoke/background, thermal pressure, and arm64 hardware codec selection.
-- [ ] Record emulator evidence separately; do not substitute it for the physical arm64 gate.
+- [x] Add an adb/device matrix for screen/camera/microphone segments, reopen/recovery, timeline export, deny/revoke/background, thermal pressure, and arm64 hardware codec selection.
+- [x] Record emulator evidence separately; do not substitute it for the physical arm64 gate.

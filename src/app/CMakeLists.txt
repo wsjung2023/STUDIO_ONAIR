@@ -84,6 +84,8 @@ add_library(cs_app STATIC
     ExportController.cpp
     AvatarFrameTrackingCoordinator.h
     AvatarFrameTrackingCoordinator.cpp
+    android/AndroidTimelineExportPlan.h
+    android/AndroidTimelineExportPlan.cpp
 )
 
 if(CS_ENABLE_FFMPEG OR ANDROID)
@@ -137,6 +139,8 @@ if(ANDROID)
         android/AndroidMediaCodecSession.cpp
         android/AndroidMediaCodecSegmentEncoder.h
         android/AndroidMediaCodecSegmentEncoder.cpp
+        android/AndroidMediaCodecEditEngine.h
+        android/AndroidMediaCodecEditEngine.cpp
     )
 endif()
 add_library(CreatorStudio::cs_app ALIAS cs_app)
