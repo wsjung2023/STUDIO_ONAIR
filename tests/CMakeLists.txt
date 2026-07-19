@@ -165,6 +165,7 @@ add_executable(cs_cursor_tests
     cursor/FakeCursorSourceTest.cpp
     cursor/CursorPipelineTest.cpp
     cursor/CursorNdjsonSinkTest.cpp
+    cursor/CursorEventPumpTest.cpp
 )
 
 if(WIN32)

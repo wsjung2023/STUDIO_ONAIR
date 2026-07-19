@@ -66,6 +66,10 @@ public:
     /// available. Never blocks and never throws.
     [[nodiscard]] virtual std::optional<RawCursorSample> poll() = 0;
 
+    /// Returns the first platform/runtime error observed by the source, if any.
+    /// Deterministic sources have no asynchronous failure and use the default.
+    [[nodiscard]] virtual std::optional<core::AppError> error() const { return std::nullopt; }
+
 protected:
     ICursorSource() = default;
 };

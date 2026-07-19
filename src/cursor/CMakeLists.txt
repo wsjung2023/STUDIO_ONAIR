@@ -11,6 +11,8 @@ cs_add_qtfree_library(cs_cursor
         CursorEventSerializer.cpp
         CursorNdjsonSink.h
         CursorNdjsonSink.cpp
+        CursorEventPump.h
+        CursorEventPump.cpp
     DEPENDS
         cs_core
         cs_domain
