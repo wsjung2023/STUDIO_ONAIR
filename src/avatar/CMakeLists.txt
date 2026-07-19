@@ -3,6 +3,8 @@ cs_add_qtfree_library(cs_avatar
         ExpressionParameters.h
         AvatarParameterMapper.h
         AvatarParameterMapper.cpp
+        AvatarModelDescriptor.h
+        AvatarModelDescriptor.cpp
         AvatarRenderFrame.h
         AvatarRenderFrame.cpp
         IAvatarRenderer.h

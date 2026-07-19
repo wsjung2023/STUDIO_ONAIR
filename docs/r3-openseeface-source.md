@@ -49,3 +49,9 @@ motion sample and submits the values to `IAvatarRenderer`, which returns an
 immutable BGRA8 `AvatarRenderFrame`. The frame type has an explicit transparent
 constructor and validates stride/byte ownership, so an eventual Inochi2D
 adapter can be added without changing tracking or app capture contracts.
+
+`AvatarModelDescriptor` adds the package-side registration contract: a versioned
+JSON sidecar resolves a model path relative to itself, validates canvas bounds,
+and reuses the parameter mapper for names and ranges. It deliberately does not
+parse Inochi2D internals; the renderer adapter receives a verified model path
+and descriptor-owned mapping instead.
