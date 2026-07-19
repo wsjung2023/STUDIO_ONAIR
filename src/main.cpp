@@ -32,7 +32,8 @@
 #endif
 #include "edit_engine/UnavailableEditEngine.h"
 #if defined(CS_APP_ENABLE_RNNOISE)
-#include "audio_dsp/AudioProcessingChain.h"
+#include "audio_dsp/AudioCleanupChain.h"
+#include "audio_dsp/AudioFormat.h"
 #include "rnnoise_adapter/RnnoiseDenoiseProcessor.h"
 #include <QDebug>
 #endif
@@ -171,9 +172,20 @@ int main(int argc, char* argv[]) {
     auto denoise = creator::rnnoise_adapter::createRnnoiseDenoiseProcessor(
         std::filesystem::path{CS_APP_RNNOISE_ROOT});
     if (denoise.hasValue()) {
-        auto chain = std::make_shared<creator::audio_dsp::AudioProcessingChain>();
-        chain->add(std::move(denoise).value());
-        audioProcessingChain = std::move(chain);
+        // Cleanup chain: denoise -> compressor -> true-peak limiter, at the
+        // export/preview consumer's 48 kHz stereo format (MltEditEngine
+        // normalizes audio to 48 kHz; the export consumer is 2ch). Loudness
+        // standardization (음량 표준화) is applied separately, offline.
+        const auto cleanupFormat =
+            creator::audio_dsp::AudioFormat::create(48'000, 2).value();
+        if (auto chain = creator::audio_dsp::makeAudioCleanupChain(
+                cleanupFormat, std::move(denoise).value());
+            chain.hasValue()) {
+            audioProcessingChain = std::move(chain).value();
+        } else {
+            qWarning().noquote() << "Audio cleanup chain unavailable:"
+                                 << QString::fromStdString(chain.error().message());
+        }
     } else {
         qWarning().noquote() << "RNNoise runtime unavailable:" << QString::fromStdString(
             denoise.error().message());

@@ -353,6 +353,8 @@ add_executable(cs_audio_dsp_tests
     audio_dsp/CompressorProcessorTest.cpp
     audio_dsp/LimiterProcessorTest.cpp
     audio_dsp/AudioProcessingChainTest.cpp
+    audio_dsp/AudioCleanupChainTest.cpp
+    audio_dsp/ExportLoudnessAnalysisTest.cpp
     audio_dsp/UnavailableDenoiseProcessorTest.cpp
     audio_dsp/LoudnessNormalizerTest.cpp
     audio_dsp/KWeightingFilterTest.cpp
@@ -465,6 +467,46 @@ set_target_properties(cs_transcription_tests PROPERTIES
 )
 cs_apply_warnings(cs_transcription_tests)
 gtest_discover_tests(cs_transcription_tests)
+
+# R2-07 creator-intelligence acceptance test. Qt-free and gate-OFF by design: it
+# assembles the R2 intelligence surface (transcription, cursor -> autozoom /
+# emphasis, audio cleanup chain + export loudness analysis) with only the FAKE
+# providers, so it needs no real MLT/whisper/rnnoise and stands in the default
+# build. The committed schema paths are passed as compile definitions so the
+# serialized artifacts are validated against the exact files the product ships
+# (mirroring the transcription / audio_dsp schema tests).
+add_executable(cs_r2_creator_intelligence_acceptance_tests
+    acceptance/R2CreatorIntelligenceAcceptanceTest.cpp
+)
+target_link_libraries(cs_r2_creator_intelligence_acceptance_tests
+    PRIVATE
+        cs_core
+        cs_domain
+        cs_audio_dsp
+        cs_transcription
+        cs_cursor
+        cs_autozoom
+        cs_cursor_emphasis
+        cs_fakes
+        nlohmann_json::nlohmann_json
+        nlohmann_json_schema_validator::validator
+        GTest::gtest_main
+)
+target_compile_definitions(cs_r2_creator_intelligence_acceptance_tests PRIVATE
+    CS_TRANSCRIPT_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/transcript.schema.json"
+    CS_ZOOM_CANDIDATE_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/zoom_candidate.schema.json"
+    CS_EMPHASIS_PLAN_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/emphasis_plan.schema.json"
+)
+set_target_properties(cs_r2_creator_intelligence_acceptance_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+target_include_directories(cs_r2_creator_intelligence_acceptance_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/tests
+)
+cs_apply_warnings(cs_r2_creator_intelligence_acceptance_tests)
+gtest_discover_tests(cs_r2_creator_intelligence_acceptance_tests)
 
 if(CS_ENABLE_WHISPER)
     add_executable(cs_whisper_tests
