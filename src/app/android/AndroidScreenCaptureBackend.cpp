@@ -166,6 +166,11 @@ public:
         return core::ok();
     }
     [[nodiscard]] core::Result<void> stop() override {
+        QJniObject::callStaticMethod<void>(kActivityClass, "stopProjection", "(J)V",
+                                            static_cast<jlong>(generation_));
+        QJniEnvironment environment;
+        if (environment.checkAndClearExceptions()) return core::AppError{
+            core::ErrorCode::IoFailure, "Android could not stop MediaProjection"};
         std::lock_guard lock(callbackMutex);
         if (callbackSource == this) callbackSource = nullptr;
         return core::ok();

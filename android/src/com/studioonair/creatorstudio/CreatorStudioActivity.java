@@ -95,6 +95,13 @@ public class CreatorStudioActivity extends QtActivity {
             () -> activity.startProjectionOnUiThread(generation, width, height));
     }
 
+    public static void stopProjection(long generation) {
+        final CreatorStudioActivity activity = activeActivity;
+        if (activity != null) activity.runOnUiThread(() -> {
+            if (generation == activity.approvedGeneration) activity.releaseProjection();
+        });
+    }
+
     private void startProjectionOnUiThread(long generation, int width, int height) {
         if (generation != approvedGeneration || projectionData == null || projection != null) return;
         CreatorStudioProjectionService.start(this);
