@@ -30,6 +30,8 @@ TEST(RecordingTrackTest, DerivesMediaKindFromRole) {
               TrackMediaKind::Video);
     EXPECT_EQ(track("camera-1", TrackRole::Camera).mediaKind(),
               TrackMediaKind::Video);
+    EXPECT_EQ(track("avatar-1", TrackRole::Avatar).mediaKind(),
+              TrackMediaKind::Video);
     EXPECT_EQ(track("preview-1", TrackRole::CompositePreview).mediaKind(),
               TrackMediaKind::Video);
     EXPECT_EQ(track("mic-1", TrackRole::Microphone).mediaKind(),
@@ -53,6 +55,7 @@ TEST(RecordingTrackTest, RejectsAComponentThatWouldExceedPortableBound) {
 TEST(RecordingTrackTest, BuildsIndependentRolePathsAndFixedWidthIndices) {
     const auto screen = track("screen-1", TrackRole::Screen);
     const auto camera = track("camera-1", TrackRole::Camera);
+    const auto avatar = track("avatar-1", TrackRole::Avatar);
     const auto microphone = track("mic-1", TrackRole::Microphone);
     const auto system = track("system-1", TrackRole::SystemAudio);
     const auto preview = track("preview-1", TrackRole::CompositePreview);
@@ -61,6 +64,8 @@ TEST(RecordingTrackTest, BuildsIndependentRolePathsAndFixedWidthIndices) {
               "media/screen/screen-1/segment_000000.mkv");
     EXPECT_EQ(relativeSegmentPath(camera, 42).generic_string(),
               "media/camera/camera-1/segment_000042.mkv");
+    EXPECT_EQ(relativeSegmentPath(avatar, 9).generic_string(),
+              "media/avatar/avatar-1/segment_000009.mkv");
     EXPECT_EQ(relativeSegmentPath(microphone, 7).generic_string(),
               "audio/microphone/mic-1/segment_000007.mka");
     EXPECT_EQ(relativeSegmentPath(system, 1'000'000).generic_string(),

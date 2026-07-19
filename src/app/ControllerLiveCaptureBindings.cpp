@@ -62,6 +62,8 @@ core::Result<void> ControllerLiveCaptureBindings::attach(
             devices_->activeSystemAudioSourceId() != source.sourceId) break;
         devices_->setSystemAudioRecordingSink(std::move(audioSink));
         return core::ok();
+    case recorder::TrackRole::Avatar:
+        break;
     case recorder::TrackRole::CompositePreview:
         break;
     }

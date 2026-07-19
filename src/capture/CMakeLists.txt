@@ -25,6 +25,8 @@ cs_add_qtfree_library(cs_capture
         IDeviceCaptureBackend.h
         IDeviceCaptureSource.h
         IPullCaptureSource.h
+        AvatarRenderCaptureSource.h
+        AvatarRenderCaptureSource.cpp
         IScreenCaptureDiscovery.h
         IScreenCapturePermission.h
         IScreenCaptureSourceFactory.h

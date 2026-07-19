@@ -17,6 +17,8 @@ core::Result<domain::StudioSourceRole> studioRole(
         return domain::StudioSourceRole::Screen;
     case recorder::TrackRole::Camera:
         return domain::StudioSourceRole::Camera;
+    case recorder::TrackRole::Avatar:
+        return domain::StudioSourceRole::Avatar;
     case recorder::TrackRole::Microphone:
         return domain::StudioSourceRole::Microphone;
     case recorder::TrackRole::SystemAudio:

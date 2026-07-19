@@ -10,7 +10,14 @@
 namespace creator::recorder {
 
 enum class TrackMediaKind { Video, Audio };
-enum class TrackRole { Screen, Camera, Microphone, SystemAudio, CompositePreview };
+enum class TrackRole {
+    Screen,
+    Camera,
+    Avatar,
+    Microphone,
+    SystemAudio,
+    CompositePreview
+};
 
 class RecordingTrack final {
 public:

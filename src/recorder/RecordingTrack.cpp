@@ -16,6 +16,7 @@ TrackMediaKind mediaKindForRole(TrackRole role) noexcept {
     switch (role) {
     case TrackRole::Screen:
     case TrackRole::Camera:
+    case TrackRole::Avatar:
     case TrackRole::CompositePreview:
         return TrackMediaKind::Video;
     case TrackRole::Microphone:
@@ -29,6 +30,7 @@ std::string_view roleDirectory(TrackRole role) noexcept {
     switch (role) {
     case TrackRole::Screen: return "media/screen";
     case TrackRole::Camera: return "media/camera";
+    case TrackRole::Avatar: return "media/avatar";
     case TrackRole::Microphone: return "audio/microphone";
     case TrackRole::SystemAudio: return "audio/system";
     case TrackRole::CompositePreview: return "media/preview";

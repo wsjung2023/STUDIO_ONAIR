@@ -464,7 +464,8 @@ core::Result<void> FfmpegLiveRecordingEngine::start(
     const auto videoSourceCount = std::ranges::count_if(
         sources, [](const LiveCaptureSource& source) {
             return source.role == recorder::TrackRole::Screen ||
-                   source.role == recorder::TrackRole::Camera;
+                   source.role == recorder::TrackRole::Camera ||
+                   source.role == recorder::TrackRole::Avatar;
         });
     for (const auto& source : sources) {
         auto track = RecordingTrack::create(source.sourceId, source.role);

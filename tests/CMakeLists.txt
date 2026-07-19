@@ -70,6 +70,7 @@ add_executable(cs_tests
     capture/AudioPcmLayoutTest.cpp
     capture/DeviceCaptureAssemblerTest.cpp
     capture/DeviceCaptureStopCoordinatorTest.cpp
+    capture/AvatarRenderCaptureSourceTest.cpp
     avatar/ExpressionParametersTest.cpp
     avatar/AvatarParameterMapperTest.cpp
     avatar/AvatarModelDescriptorTest.cpp

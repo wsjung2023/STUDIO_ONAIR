@@ -61,6 +61,11 @@ a visual source (so transform, PIP, z-order, and enable/disable operations use
 the same scene rules as camera/screen) without changing the R1 default scene
 or pretending that a real model is bundled.
 
+The recorder role map now carries `Avatar` as a first-class video track and
+stores its segments below `media/avatar/<source-id>`. The live capture binding
+does not claim an avatar device exists; an eventual render source must attach a
+real `IVideoFrameSink` before the role can be selected for live recording.
+
 `AvatarRenderFrame::toVideoFrame()` bridges tightly packed BGRA output into the
 existing timestamped media frame contract while retaining immutable pixel
 ownership. Preview and recording can therefore consume an avatar render frame
