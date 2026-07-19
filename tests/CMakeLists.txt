@@ -40,6 +40,22 @@ set_target_properties(cs_platform_release_tests PROPERTIES
 cs_apply_warnings(cs_platform_release_tests)
 gtest_discover_tests(cs_platform_release_tests)
 
+add_executable(cs_r4_project_interchange_acceptance_tests
+    acceptance/R4ProjectInterchangeAcceptanceTest.cpp
+)
+target_link_libraries(cs_r4_project_interchange_acceptance_tests
+    PRIVATE
+        cs_project_store
+        GTest::gtest_main
+)
+set_target_properties(cs_r4_project_interchange_acceptance_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+cs_apply_warnings(cs_r4_project_interchange_acceptance_tests)
+gtest_discover_tests(cs_r4_project_interchange_acceptance_tests)
+
 add_executable(cs_crash_recovery_fixture
     helpers/CrashRecoveryFixture.cpp
 )

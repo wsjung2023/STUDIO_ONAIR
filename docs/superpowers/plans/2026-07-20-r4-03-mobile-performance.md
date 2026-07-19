@@ -72,11 +72,11 @@ struct ModelInstallPlan final {
 - Consumes: `ProjectPackageStore`, `SqliteStudioStore`, and the existing timeline schema.
 - Produces: one platform-neutral acceptance executable that writes, reopens, edits, and reopens the same package without platform metadata.
 
-- [ ] Write a failing round-trip test that creates a project in an Android-labelled fixture root, adds Unicode media/title/caption state, closes it, reopens it in a desktop-labelled store, edits it, and verifies semantic equality after a second reopen.
-- [ ] Register the test as `R4ProjectInterchangeAcceptance` and run it RED before fixture helpers exist.
-- [ ] Implement only test fixture helpers; do not add a second package format or platform field.
-- [ ] Run the acceptance test and the complete `ProjectPackageStoreTest|EditorSessionWorkerTest` set.
-- [ ] Commit with `git commit -m "test(r4): prove mobile desktop project interchange"`.
+- [x] Write a failing round-trip test that creates a project in an Android-labelled fixture root, adds Unicode media/title/caption state, closes it, reopens it in a desktop-labelled store, edits it, and verifies semantic equality after a second reopen.
+- [x] Register the test as `R4ProjectInterchangeAcceptance` and run it RED before fixture helpers exist.
+- [x] Implement only test fixture helpers; do not add a second package format or platform field.
+- [x] Run the acceptance test and the complete `ProjectPackageStoreTest|EditorSessionWorkerTest` set; all 24 tests pass.
+- [x] Commit with `git commit -m "test(r4): prove mobile desktop project interchange"`.
 
 ## Self-review
 
