@@ -96,3 +96,9 @@ immutable `AvatarRenderFrame` used by preview and recording. It rejects malforme
 indices, non-finite vertices, storage mismatches, and dimension overflow before
 allocating a frame; GPU acceleration can replace this implementation without
 changing the model descriptor or capture contracts.
+
+`AvatarSoftwareRenderer` implements `IAvatarRenderer` on top of that fallback.
+Its mesh-provider callback receives the mapped model parameters, returns one
+validated mesh/texture snapshot, and the adapter emits an ordinary immutable
+avatar frame. This closes the common live/playback render pipeline without
+coupling it to a particular model SDK.

@@ -9,6 +9,8 @@ cs_add_qtfree_library(cs_avatar
         AvatarRenderFrame.cpp
         AvatarSoftwareRasterizer.h
         AvatarSoftwareRasterizer.cpp
+        AvatarSoftwareRenderer.h
+        AvatarSoftwareRenderer.cpp
         IAvatarRenderer.h
         AvatarRenderPipeline.h
         AvatarRenderPipeline.cpp
