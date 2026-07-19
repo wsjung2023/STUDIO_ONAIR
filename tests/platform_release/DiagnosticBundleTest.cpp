@@ -120,6 +120,11 @@ TEST_F(DiagnosticBundleTest, RejectsForbiddenExtensionsAndPrivateContentNames) {
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
     EXPECT_FALSE(fs::exists(privateLog.destination));
+
+    std::ofstream{root_ / "source" / "application.log",
+                  std::ios::binary | std::ios::trunc}
+        << R"({"accountId":"private-account","receipt":"opaque"})";
+    EXPECT_FALSE(DiagnosticBundle::create(privateLog).hasValue());
 }
 
 TEST_F(DiagnosticBundleTest, RefusesToReplaceAnExistingBundle) {

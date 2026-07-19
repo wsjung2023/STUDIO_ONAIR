@@ -10,6 +10,7 @@
 #include "app/ScreenPreviewItem.h"
 #include "app/ShortcutSettingsController.h"
 #include "app/CameraPreviewItem.h"
+#include "app/CommercialControlsController.h"
 #include "app/StudioRecordingBinding.h"
 #include "app/StudioWorkflowController.h"
 #include "app/RecordingTimelineReconciler.h"
@@ -30,6 +31,7 @@
 #endif
 #include "project_store/ProjectPackageStore.h"
 #include "project_store/SqliteStudioStore.h"
+#include "platform_release/EntitlementPolicy.h"
 #if defined(CS_APP_ENABLE_FFMPEG)
 #include "ffmpeg_adapter/FfmpegMediaProbe.h"
 #if defined(_WIN32)
@@ -179,6 +181,12 @@ int main(int argc, char* argv[]) {
         std::move(recordingReconciler),
         [] { return creator::core::generateUuidV4(); }, &app};
     creator::app::ShortcutSettingsController shortcutSettingsController{&app};
+    const creator::platform_release::EntitlementPolicy entitlementPolicy{
+        {.productId = "creator-studio-pro",
+         .offlineGraceSeconds = 7 * 24 * 60 * 60,
+         .communityBuild = true}};
+    creator::app::CommercialControlsController commercialControlsController{
+        entitlementPolicy.evaluate({}, {}), &app};
 #if defined(CS_APP_ENABLE_MLT)
     const auto mltRuntimeRoot = stagedMltRuntimeRoot();
     std::shared_ptr<creator::audio_dsp::IAudioProcessor> audioProcessingChain;
@@ -303,6 +311,9 @@ int main(int argc, char* argv[]) {
                                              &editorController);
     engine.rootContext()->setContextProperty(QStringLiteral("exportController"),
                                              &exportController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("commercialControlsController"),
+        &commercialControlsController);
 
     QObject::connect(
         &engine,

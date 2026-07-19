@@ -36,11 +36,12 @@ constexpr std::uintmax_t kMaximumFileBytes = 4U * 1024U * 1024U;
 constexpr std::uintmax_t kMaximumBundleBytes = 8U * 1024U * 1024U;
 constexpr std::array<std::string_view, 3> kAllowedNames{
     "application.log", "release-manifest.json", "system-summary.json"};
-constexpr std::array<std::string_view, 12> kForbiddenContentMarkers{
+constexpr std::array<std::string_view, 14> kForbiddenContentMarkers{
     "\"transcript\"", "\"recordingpath\"", "\"projectpath\"",
     "\"projectcontent\"", "\"cursorevents\"", "\"captiontext\"",
     "\"mediapath\"", "\"authorization\"", "\"access_token\"",
-    "\"api_key\"", "\"password\"", "\"secret\""};
+    "\"api_key\"", "\"password\"", "\"secret\"", "\"receipt\"",
+    "\"accountid\""};
 
 struct PreparedFile final {
     std::string name;

@@ -159,6 +159,53 @@ private:
     int cancelCalls_{};
 };
 
+class FakeCommercialControlsController final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(QString entitlementState READ entitlementState NOTIFY changed)
+    Q_PROPERTY(QString entitlementReason READ entitlementReason NOTIFY changed)
+    Q_PROPERTY(bool diagnosticsConsent READ diagnosticsConsent NOTIFY changed)
+    Q_PROPERTY(bool busy READ busy NOTIFY changed)
+    Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY changed)
+
+public:
+    using QObject::QObject;
+    [[nodiscard]] QString entitlementState() const {
+        return QStringLiteral("active");
+    }
+    [[nodiscard]] QString entitlementReason() const {
+        return QStringLiteral("community-development-build");
+    }
+    [[nodiscard]] bool diagnosticsConsent() const noexcept { return consent_; }
+    [[nodiscard]] bool busy() const noexcept { return false; }
+    [[nodiscard]] QString statusMessage() const { return {}; }
+    Q_INVOKABLE void setDiagnosticsConsent(bool consent) {
+        ++consentCalls_;
+        consent_ = consent;
+        emit changed();
+    }
+    Q_INVOKABLE void signOut() { ++signOutCalls_; }
+    Q_INVOKABLE void deleteLocalAccountData(bool confirmed) {
+        ++deleteCalls_;
+        lastDeleteConfirmed_ = confirmed;
+    }
+    [[nodiscard]] int consentCalls() const noexcept { return consentCalls_; }
+    [[nodiscard]] int signOutCalls() const noexcept { return signOutCalls_; }
+    [[nodiscard]] int deleteCalls() const noexcept { return deleteCalls_; }
+    [[nodiscard]] bool lastDeleteConfirmed() const noexcept {
+        return lastDeleteConfirmed_;
+    }
+
+signals:
+    void changed();
+
+private:
+    bool consent_{false};
+    int consentCalls_{0};
+    int signOutCalls_{0};
+    int deleteCalls_{0};
+    bool lastDeleteConfirmed_{false};
+};
+
 class FakeStudioController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
@@ -1051,6 +1098,7 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
     FakeStudioWorkflowController studioWorkflowController;
     FakeShortcutSettingsController shortcutSettingsController;
     FakeExportController exportController;
+    FakeCommercialControlsController commercialControlsController;
     engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
                                              &projectController);
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
@@ -1067,6 +1115,9 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
         QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
     engine.rootContext()->setContextProperty(QStringLiteral("exportController"),
                                              &exportController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("commercialControlsController"),
+        &commercialControlsController);
     QQmlComponent component{
         &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/Main.qml"))};
 
@@ -1086,6 +1137,7 @@ TEST(QmlSmokeTest, MainRecordShortcutSharesVisibleActionAndStateGuard) {
     FakeStudioWorkflowController studioWorkflowController;
     FakeShortcutSettingsController shortcutSettingsController;
     FakeExportController exportController;
+    FakeCommercialControlsController commercialControlsController;
     projectController.setHasOpenProject(true);
     engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
                                              &projectController);
@@ -1103,6 +1155,9 @@ TEST(QmlSmokeTest, MainRecordShortcutSharesVisibleActionAndStateGuard) {
         QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
     engine.rootContext()->setContextProperty(QStringLiteral("exportController"),
                                              &exportController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("commercialControlsController"),
+        &commercialControlsController);
     QQmlComponent component{
         &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/Main.qml"))};
     std::unique_ptr<QObject> object{component.create()};
@@ -1130,6 +1185,71 @@ TEST(QmlSmokeTest, MainRecordShortcutSharesVisibleActionAndStateGuard) {
     QCoreApplication::processEvents();
     EXPECT_FALSE(action->property("enabled").toBool());
     EXPECT_FALSE(shortcut->property("enabled").toBool());
+}
+
+TEST(QmlSmokeTest, SettingsExposesPrivacyAndTwoStepDeletionAtCompactSize) {
+    QQmlEngine engine;
+    FakeCommercialControlsController controller;
+    QQmlComponent component{
+        &engine,
+        QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/SettingsPage.qml"))};
+    QVariantMap initialProperties{
+        {QStringLiteral("controller"),
+         QVariant::fromValue(static_cast<QObject*>(&controller))},
+        {QStringLiteral("width"), 360},
+        {QStringLiteral("height"), 640}};
+    std::unique_ptr<QObject> object{
+        component.createWithInitialProperties(initialProperties)};
+
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    auto* status = object->findChild<QObject*>(
+        QStringLiteral("settingsEntitlementStatus"));
+    auto* content = object->findChild<QObject*>(QStringLiteral("settingsContent"));
+    auto* consent = object->findChild<QObject*>(
+        QStringLiteral("settingsDiagnosticsConsent"));
+    auto* signOut = object->findChild<QObject*>(
+        QStringLiteral("settingsSignOutButton"));
+    auto* reveal = object->findChild<QObject*>(
+        QStringLiteral("settingsDeleteRevealButton"));
+    auto* confirmation = object->findChild<QObject*>(
+        QStringLiteral("settingsDeleteConfirmation"));
+    auto* confirm = object->findChild<QObject*>(
+        QStringLiteral("settingsDeleteConfirmButton"));
+    ASSERT_NE(status, nullptr);
+    ASSERT_NE(content, nullptr);
+    ASSERT_NE(consent, nullptr);
+    ASSERT_NE(signOut, nullptr);
+    ASSERT_NE(reveal, nullptr);
+    ASSERT_NE(confirmation, nullptr);
+    ASSERT_NE(confirm, nullptr);
+    EXPECT_TRUE(status->property("text").toString().contains(
+        QStringLiteral("active"), Qt::CaseInsensitive));
+    EXPECT_FALSE(consent->property("checked").toBool());
+    EXPECT_FALSE(confirmation->property("visible").toBool());
+    EXPECT_EQ(object->property("width").toInt(), 360);
+    EXPECT_EQ(object->property("height").toInt(), 640);
+    EXPECT_GE(content->property("x").toDouble(), 0.0);
+    EXPECT_LE(content->property("x").toDouble() +
+                  content->property("width").toDouble(),
+              360.0);
+    EXPECT_EQ(object->findChild<QObject*>(QStringLiteral("settingsPurchaseButton")),
+              nullptr);
+
+    ASSERT_TRUE(consent->setProperty("checked", true));
+    ASSERT_TRUE(QMetaObject::invokeMethod(consent, "toggled"));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(controller.consentCalls(), 1);
+    EXPECT_TRUE(consent->property("checked").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(signOut, "clicked"));
+    EXPECT_EQ(controller.signOutCalls(), 1);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(reveal, "clicked"));
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(confirmation->property("visible").toBool());
+    EXPECT_EQ(controller.deleteCalls(), 0);
+    ASSERT_TRUE(QMetaObject::invokeMethod(confirm, "clicked"));
+    EXPECT_EQ(controller.deleteCalls(), 1);
+    EXPECT_TRUE(controller.lastDeleteConfirmed());
 }
 
 TEST(QmlSmokeTest, ExportPageExposesProductPresetsProgressAndCancellation) {

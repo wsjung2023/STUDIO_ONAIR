@@ -13,8 +13,8 @@ ApplicationWindow {
            : qsTr("Creator Studio")
     readonly property bool compact: width < 720
 
-    readonly property var navigationPages: ["Home", "Studio", "Editor", "Export"]
-    readonly property var stackPages: ["Home", "Studio", "Editor", "Export", "Recovery"]
+    readonly property var navigationPages: ["Home", "Studio", "Editor", "Export", "Settings"]
+    readonly property var stackPages: ["Home", "Studio", "Editor", "Export", "Settings", "Recovery"]
     property string currentPage: "Home"
 
     Action {
@@ -116,6 +116,7 @@ ApplicationWindow {
         StudioPage {}
         EditorPage { controller: editorController }
         ExportPage { controller: exportController }
+        SettingsPage { controller: commercialControlsController }
         RecoveryPage {}
     }
 }

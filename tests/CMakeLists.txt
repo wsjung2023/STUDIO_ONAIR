@@ -332,6 +332,7 @@ add_executable(cs_app_tests
     app/RecordingTimelineReconcilerTest.cpp
     app/EditorModelsTest.cpp
     app/ShortcutSettingsControllerTest.cpp
+    app/CommercialControlsControllerTest.cpp
     app/StudioWorkflowControllerTest.cpp
     app/EditorControllerTest.cpp
     app/ExportControllerTest.cpp

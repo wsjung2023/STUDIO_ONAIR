@@ -71,12 +71,12 @@ struct EntitlementDecision final {
 **Interfaces:**
 - Produces: QML properties `entitlementState`, `entitlementReason`, `diagnosticsConsent`, plus invokables `setDiagnosticsConsent(bool)`, `signOut()`, and `deleteLocalAccountData(bool confirmed)`.
 
-- [ ] Write controller tests proving consent defaults false, sign-out preserves projects, deletion without confirmation is rejected, and confirmed deletion targets only the configured account-state root.
-- [ ] Write a QML smoke test proving Settings exposes status, consent, sign-out, and a two-step deletion confirmation at 360x640.
-- [ ] Run both tests RED.
-- [ ] Implement the controller and adaptive Settings page; add it to navigation without enabling any provider-specific purchase button.
-- [ ] Run focused QML/controller tests, full Windows CTest, and both Android APK builds.
-- [ ] Commit with `git commit -m "feat(r4): expose account and privacy controls"`.
+- [x] Write controller tests proving consent defaults false, sign-out preserves projects, deletion without confirmation is rejected, and confirmed deletion targets only the configured account-state root.
+- [x] Write a QML smoke test proving Settings exposes status, consent, sign-out, and a two-step deletion confirmation at 360x640.
+- [x] Run both tests RED.
+- [x] Implement the controller and adaptive Settings page; add it to navigation without enabling any provider-specific purchase button.
+- [x] Run focused QML/controller tests, full Windows CTest, and both Android APK builds.
+- [x] Commit with `git commit -m "feat(r4): expose account and privacy controls"`.
 
 ## Self-review
 
