@@ -71,3 +71,7 @@ the recorded NDJSON sequence and samples canonical parameters by project time,
 linearly interpolating between adjacent samples while clamping before/after
 the recorded range. The result can feed the same `AvatarRenderPipeline` used
 by live tracking.
+
+`AvatarMotionPlaybackRenderer` closes the editor-time handoff: a requested
+project timestamp is sampled from telemetry, rendered through the same mapper
+and renderer pipeline, and returned as a normal `media::VideoFrame`.
