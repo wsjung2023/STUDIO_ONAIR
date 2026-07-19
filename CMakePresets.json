@@ -49,6 +49,46 @@
       }
     },
     {
+      "name": "windows-rnnoise-debug",
+      "displayName": "Windows Debug with audited RNNoise",
+      "inherits": "windows-debug",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CS_ENABLE_RNNOISE": "ON",
+        "CS_RNNOISE_ROOT": "${sourceDir}/build/rnnoise/prefix"
+      }
+    },
+    {
+      "name": "windows-rnnoise-release",
+      "displayName": "Windows Release with audited RNNoise",
+      "inherits": "windows-release",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CS_ENABLE_RNNOISE": "ON",
+        "CS_RNNOISE_ROOT": "${sourceDir}/build/rnnoise/prefix"
+      }
+    },
+    {
+      "name": "windows-whisper-debug",
+      "displayName": "Windows Debug with audited whisper.cpp",
+      "inherits": "windows-debug",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CS_ENABLE_WHISPER": "ON",
+        "CS_WHISPER_ROOT": "${sourceDir}/build/whisper/prefix"
+      }
+    },
+    {
+      "name": "windows-whisper-release",
+      "displayName": "Windows Release with audited whisper.cpp",
+      "inherits": "windows-release",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CS_ENABLE_WHISPER": "ON",
+        "CS_WHISPER_ROOT": "${sourceDir}/build/whisper/prefix"
+      }
+    },
+    {
       "name": "macos-debug",
       "displayName": "macOS Debug (AppleClang + Ninja)",
       "inherits": "base",
@@ -74,6 +114,10 @@
     { "name": "windows-release", "configurePreset": "windows-release" },
     { "name": "windows-ffmpeg-debug", "configurePreset": "windows-ffmpeg-debug" },
     { "name": "windows-ffmpeg-release", "configurePreset": "windows-ffmpeg-release" },
+    { "name": "windows-rnnoise-debug", "configurePreset": "windows-rnnoise-debug" },
+    { "name": "windows-rnnoise-release", "configurePreset": "windows-rnnoise-release" },
+    { "name": "windows-whisper-debug", "configurePreset": "windows-whisper-debug" },
+    { "name": "windows-whisper-release", "configurePreset": "windows-whisper-release" },
     { "name": "macos-debug", "configurePreset": "macos-debug" },
     { "name": "macos-release", "configurePreset": "macos-release" }
   ],
@@ -88,6 +132,10 @@
     { "name": "windows-release", "inherits": "test-base", "configurePreset": "windows-release" },
     { "name": "windows-ffmpeg-debug", "inherits": "test-base", "configurePreset": "windows-ffmpeg-debug" },
     { "name": "windows-ffmpeg-release", "inherits": "test-base", "configurePreset": "windows-ffmpeg-release" },
+    { "name": "windows-rnnoise-debug", "inherits": "test-base", "configurePreset": "windows-rnnoise-debug" },
+    { "name": "windows-rnnoise-release", "inherits": "test-base", "configurePreset": "windows-rnnoise-release" },
+    { "name": "windows-whisper-debug", "inherits": "test-base", "configurePreset": "windows-whisper-debug" },
+    { "name": "windows-whisper-release", "inherits": "test-base", "configurePreset": "windows-whisper-release" },
     { "name": "macos-debug", "inherits": "test-base", "configurePreset": "macos-debug" },
     { "name": "macos-release", "inherits": "test-base", "configurePreset": "macos-release" }
   ]

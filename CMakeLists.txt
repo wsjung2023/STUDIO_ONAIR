@@ -14,8 +14,12 @@ option(CS_BUILD_TESTS "Build unit tests" ON)
 option(CS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(CS_ENABLE_FFMPEG "Build the audited FFmpeg adapter" OFF)
 option(CS_ENABLE_MLT "Build the audited MLT edit-engine adapter" OFF)
+option(CS_ENABLE_RNNOISE "Build the audited RNNoise denoise adapter" OFF)
+option(CS_ENABLE_WHISPER "Build the audited whisper.cpp transcription adapter" OFF)
 set(CS_FFMPEG_ROOT "" CACHE PATH "Audited FFmpeg dynamic-library prefix")
 set(CS_MLT_ROOT "" CACHE PATH "Audited MLT dynamic-library prefix")
+set(CS_RNNOISE_ROOT "" CACHE PATH "Audited RNNoise static-library prefix")
+set(CS_WHISPER_ROOT "" CACHE PATH "Audited whisper.cpp install prefix")
 
 if(CS_ENABLE_MLT AND NOT CS_ENABLE_FFMPEG)
     message(FATAL_ERROR
@@ -47,6 +51,29 @@ if(CS_ENABLE_MLT)
         message(FATAL_ERROR "CS_MLT_ROOT failed the audited runtime verification")
     endif()
     find_package(MLT REQUIRED)
+endif()
+
+if(CS_ENABLE_RNNOISE)
+    if(NOT CS_RNNOISE_ROOT)
+        message(FATAL_ERROR "CS_ENABLE_RNNOISE requires CS_RNNOISE_ROOT from scripts/bootstrap_rnnoise.ps1")
+    endif()
+    execute_process(
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_rnnoise_runtime.ps1"
+            -RuntimeRoot "${CS_RNNOISE_ROOT}"
+        RESULT_VARIABLE CS_RNNOISE_VERIFY_RESULT
+    )
+    if(NOT CS_RNNOISE_VERIFY_RESULT EQUAL 0)
+        message(FATAL_ERROR "CS_RNNOISE_ROOT failed the audited runtime verification")
+    endif()
+endif()
+
+if(CS_ENABLE_WHISPER)
+    if(NOT CS_WHISPER_ROOT)
+        message(FATAL_ERROR "CS_ENABLE_WHISPER requires CS_WHISPER_ROOT from scripts/bootstrap_whisper.ps1")
+    endif()
+    list(PREPEND CMAKE_PREFIX_PATH "${CS_WHISPER_ROOT}")
+    find_package(whisper CONFIG REQUIRED)
 endif()
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Test)
@@ -168,8 +195,14 @@ if(CS_ENABLE_FFMPEG)
     add_subdirectory(src/ffmpeg_adapter)
 endif()
 add_subdirectory(src/mlt_adapter)
+if(CS_ENABLE_RNNOISE)
+    add_subdirectory(src/rnnoise_adapter)
+endif()
 add_subdirectory(src/project_store)
 add_subdirectory(src/transcription)
+if(CS_ENABLE_WHISPER)
+    add_subdirectory(src/whisper_adapter)
+endif()
 add_subdirectory(src/fakes)
 
 # The application boundary: cs_app is the first, and only, library allowed to
@@ -226,6 +259,33 @@ if(CS_ENABLE_FFMPEG)
             BUILD_RPATH "${CS_FFMPEG_ROOT}/lib"
         )
     endif()
+endif()
+
+if(CS_ENABLE_WHISPER)
+    target_link_libraries(creator_studio PRIVATE cs_whisper_adapter)
+    target_compile_definitions(creator_studio PRIVATE CS_APP_ENABLE_WHISPER=1)
+    if(WIN32)
+        file(GLOB CS_APP_WHISPER_RUNTIME_DLLS CONFIGURE_DEPENDS
+            "${CS_WHISPER_ROOT}/bin/*.dll")
+        add_custom_command(TARGET creator_studio POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CS_APP_WHISPER_RUNTIME_DLLS}
+                $<TARGET_FILE_DIR:creator_studio>
+            COMMAND_EXPAND_LISTS
+        )
+    elseif(APPLE)
+        set_property(TARGET creator_studio APPEND PROPERTY
+            BUILD_RPATH "${CS_WHISPER_ROOT}/lib"
+        )
+    endif()
+endif()
+
+if(CS_ENABLE_RNNOISE)
+    target_link_libraries(creator_studio PRIVATE cs_rnnoise_adapter)
+    target_compile_definitions(creator_studio PRIVATE
+        CS_APP_ENABLE_RNNOISE=1
+        CS_APP_RNNOISE_ROOT="${CS_RNNOISE_ROOT}"
+    )
 endif()
 
 if(CS_ENABLE_MLT)

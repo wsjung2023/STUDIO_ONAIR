@@ -853,7 +853,54 @@ Item {
                                 }
                             }
 
-                            Label { text: qsTr("Captions"); font.bold: true }
+                            Label {
+                                objectName: "editorTranscriptPanelTitle"
+                                text: qsTr("Transcript / captions")
+                                font.bold: true
+                            }
+                            Label {
+                                objectName: "editorTranscriptPanelHint"
+                                Layout.fillWidth: true
+                                text: qsTr("Transcript cues stay non-destructive: edit text here, then use the marked range controls to lift or ripple-delete picture and audio.")
+                                wrapMode: Text.Wrap
+                                color: "#aeb7c4"
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                TextField {
+                                    id: transcriptPathField
+                                    objectName: "editorTranscriptPathField"
+                                    Layout.fillWidth: true
+                                    placeholderText: qsTr("Transcript JSON path")
+                                    Accessible.name: qsTr("Transcript JSON path")
+                                }
+                                Button {
+                                    objectName: "editorTranscriptLoadButton"
+                                    text: qsTr("Load")
+                                    enabled: transcriptPathField.text.length > 0
+                                    Accessible.name: qsTr("Load transcript JSON")
+                                    onClicked: root.controller.loadTranscript(
+                                                   Qt.resolvedUrl(transcriptPathField.text))
+                                }
+                            }
+                            ListView {
+                                id: transcriptSegmentList
+                                objectName: "editorTranscriptSegmentList"
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 90
+                                clip: true
+                                model: root.controller.transcriptSegments
+                                Accessible.name: qsTr("Transcript segments")
+                                delegate: ItemDelegate {
+                                    required property var modelData
+                                    required property int index
+                                    width: transcriptSegmentList.width
+                                    text: (modelData.speaker ? modelData.speaker + ": " : "")
+                                          + modelData.text
+                                    Accessible.name: qsTr("Transcript segment %1").arg(modelData.text)
+                                    onClicked: root.controller.addTranscriptSegment(index)
+                                }
+                            }
                             ListView {
                                 id: captionCueList
                                 objectName: "editorCaptionCueList"
@@ -918,6 +965,20 @@ Item {
                                     enabled: captionCueList.count > 0
                                     Accessible.name: qsTr("Remove caption cue")
                                     onClicked: root.removeCaptionAction()
+                                }
+                                Button {
+                                    objectName: "editorTranscriptLiftMarkedButton"
+                                    text: qsTr("Lift marked range")
+                                    enabled: root.controller.hasMarkedRange
+                                    Accessible.name: qsTr("Lift marked transcript range")
+                                    onClicked: root.liftAction()
+                                }
+                                Button {
+                                    objectName: "editorTranscriptRippleMarkedButton"
+                                    text: qsTr("Ripple delete marked")
+                                    enabled: root.controller.hasMarkedRange
+                                    Accessible.name: qsTr("Ripple delete marked transcript range")
+                                    onClicked: root.rippleDeleteAction()
                                 }
                             }
 

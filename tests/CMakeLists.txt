@@ -303,6 +303,7 @@ add_executable(cs_app_tests
     app/ProjectSegmentLifecycleSinkTest.cpp
     app/MultiTrackRecordingServiceTest.cpp
     app/AvatarFrameTrackingCoordinatorTest.cpp
+    app/TranscriptionProviderFactoryTest.cpp
     app/QmlSmokeTest.cpp
 )
 
@@ -352,6 +353,7 @@ add_executable(cs_audio_dsp_tests
     audio_dsp/CompressorProcessorTest.cpp
     audio_dsp/LimiterProcessorTest.cpp
     audio_dsp/AudioProcessingChainTest.cpp
+    audio_dsp/UnavailableDenoiseProcessorTest.cpp
     audio_dsp/LoudnessNormalizerTest.cpp
     audio_dsp/KWeightingFilterTest.cpp
     audio_dsp/LoudnessMeterTest.cpp
@@ -382,6 +384,32 @@ set_target_properties(cs_audio_dsp_tests PROPERTIES
 )
 cs_apply_warnings(cs_audio_dsp_tests)
 gtest_discover_tests(cs_audio_dsp_tests)
+
+# Audited RNNoise denoise adapter tests: enabled-only, mirroring cs_mlt_tests.
+# The manifest test is self-contained; the real-denoise test drives the linked
+# audited library from CS_RNNOISE_ROOT. Not part of the default (OFF) build.
+if(CS_ENABLE_RNNOISE)
+    add_executable(cs_rnnoise_tests
+        rnnoise_adapter/RnnoiseRuntimeManifestTest.cpp
+        rnnoise_adapter/RnnoiseDenoiseProcessorTest.cpp
+    )
+    target_link_libraries(cs_rnnoise_tests
+        PRIVATE
+            cs_rnnoise_adapter
+            cs_audio_dsp
+            GTest::gtest_main
+    )
+    target_compile_definitions(cs_rnnoise_tests PRIVATE
+        CS_TEST_RNNOISE_ROOT="${CS_RNNOISE_ROOT}"
+    )
+    set_target_properties(cs_rnnoise_tests PROPERTIES
+        AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF
+    )
+    cs_apply_warnings(cs_rnnoise_tests)
+    gtest_discover_tests(cs_rnnoise_tests)
+endif()
 
 add_executable(cs_r1_durable_edit_acceptance_tests
     acceptance/R1DurableEditAcceptanceTest.cpp
@@ -416,6 +444,7 @@ add_executable(cs_transcription_tests
     transcription/FakeTranscriptionProviderTest.cpp
     transcription/TranscriptPipelineTest.cpp
     transcription/TranscriptStoreTest.cpp
+    transcription/UnavailableTranscriptionProviderTest.cpp
 )
 target_link_libraries(cs_transcription_tests
     PRIVATE
@@ -437,11 +466,47 @@ set_target_properties(cs_transcription_tests PROPERTIES
 cs_apply_warnings(cs_transcription_tests)
 gtest_discover_tests(cs_transcription_tests)
 
+if(CS_ENABLE_WHISPER)
+    add_executable(cs_whisper_tests
+        whisper_adapter/WhisperRuntimeManifestTest.cpp
+        whisper_adapter/WhisperTranscriptionProviderTest.cpp
+    )
+    target_link_libraries(cs_whisper_tests PRIVATE
+        cs_core
+        cs_domain
+        cs_transcription
+        cs_whisper_adapter
+        GTest::gtest_main
+    )
+    target_compile_definitions(cs_whisper_tests PRIVATE
+        CS_TEST_WHISPER_ROOT="${CS_WHISPER_ROOT}"
+        CS_TEST_WHISPER_SAMPLE="${CS_WHISPER_ROOT}/share/whisper-samples/jfk.wav"
+    )
+    set_target_properties(cs_whisper_tests PROPERTIES
+        AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    cs_apply_warnings(cs_whisper_tests)
+    if(WIN32)
+        gtest_discover_tests(cs_whisper_tests
+            DISCOVERY_MODE PRE_TEST
+            PROPERTIES ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:${CS_WHISPER_ROOT}/bin"
+        )
+    else()
+        gtest_discover_tests(cs_whisper_tests)
+    endif()
+endif()
+
 if(WIN32)
     add_test(
         NAME MltBootstrapPolicy
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tests/scripts/MltBootstrapPolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME RnnoiseBootstrapPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/RnnoiseBootstrapPolicyTest.ps1"
             -RepositoryRoot "${PROJECT_SOURCE_DIR}"
     )
 endif()

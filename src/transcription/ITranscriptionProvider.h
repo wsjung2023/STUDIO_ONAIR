@@ -35,12 +35,15 @@ struct TranscriptionOptions final {
 /// boundary (CLAUDE.md 4). The domain layer above stays free of any engine type
 /// (CLAUDE.md 3/5).
 ///
-/// DEFERRED: the real implementation, a whisper.cpp-backed provider, is not
-/// built yet. It lands behind a native-dependency + model-weight gate:
-/// whisper.cpp itself is MIT, but the ggml model weights need a license note in
-/// legal/OSS_BOM.csv before any binary ships them (CLAUDE.md 7). Until then,
-/// FakeTranscriptionProvider drives this port deterministically so the domain,
-/// serialization, and storage below it are provable without a model.
+/// The real implementation is whisper_adapter::WhisperTranscriptionProvider, an
+/// ADAPTER (like mlt_adapter) that links whisper.cpp and is built only behind the
+/// CS_ENABLE_WHISPER native-dependency + model-weight gate (whisper.cpp and the
+/// ggml Whisper weights are both MIT; see legal/OSS_BOM.csv and
+/// docs/R2-engine-licensing.md). This core stays Qt-free AND whisper-free: when
+/// the gate is OFF, app::makeTranscriptionProvider hands back an
+/// UnavailableTranscriptionProvider that returns a clear error (CLAUDE.md 9).
+/// FakeTranscriptionProvider still drives this port deterministically so the
+/// domain, serialization, and storage below it are provable without a model.
 class ITranscriptionProvider {
 public:
     virtual ~ITranscriptionProvider() = default;

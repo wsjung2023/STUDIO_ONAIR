@@ -18,6 +18,9 @@ cs_add_qtfree_library(cs_audio_dsp
         LimiterProcessor.cpp
         AudioProcessingChain.h
         AudioProcessingChain.cpp
+        UnavailableDenoiseProcessor.h
+        UnavailableDenoiseProcessor.cpp
+        DenoiseProcessorFactory.h
         LoudnessNormalizer.h
         LoudnessNormalizer.cpp
         KWeightingFilter.h

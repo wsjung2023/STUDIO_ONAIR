@@ -3,10 +3,12 @@
 #include "app/EditorEngineWorker.h"
 #include "app/EditorSessionWorker.h"
 #include "app/RecentProjectRegistry.h"
+#include "transcription/TranscriptStore.h"
 
 #include <QMetaObject>
 
 #include <algorithm>
+#include <filesystem>
 #include <utility>
 
 namespace creator::app {
@@ -997,6 +999,64 @@ void EditorController::removeCaptionCue(QString cueId) {
                       selectedClipId_.toUtf8().toStdString())
                       .value(),
         .cueId = std::move(id).value()});
+}
+
+bool EditorController::loadTranscript(QUrl transcriptUrl) {
+    if (!transcriptUrl.isLocalFile()) {
+        setStatus(QStringLiteral("Transcript must be a local JSON artifact"));
+        return false;
+    }
+    const auto path = std::filesystem::path{
+        transcriptUrl.toLocalFile().toUtf8().toStdString()};
+    transcription::TranscriptStore store(path.parent_path());
+    auto loaded = store.read(path);
+    if (!loaded.hasValue()) {
+        setStatus(QStringLiteral("Could not load transcript: ") +
+                  QString::fromStdString(loaded.error().message()));
+        return false;
+    }
+    QVariantList segments;
+    segments.reserve(static_cast<qsizetype>(loaded.value().segments().size()));
+    for (const auto& segment : loaded.value().segments()) {
+        QVariantMap item{
+            {QStringLiteral("startNs"),
+             QVariant::fromValue<qint64>(segment.range().start()
+                                             .time_since_epoch()
+                                             .count())},
+            {QStringLiteral("durationNs"),
+             QVariant::fromValue<qint64>(segment.range().duration().count())},
+            {QStringLiteral("text"), QString::fromUtf8(segment.text())}};
+        if (segment.speaker().has_value()) {
+            item.insert(QStringLiteral("speaker"),
+                        QString::fromUtf8(*segment.speaker()));
+        }
+        segments.push_back(std::move(item));
+    }
+    transcriptSegments_ = std::move(segments);
+    emit transcriptChanged();
+    setStatus(QStringLiteral("Transcript loaded: %1 segment(s)")
+                  .arg(transcriptSegments_.size()));
+    return true;
+}
+
+void EditorController::addTranscriptSegment(int index) {
+    if (index < 0 || index >= transcriptSegments_.size()) return;
+    const auto item = transcriptSegments_.at(index).toMap();
+    const auto* clip = selectedClip();
+    if (clip == nullptr || clip->kind() != domain::ClipKind::Caption) {
+        setStatus(QStringLiteral("Select a caption clip before inserting transcript text"));
+        return;
+    }
+    const auto start = item.value(QStringLiteral("startNs")).toLongLong();
+    const auto duration = item.value(QStringLiteral("durationNs")).toLongLong();
+    const auto relative =
+        start - clip->timelineRange().start().time_since_epoch().count();
+    if (relative < 0) {
+        setStatus(QStringLiteral("Transcript segment is outside the selected caption clip"));
+        return;
+    }
+    addCaptionCue(relative, duration,
+                  item.value(QStringLiteral("text")).toString());
 }
 
 void EditorController::undo() {

@@ -54,6 +54,7 @@ class EditorController final : public QObject {
     Q_PROPERTY(QVariantMap selectedAudioEnvelope READ selectedAudioEnvelope NOTIFY selectionChanged)
     Q_PROPERTY(QVariantMap selectedTitlePayload READ selectedTitlePayload NOTIFY selectionChanged)
     Q_PROPERTY(QVariantList selectedCaptionCues READ selectedCaptionCues NOTIFY selectionChanged)
+    Q_PROPERTY(QVariantList transcriptSegments READ transcriptSegments NOTIFY transcriptChanged)
     Q_PROPERTY(QString selectedPipPreset READ selectedPipPreset NOTIFY selectionChanged)
     Q_PROPERTY(QString selectedResolvedFontFamily READ selectedResolvedFontFamily NOTIFY selectionChanged)
     Q_PROPERTY(qlonglong selectedClipStartNs READ selectedClipStartNs NOTIFY selectionChanged)
@@ -99,6 +100,7 @@ public:
     [[nodiscard]] QVariantMap selectedAudioEnvelope() const;
     [[nodiscard]] QVariantMap selectedTitlePayload() const;
     [[nodiscard]] QVariantList selectedCaptionCues() const;
+    [[nodiscard]] QVariantList transcriptSegments() const { return transcriptSegments_; }
     [[nodiscard]] QString selectedPipPreset() const;
     [[nodiscard]] QString selectedResolvedFontFamily() const;
     [[nodiscard]] qlonglong selectedClipStartNs() const noexcept;
@@ -160,6 +162,8 @@ public:
         QString cueId, qlonglong startOffsetNs, qlonglong durationNs,
         QString text);
     Q_INVOKABLE void removeCaptionCue(QString cueId);
+    Q_INVOKABLE bool loadTranscript(QUrl transcriptUrl);
+    Q_INVOKABLE void addTranscriptSegment(int index);
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE void save();
@@ -174,6 +178,7 @@ signals:
     void previewImageChanged();
     void sessionBusyChanged();
     void selectionChanged();
+    void transcriptChanged();
     void markedRangeChanged();
     void editStateChanged();
 
@@ -235,6 +240,7 @@ private:
     MediaBinModel mediaBinModel_;
     TimelineTrackModel timelineTrackModel_;
     std::optional<edit_engine::TimelineSnapshot> snapshot_;
+    QVariantList transcriptSegments_;
     quint64 generation_{0};
     quint64 nextCommandId_{1};
     int pendingCommands_{0};

@@ -16,9 +16,13 @@
 [CmdletBinding()]
 param(
     [ValidateSet("windows-debug", "windows-release",
-                 "windows-ffmpeg-debug", "windows-ffmpeg-release")]
+                 "windows-ffmpeg-debug", "windows-ffmpeg-release",
+                 "windows-rnnoise-debug", "windows-rnnoise-release",
+                 "windows-whisper-debug", "windows-whisper-release")]
     [string]$Preset = "windows-debug",
     [switch]$Ffmpeg,
+    [switch]$Rnnoise,
+    [switch]$Whisper,
     [switch]$SkipTests,
     [switch]$Fresh,
     [string]$VsRoot = "",
@@ -31,6 +35,14 @@ $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 # -Ffmpeg is sugar for the audited-FFmpeg preset family (CS_ENABLE_FFMPEG ON).
 if ($Ffmpeg -and ($Preset -notlike "*ffmpeg*")) {
     $Preset = $Preset -replace "^windows-", "windows-ffmpeg-"
+}
+# -Rnnoise is sugar for the audited-RNNoise preset family (CS_ENABLE_RNNOISE ON).
+if ($Rnnoise -and ($Preset -notlike "*rnnoise*")) {
+    $Preset = $Preset -replace "^windows-", "windows-rnnoise-"
+}
+# -Whisper is sugar for the audited whisper.cpp preset family (CS_ENABLE_WHISPER ON).
+if ($Whisper -and ($Preset -notlike "*whisper*")) {
+    $Preset = $Preset -replace "^windows-", "windows-whisper-"
 }
 
 function Resolve-VsRoot {

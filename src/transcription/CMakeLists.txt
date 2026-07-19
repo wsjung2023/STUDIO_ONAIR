@@ -11,6 +11,8 @@ cs_add_qtfree_library(cs_transcription
         Transcript.h
         Transcript.cpp
         ITranscriptionProvider.h
+        UnavailableTranscriptionProvider.h
+        UnavailableTranscriptionProvider.cpp
         FakeTranscriptionProvider.h
         FakeTranscriptionProvider.cpp
         TranscriptSerializer.h

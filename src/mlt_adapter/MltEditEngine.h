@@ -1,7 +1,9 @@
 #pragma once
 
+#include "audio_dsp/IAudioProcessor.h"
 #include "edit_engine/IEditEngine.h"
 #include "edit_engine/IRenderJobLifecycle.h"
+#include "mlt_adapter/CursorVisualEffects.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -18,6 +20,12 @@ struct MltEditEngineConfig final {
     std::uint32_t previewWidth{1280};
     std::uint32_t previewHeight{720};
     std::shared_ptr<edit_engine::IRenderJobLifecycle> renderLifecycle;
+    /// Optional final-frame directives. The same plan is used by preview and
+    /// export graph instances so cursor effects cannot drift between them.
+    std::shared_ptr<const CursorVisualEffectsPlan> cursorVisualEffects;
+    /// Optional real-time DSP chain applied to mixed preview audio. Export
+    /// uses the same graph hook when the runtime exposes a mixed-audio frame.
+    std::shared_ptr<audio_dsp::IAudioProcessor> audioProcessingChain;
 };
 
 struct MltEditEngineDiagnostics final {

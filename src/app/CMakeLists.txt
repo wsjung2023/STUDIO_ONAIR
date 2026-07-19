@@ -20,6 +20,8 @@ add_library(cs_app STATIC
     ControllerLiveCaptureBindings.cpp
     LiveRecordingEngineFactory.h
     LiveRecordingEngineFactory.cpp
+    TranscriptionProviderFactory.h
+    TranscriptionProviderFactory.cpp
     LiveRecordingController.h
     LiveRecordingController.cpp
     StudioRecordingBinding.h
@@ -128,12 +130,18 @@ target_link_libraries(cs_app
         cs_recorder
         cs_domain
         cs_edit_engine
+        cs_transcription
     PRIVATE
         cs_project_store
 )
 
 if(CS_ENABLE_FFMPEG)
     target_link_libraries(cs_app PRIVATE cs_ffmpeg_adapter cs_sync)
+endif()
+
+if(CS_ENABLE_WHISPER)
+    target_link_libraries(cs_app PRIVATE cs_whisper_adapter)
+    target_compile_definitions(cs_app PRIVATE CS_APP_ENABLE_WHISPER=1)
 endif()
 
 cs_apply_warnings(cs_app)

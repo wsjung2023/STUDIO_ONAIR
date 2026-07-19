@@ -2,6 +2,8 @@
 
 #include "core/AppError.h"
 #include "core/Uuid.h"
+#include "audio_dsp/AudioBuffer.h"
+#include "audio_dsp/AudioFormat.h"
 #include "ffmpeg_adapter/FfmpegMediaProbe.h"
 #include "mlt_adapter/ExportEncoderProbe.h"
 #include "mlt_adapter/FrameEffects.h"
@@ -355,6 +357,14 @@ struct AudioFilterContext final : CreatorFilterContext {
     std::atomic<int> lastErrorStage{};
 };
 
+struct AudioProcessingFilterContext final : CreatorFilterContext {
+    explicit AudioProcessingFilterContext(
+        std::shared_ptr<audio_dsp::IAudioProcessor> processorValue)
+        : processor(std::move(processorValue)) {}
+    std::shared_ptr<audio_dsp::IAudioProcessor> processor;
+    std::atomic<int> lastErrorStage{};
+};
+
 void closeCreatorFilter(mlt_filter filter) {
     delete static_cast<CreatorFilterContext*>(filter->child);
     filter->child = nullptr;
@@ -365,6 +375,7 @@ void closeCreatorFilter(mlt_filter filter) {
 
 mlt_frame processVisualFrame(mlt_filter filter, mlt_frame frame);
 mlt_frame processAudioFrame(mlt_filter filter, mlt_frame frame);
+mlt_frame processAudioProcessingFrame(mlt_filter filter, mlt_frame frame);
 
 core::Result<std::unique_ptr<Mlt::Filter>> makeCreatorFilter(
     std::unique_ptr<CreatorFilterContext> context,
@@ -581,9 +592,51 @@ int getEnvelopedAudio(mlt_frame frame, void** buffer, mlt_audio_format* format,
     }
 }
 
+int getProcessedAudio(mlt_frame frame, void** buffer, mlt_audio_format* format,
+                      int* frequency, int* channels, int* samples) noexcept {
+    auto* filter = static_cast<mlt_filter>(mlt_frame_pop_audio(frame));
+    auto* context = filter
+                        ? static_cast<AudioProcessingFilterContext*>(filter->child)
+                        : nullptr;
+    if (!context || !context->processor || !buffer || !format || !frequency ||
+        !channels || !samples) {
+        return 1;
+    }
+    const auto fail = [context](int stage) {
+        context->lastErrorStage.store(stage, std::memory_order_relaxed);
+        return 1;
+    };
+    try {
+        *format = mlt_audio_f32le;
+        const int result = mlt_frame_get_audio(frame, buffer, format, frequency,
+                                               channels, samples);
+        if (result != 0 || !*buffer || *format != mlt_audio_f32le ||
+            *frequency <= 0 || *channels <= 0 || *samples < 0) {
+            return fail(1);
+        }
+        auto audioFormat = audio_dsp::AudioFormat::create(
+            static_cast<std::uint32_t>(*frequency),
+            static_cast<std::uint32_t>(*channels));
+        if (!audioFormat.hasValue()) return fail(2);
+        audio_dsp::AudioBuffer audioBuffer{
+            static_cast<float*>(*buffer), static_cast<std::size_t>(*samples),
+            audioFormat.value()};
+        auto processed = context->processor->process(audioBuffer);
+        return processed.hasValue() ? 0 : fail(3);
+    } catch (...) {
+        return fail(4);
+    }
+}
+
 mlt_frame processAudioFrame(mlt_filter filter, mlt_frame frame) {
     mlt_frame_push_audio(frame, filter);
     mlt_frame_push_audio(frame, reinterpret_cast<void*>(getEnvelopedAudio));
+    return frame;
+}
+
+mlt_frame processAudioProcessingFrame(mlt_filter filter, mlt_frame frame) {
+    mlt_frame_push_audio(frame, filter);
+    mlt_frame_push_audio(frame, reinterpret_cast<void*>(getProcessedAudio));
     return frame;
 }
 
@@ -609,6 +662,7 @@ class MltEditEngine::Impl final {
         std::vector<std::unique_ptr<Mlt::Transition>> transitions;
         std::vector<VisualFilterContext*> visualFilterContexts;
         std::vector<AudioFilterContext*> audioFilterContexts;
+        std::vector<AudioProcessingFilterContext*> audioProcessingFilterContexts;
         domain::TimelineRevision revision;
         core::FrameRate frameRate;
         std::int64_t durationFrames;
@@ -673,6 +727,7 @@ class MltEditEngine::Impl final {
             std::max<std::int64_t>(1, plan.durationFrames);
         auto graph = std::make_unique<Graph>(Graph{
             std::make_unique<Mlt::Profile>(), nullptr, {}, {}, {}, {}, {}, {},
+            {},
             plan.revision, plan.frameRate, graphDurationFrames,
             0, 0, 0, plan.visualBranches.size(), 0, 0, 0});
         graph->profile->set_explicit(1);
@@ -952,6 +1007,20 @@ class MltEditEngine::Impl final {
             ++graph->videoCompositeTransitions;
             graph->transitions.push_back(std::move(composite));
         }
+        if (config_.audioProcessingChain) {
+            auto context = std::make_unique<AudioProcessingFilterContext>(
+                config_.audioProcessingChain);
+            auto* contextObserver = context.get();
+            auto creatorFilter = makeCreatorFilter(
+                std::move(context), processAudioProcessingFrame);
+            if (!creatorFilter.hasValue()) return creatorFilter.error();
+            if (graph->tractor->attach(*creatorFilter.value()) != 0) {
+                return stateError(
+                    "MLT could not attach the configured audio processing chain");
+            }
+            graph->filters.push_back(std::move(creatorFilter).value());
+            graph->audioProcessingFilterContexts.push_back(contextObserver);
+        }
         graph->tractor->refresh();
         // Playlist::append retains the producer service.  The extra owning
         // wrappers are only needed while the graph is assembled; keeping one
@@ -1150,6 +1219,22 @@ core::Result<edit_engine::PreviewFrame> MltEditEngine::requestFrame(
     } else {
         return stateError("MLT returned an unsupported preview pixel format");
     }
+    if (impl_->config_.cursorVisualEffects) {
+        auto processed = applyCursorVisualEffects(
+            BgraFrameView{.bytes = std::span<const std::uint8_t>{*pixels},
+                          .width = static_cast<std::uint32_t>(width),
+                          .height = static_cast<std::uint32_t>(height),
+                          .stride = static_cast<std::uint32_t>(width * 4)},
+            static_cast<std::uint32_t>(width),
+            static_cast<std::uint32_t>(height), position,
+            *impl_->config_.cursorVisualEffects);
+        if (!processed.hasValue()) return processed.error();
+        const auto bytes = processed.value().bytes();
+        if (!processed.value().aliasesInput()) {
+            pixels = std::make_shared<std::vector<std::uint8_t>>(
+                bytes.begin(), bytes.end());
+        }
+    }
     media::VideoFrame video{
         .timestamp = position,
         .width = static_cast<std::uint32_t>(width),
@@ -1204,6 +1289,9 @@ core::Result<std::vector<float>> MltEditEngine::requestMixedAudio(
     for (auto* context : impl_->graph_->audioFilterContexts) {
         context->lastErrorStage.store(0, std::memory_order_relaxed);
     }
+    for (auto* context : impl_->graph_->audioProcessingFilterContexts) {
+        context->lastErrorStage.store(0, std::memory_order_relaxed);
+    }
     impl_->graph_->tractor->seek(static_cast<int>(frameNumber));
     std::unique_ptr<Mlt::Frame> frame{impl_->graph_->tractor->get_frame()};
     if (!frame || !frame->is_valid()) {
@@ -1226,6 +1314,15 @@ core::Result<std::vector<float>> MltEditEngine::requestMixedAudio(
                 std::to_string(stage));
         }
     }
+    for (const auto* context : impl_->graph_->audioProcessingFilterContexts) {
+        const int stage =
+            context->lastErrorStage.load(std::memory_order_relaxed);
+        if (stage != 0) {
+            return stateError(
+                "Creator audio processing chain failed at stage " +
+                std::to_string(stage));
+        }
+    }
     if (result != 0 || !buffer ||
         returnedFrequency != frequency || returnedChannels != channels ||
         returnedSamples <= 0 || returnedSamples > samples) {
@@ -1239,20 +1336,25 @@ core::Result<std::vector<float>> MltEditEngine::requestMixedAudio(
     }
     const auto sampleCount = static_cast<std::size_t>(returnedSamples) *
                              static_cast<std::size_t>(returnedChannels);
+    std::vector<float> converted;
     if (format == mlt_audio_f32le) {
         const auto* values = static_cast<const float*>(buffer);
-        return std::vector<float>{values, values + sampleCount};
-    }
-    if (format == mlt_audio_s16) {
+        converted.assign(values, values + sampleCount);
+    } else if (format == mlt_audio_s16) {
         const auto* values = static_cast<const std::int16_t*>(buffer);
-        std::vector<float> converted(sampleCount);
+        converted.resize(sampleCount);
         std::transform(values, values + sampleCount, converted.begin(),
                        [](std::int16_t value) {
                            return static_cast<float>(value) / 32768.0F;
                        });
-        return converted;
+    } else {
+        return stateError("MLT returned an unsupported mixed audio format");
     }
-    return stateError("MLT returned an unsupported mixed audio format");
+    // The configured chain is attached to the tractor while the graph is
+    // built. MLT has already passed this mixed frame through that filter by
+    // the time it reaches this conversion boundary; running it again here
+    // would double-denoise/double-compress preview audio and export audio.
+    return converted;
 }
 
 core::Result<void> MltEditEngine::renderFrozen(

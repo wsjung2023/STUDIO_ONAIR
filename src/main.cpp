@@ -31,6 +31,11 @@
 #endif
 #endif
 #include "edit_engine/UnavailableEditEngine.h"
+#if defined(CS_APP_ENABLE_RNNOISE)
+#include "audio_dsp/AudioProcessingChain.h"
+#include "rnnoise_adapter/RnnoiseDenoiseProcessor.h"
+#include <QDebug>
+#endif
 #if defined(CS_APP_ENABLE_MLT)
 #include "app/ProjectExportEngine.h"
 #include "mlt_adapter/MltEditEngine.h"
@@ -161,10 +166,24 @@ int main(int argc, char* argv[]) {
     creator::app::ShortcutSettingsController shortcutSettingsController{&app};
 #if defined(CS_APP_ENABLE_MLT)
     const auto mltRuntimeRoot = stagedMltRuntimeRoot();
+    std::shared_ptr<creator::audio_dsp::IAudioProcessor> audioProcessingChain;
+#if defined(CS_APP_ENABLE_RNNOISE)
+    auto denoise = creator::rnnoise_adapter::createRnnoiseDenoiseProcessor(
+        std::filesystem::path{CS_APP_RNNOISE_ROOT});
+    if (denoise.hasValue()) {
+        auto chain = std::make_shared<creator::audio_dsp::AudioProcessingChain>();
+        chain->add(std::move(denoise).value());
+        audioProcessingChain = std::move(chain);
+    } else {
+        qWarning().noquote() << "RNNoise runtime unavailable:" << QString::fromStdString(
+            denoise.error().message());
+    }
+#endif
     std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
         std::make_unique<creator::mlt_adapter::MltEditEngine>(
             creator::mlt_adapter::MltEditEngineConfig{
-                .runtimeRoot = mltRuntimeRoot});
+                .runtimeRoot = mltRuntimeRoot,
+                .audioProcessingChain = std::move(audioProcessingChain)});
     std::unique_ptr<creator::edit_engine::IEditEngine> exportEngine =
         std::make_unique<creator::app::ProjectExportEngine>(mltRuntimeRoot);
 #else
