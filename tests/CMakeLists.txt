@@ -197,6 +197,45 @@ cs_apply_warnings(cs_autozoom_tests)
 
 gtest_discover_tests(cs_autozoom_tests)
 
+# cs_cursor_emphasis (R2-02 click-emphasis + cursor hide/replace plan core) is
+# Qt-free like cs_cursor, so its tests get their own Qt-free binary. The
+# emphasis-plan schema path is injected so the serializer test validates against
+# the single shipped schemas/emphasis_plan.schema.json, mirroring the cursor and
+# auto-zoom pipeline tests.
+add_executable(cs_cursor_emphasis_tests
+    cursor_emphasis/EmphasisValueTest.cpp
+    cursor_emphasis/EmphasisPlannerTest.cpp
+    cursor_emphasis/EmphasisPlanSerializerTest.cpp
+)
+
+target_link_libraries(cs_cursor_emphasis_tests
+    PRIVATE
+        cs_core
+        cs_domain
+        cs_cursor
+        cs_cursor_emphasis
+        nlohmann_json::nlohmann_json
+        nlohmann_json_schema_validator::validator
+        GTest::gtest_main
+)
+
+target_include_directories(cs_cursor_emphasis_tests
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cursor_emphasis)
+
+target_compile_definitions(cs_cursor_emphasis_tests PRIVATE
+    CS_EMPHASIS_PLAN_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/emphasis_plan.schema.json"
+)
+
+set_target_properties(cs_cursor_emphasis_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+
+cs_apply_warnings(cs_cursor_emphasis_tests)
+
+gtest_discover_tests(cs_cursor_emphasis_tests)
+
 # Separate binary: these need a QCoreApplication, so they cannot use
 # gtest_main. Keeping them apart also keeps cs_tests Qt-free, which is a
 # standing check that the layers below the application really do build without
