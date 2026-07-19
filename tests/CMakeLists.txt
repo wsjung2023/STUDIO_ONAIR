@@ -78,6 +78,7 @@ add_executable(cs_tests
     sync/SyncPipelineAcceptanceTest.cpp
     capture/PortContractTest.cpp
     capture/CaptureTimestampMapperTest.cpp
+    capture/AndroidProjectionSessionTest.cpp
     capture/ScreenCapturePortsTest.cpp
     capture/LatestVideoFrameMailboxTest.cpp
     capture/CaptureFanoutSinksTest.cpp

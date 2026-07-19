@@ -2,6 +2,8 @@ cs_add_qtfree_library(cs_capture
     SOURCES
         CaptureTimestampMapper.h
         CaptureTimestampMapper.cpp
+        AndroidProjectionSession.h
+        AndroidProjectionSession.cpp
         AudioLevelMeter.h
         AudioLevelMeter.cpp
         AudioPcmLayout.h
