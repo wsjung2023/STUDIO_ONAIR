@@ -17,6 +17,8 @@ source cannot grow an unbounded receive allocation.
 
 `AvatarMotionPipeline` then applies primary-face selection, confidence gating,
 calibration, One-Euro smoothing, and durable `avatar.motion` NDJSON output in
-one deterministic boundary. Camera pixel readback, MediaPipe/OpenSeeFace model
+one deterministic boundary. `AvatarTrackingSession` now owns the source
+lifecycle and connects `start → poll → pipeline → stop` without introducing a
+hidden thread or clock. Camera pixel readback, MediaPipe/OpenSeeFace model
 process supervision, Inochi2D rendering, and Studio/Editor wiring remain the
 next integration stage; no model weights are bundled by this change.
