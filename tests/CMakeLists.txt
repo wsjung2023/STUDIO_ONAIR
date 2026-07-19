@@ -27,6 +27,7 @@ add_executable(cs_platform_release_tests
     platform_release/UpdateManifestTest.cpp
     platform_release/DiagnosticBundleTest.cpp
     platform_release/EntitlementPolicyTest.cpp
+    platform_release/EntitlementStoreTest.cpp
 )
 target_link_libraries(cs_platform_release_tests
     PRIVATE

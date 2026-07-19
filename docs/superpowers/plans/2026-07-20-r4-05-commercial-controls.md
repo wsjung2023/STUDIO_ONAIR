@@ -55,10 +55,10 @@ struct EntitlementDecision final {
 - Consumes: provider-specific opaque receipt bytes through `IReceiptVerifier`.
 - Produces: a validated assertion and atomically stored last-online/grace state.
 
-- [ ] Write tests that reject an empty provider id, oversized receipt, invalid signature result, unknown JSON fields, rollback of last-online time, and torn replacement.
-- [ ] Run RED.
-- [ ] Implement a 1 MiB receipt bound, injected verifier, strict JSON state, and same-directory atomic replace.
-- [ ] Run focused tests and commit with `git commit -m "feat(r4): add receipt verification boundary"`.
+- [x] Write tests that reject an empty provider id, oversized receipt, invalid signature result, unknown JSON fields, rollback of last-online time, and torn replacement.
+- [x] Run RED.
+- [x] Implement a 1 MiB receipt bound, injected verifier, strict JSON state, and same-directory atomic replace.
+- [x] Run focused tests and commit with `git commit -m "feat(r4): add receipt verification boundary"`.
 
 ### Task 3: Account and privacy controls
 

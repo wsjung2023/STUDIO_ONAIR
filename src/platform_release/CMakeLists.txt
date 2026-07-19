@@ -20,6 +20,9 @@ cs_add_qtfree_library(cs_platform_release
         DiagnosticBundle.cpp
         EntitlementPolicy.h
         EntitlementPolicy.cpp
+        IReceiptVerifier.h
+        EntitlementStore.h
+        EntitlementStore.cpp
     DEPENDS
         cs_core
         nlohmann_json::nlohmann_json
