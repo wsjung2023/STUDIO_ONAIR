@@ -19,6 +19,8 @@ cs_add_qtfree_library(cs_avatar
         AvatarMotionNdjsonSink.cpp
         AvatarMotionPipeline.h
         AvatarMotionPipeline.cpp
+        AvatarTrackingSession.h
+        AvatarTrackingSession.cpp
         PrimaryFaceSelector.h
         PrimaryFaceSelector.cpp
         openseeface/OpenSeeFaceParser.h

@@ -84,6 +84,7 @@ add_executable(cs_tests
     avatar/openseeface/OpenSeeFaceParserTest.cpp
     avatar/OpenSeeFaceUdpSourceTest.cpp
     avatar/AvatarMotionPipelineTest.cpp
+    avatar/AvatarTrackingSessionTest.cpp
     recorder/RecordingTrackTest.cpp
     recorder/DiskSpaceMonitorTest.cpp
     recorder/DurableSegmentPublisherTest.cpp
