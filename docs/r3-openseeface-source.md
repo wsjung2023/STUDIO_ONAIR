@@ -75,3 +75,12 @@ by live tracking.
 `AvatarMotionPlaybackRenderer` closes the editor-time handoff: a requested
 project timestamp is sampled from telemetry, rendered through the same mapper
 and renderer pipeline, and returned as a normal `media::VideoFrame`.
+
+`inochi2d::Inochi2dModelRuntime` is the optional SDK boundary. It dynamically
+resolves the official C FFI, loads an `.inx` model, applies mapped one-dimensional
+parameters, and advances physics. The runtime declarations mirror the SDK's
+generated C ABI (including its Windows `cdecl` convention); the external SDK
+library remains a deploy-time artifact. Missing libraries, missing symbols, and
+model-load failures become explicit `AppError` values rather than crashing the
+core build or silently rendering a fake model. GPU/draw-list rasterization is
+still a separate renderer-backend step.

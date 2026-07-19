@@ -91,6 +91,7 @@ add_executable(cs_tests
     avatar/AvatarMotionPipelineTest.cpp
     avatar/AvatarMotionPlaybackTest.cpp
     avatar/AvatarMotionPlaybackRendererTest.cpp
+    avatar/inochi2d/Inochi2dModelRuntimeTest.cpp
     avatar/AvatarTrackingSessionTest.cpp
     recorder/RecordingTrackTest.cpp
     recorder/DiskSpaceMonitorTest.cpp

@@ -42,6 +42,8 @@ cs_add_qtfree_library(cs_avatar
         openseeface/OpenSeeFaceUdpSource.cpp
         openseeface/OpenSeeFaceProcessSupervisor.h
         openseeface/OpenSeeFaceProcessSupervisor.cpp
+        inochi2d/Inochi2dModelRuntime.h
+        inochi2d/Inochi2dModelRuntime.cpp
     DEPENDS
         cs_core
         cs_media
@@ -51,4 +53,6 @@ cs_add_qtfree_library(cs_avatar
 
 if(WIN32)
     target_link_libraries(cs_avatar PUBLIC ws2_32)
+elseif(UNIX)
+    target_link_libraries(cs_avatar PRIVATE dl)
 endif()
