@@ -397,6 +397,38 @@ gtest_discover_tests(cs_r1_durable_edit_acceptance_tests
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
 )
 
+# R2-04 transcription core. Qt-free: this binary links no Qt, so it doubles as a
+# standing check that the transcription module builds without Qt on the include
+# path. json-schema-validator is linked test-only (the shipped module does not
+# depend on it); the committed schema path is passed as a compile definition so
+# the pipeline test validates the serialized document against it, mirroring the
+# project_store manifest tests.
+add_executable(cs_transcription_tests
+    transcription/TranscriptValueObjectsTest.cpp
+    transcription/FakeTranscriptionProviderTest.cpp
+    transcription/TranscriptPipelineTest.cpp
+    transcription/TranscriptStoreTest.cpp
+)
+target_link_libraries(cs_transcription_tests
+    PRIVATE
+        cs_core
+        cs_domain
+        cs_transcription
+        nlohmann_json::nlohmann_json
+        nlohmann_json_schema_validator::validator
+        GTest::gtest_main
+)
+target_compile_definitions(cs_transcription_tests PRIVATE
+    CS_TRANSCRIPT_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/transcript.schema.json"
+)
+set_target_properties(cs_transcription_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+cs_apply_warnings(cs_transcription_tests)
+gtest_discover_tests(cs_transcription_tests)
+
 if(WIN32)
     add_test(
         NAME MltBootstrapPolicy
