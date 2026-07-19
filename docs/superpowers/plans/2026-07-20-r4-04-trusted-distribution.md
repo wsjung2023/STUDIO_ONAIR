@@ -66,17 +66,17 @@ public:
 **Files:**
 - Create: `scripts/verify_release_artifacts.ps1`
 - Create: `tests/scripts/ReleaseArtifactPolicyTest.ps1`
-- Modify: `.github/workflows/r4-release-foundation.yml`, `tests/CMakeLists.txt`
+- Modify: `.github/workflows/ci.yml`, `tests/CMakeLists.txt`
 
 **Interfaces:**
 - Consumes: release manifest, SBOM/notices, Windows Authenticode status, macOS codesign/notary evidence, Android APK/AAB signing certificate output.
 - Produces: a non-zero exit unless every requested platform gate has evidence.
 
-- [ ] Write a script test with unsigned, hash-mismatched, missing-notice, and valid synthetic evidence cases; run RED.
-- [ ] Implement `verify_release_artifacts.ps1` with explicit `-Platform`, `-Artifact`, `-Manifest`, and `-EvidenceRoot` parameters and no network side effects.
-- [ ] Add CI artifact jobs that call validation in non-publishable mode and upload evidence only; keep store upload absent.
-- [ ] Run `ctest --test-dir build/windows-debug -R ReleaseArtifactPolicy --output-on-failure` and validate both Android APKs.
-- [ ] Commit with `git commit -m "build(r4): gate signed distribution evidence"`.
+- [x] Write a script test with unsigned, hash-mismatched, missing-notice, and valid synthetic evidence cases; run RED.
+- [x] Implement `verify_release_artifacts.ps1` with explicit `-Platform`, `-Artifact`, `-Manifest`, and `-EvidenceRoot` parameters and no network side effects.
+- [x] Add CI artifact jobs that call validation in non-publishable mode and upload evidence only; keep store upload absent.
+- [x] Run `ctest --test-dir build/windows-debug -R ReleaseArtifactPolicy --output-on-failure` and validate both Android APKs.
+- [x] Commit with `git commit -m "build(r4): gate signed distribution evidence"`.
 
 ## Self-review
 

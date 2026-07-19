@@ -686,6 +686,12 @@ if(WIN32)
             -RepositoryRoot "${PROJECT_SOURCE_DIR}"
     )
     add_test(
+        NAME ReleaseArtifactPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/ReleaseArtifactPolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
         NAME MltBootstrapPolicy
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tests/scripts/MltBootstrapPolicyTest.ps1"
