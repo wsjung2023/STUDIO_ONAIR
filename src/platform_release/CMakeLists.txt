@@ -12,6 +12,10 @@ cs_add_qtfree_library(cs_platform_release
         ReleaseManifest.cpp
         ReleaseManifestStore.h
         ReleaseManifestStore.cpp
+        UpdateManifest.h
+        UpdateManifest.cpp
+        UpdateManifestStore.h
+        UpdateManifestStore.cpp
     DEPENDS
         cs_core
         nlohmann_json::nlohmann_json

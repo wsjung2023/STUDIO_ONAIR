@@ -24,6 +24,7 @@ add_executable(cs_platform_release_tests
     platform_release/MobilePerformancePolicyTest.cpp
     platform_release/ModelStoragePolicyTest.cpp
     platform_release/ReleaseManifestTest.cpp
+    platform_release/UpdateManifestTest.cpp
 )
 target_link_libraries(cs_platform_release_tests
     PRIVATE

@@ -28,9 +28,9 @@
 **Interfaces:**
 - Produces: `IUpdateSignatureVerifier::verify(payload, signature)` and `UpdateManifestStore::loadVerified(path, verifier)`.
 
-- [ ] Write tests for canonical valid metadata, unknown fields, path traversal, non-HTTPS URLs, duplicate targets, wrong SHA-256, invalid signature, and atomic replacement.
-- [ ] Run the target and verify RED on missing `UpdateManifest.h`.
-- [ ] Implement a strict parser and canonical signing payload:
+- [x] Write tests for canonical valid metadata, unknown fields, path traversal, non-HTTPS URLs, duplicate targets, wrong SHA-256, invalid signature, and atomic replacement.
+- [x] Run the target and verify RED on missing `UpdateManifest.h`.
+- [x] Implement a strict parser and canonical signing payload:
 
 ```cpp
 class IUpdateSignatureVerifier {
@@ -42,8 +42,8 @@ public:
 };
 ```
 
-- [ ] Run `ctest --test-dir build/windows-debug -R UpdateManifestTest --output-on-failure` and expect all tests to pass.
-- [ ] Commit with `git commit -m "feat(r4): verify signed update metadata"`.
+- [x] Run `ctest --test-dir build/windows-debug -R UpdateManifestTest --output-on-failure` and expect all tests to pass.
+- [x] Commit with `git commit -m "feat(r4): verify signed update metadata"`.
 
 ### Task 2: Consent-bound local diagnostic bundle
 
