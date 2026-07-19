@@ -116,6 +116,13 @@ if(APPLE)
 else()
     target_sources(cs_app PRIVATE VideoPreviewItem_stub.cpp)
 endif()
+
+if(ANDROID)
+    target_sources(cs_app PRIVATE
+        android/AndroidScreenCaptureBackend.h
+        android/AndroidScreenCaptureBackend.cpp
+    )
+endif()
 add_library(CreatorStudio::cs_app ALIAS cs_app)
 
 target_include_directories(cs_app PUBLIC ${PROJECT_SOURCE_DIR}/src)

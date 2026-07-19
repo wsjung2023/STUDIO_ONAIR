@@ -38,4 +38,19 @@ TEST(AndroidProjectionSessionTest, RevocationIsIdempotentForOneGeneration) {
     EXPECT_EQ(session.state(), ProjectionSessionState::Revoked);
 }
 
+TEST(AndroidProjectionSessionTest, ApprovalAndDenialResolveOnlyThePendingRequest) {
+    AndroidProjectionSession session;
+
+    const auto request = session.beginProjectionRequest();
+    EXPECT_EQ(session.state(), ProjectionSessionState::AwaitingApproval);
+    EXPECT_FALSE(session.approveProjection(request + 1));
+    EXPECT_TRUE(session.approveProjection(request));
+    EXPECT_EQ(session.state(), ProjectionSessionState::Starting);
+
+    const auto deniedRequest = session.beginProjectionRequest();
+    EXPECT_TRUE(session.denyProjection(deniedRequest));
+    EXPECT_EQ(session.state(), ProjectionSessionState::Stopped);
+    EXPECT_FALSE(session.approveProjection(request));
+}
+
 }  // namespace

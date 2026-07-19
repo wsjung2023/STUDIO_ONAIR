@@ -25,32 +25,38 @@
 - Create: `src/app/android/AndroidScreenCaptureBackend.h`
 - Create: `src/app/android/AndroidScreenCaptureBackend.cpp`
 - Create: `android/src/com/studioonair/creatorstudio/CreatorStudioActivity.java`
+- Create: `tests/scripts/AndroidProjectionBridgePolicyTest.ps1`
 - Modify: `android/AndroidManifest.xml`
 - Modify: `src/main.cpp`
 - Modify: `CMakeLists.txt`
-- Test: `tests/capture/AndroidProjectionSessionTest.cpp`
+- Modify: `tests/CMakeLists.txt`
 
 **Interfaces:**
 - Consumes: `capture::AndroidProjectionSession::beginApprovedProjection()`, `markStreaming(generation)`, `onProjectionRevoked(generation)`.
 - Produces: `creator::app::android::makeAndroidScreenCaptureBackend()` returning permission, discovery, and source-factory implementations for `ScreenCaptureController`.
 
-- [ ] **Step 1: Write the failing state test**
+- [ ] **Step 1: Write the failing bridge policy test**
 
-```cpp
-TEST(AndroidProjectionSessionTest, StoppingStartingProjectionRejectsLateApproval) {
-    AndroidProjectionSession session;
-    const auto first = session.beginApprovedProjection();
-    const auto second = session.beginApprovedProjection();
-    EXPECT_FALSE(session.markStreaming(first));
-    EXPECT_TRUE(session.markStreaming(second));
+```powershell
+$required = @(
+    'CreatorStudioActivity extends QtActivity',
+    'nativeProjectionResult',
+    'requestProjection',
+    'makeAndroidScreenCaptureBackend',
+    'defined\(ANDROID\)'
+)
+foreach ($text in $required) {
+    if (-not (Select-String -LiteralPath $sourcePaths -Pattern $text -Quiet)) {
+        throw "missing Android projection bridge boundary: $text"
+    }
 }
 ```
 
 - [ ] **Step 2: Run the test and verify RED**
 
-Run: `cmake --build --preset windows-debug --target cs_tests; build/windows-debug/tests/cs_tests --gtest_filter=AndroidProjectionSessionTest.StoppingStartingProjectionRejectsLateApproval`
+Run: `powershell -NoProfile -ExecutionPolicy Bypass -File tests/scripts/AndroidProjectionBridgePolicyTest.ps1 -RepositoryRoot .`
 
-Expected: the test is absent from the binary before it is added, then fails only if a stale generation is accepted.
+Expected: FAIL because the Java activity and Android C++ adapter do not yet exist.
 
 - [ ] **Step 3: Add the Java activity boundary**
 
@@ -98,6 +104,7 @@ Run:
 ```powershell
 cmake --build --preset windows-debug --target cs_tests
 build/windows-debug/tests/cs_tests --gtest_filter=AndroidProjectionSessionTest.*
+ctest --test-dir build/windows-debug -R AndroidProjectionBridgePolicy --output-on-failure
 cmake --build --preset android-x86_64-debug --target apk
 cmake --build --preset android-arm64-debug --target apk
 ```
@@ -107,7 +114,7 @@ Expected: every AndroidProjectionSession test passes and both APKs are generated
 - [ ] **Step 7: Commit**
 
 ```powershell
-git add src/app/android android/src android/AndroidManifest.xml src/main.cpp CMakeLists.txt tests/capture/AndroidProjectionSessionTest.cpp
+git add src/app/android android/src android/AndroidManifest.xml src/main.cpp CMakeLists.txt tests/CMakeLists.txt tests/scripts/AndroidProjectionBridgePolicyTest.ps1
 git commit -m "feat(android): request MediaProjection consent safely"
 ```
 

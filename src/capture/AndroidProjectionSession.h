@@ -9,6 +9,7 @@ namespace creator::capture {
 /// increasing generation so late Java callbacks cannot alter a newer capture.
 enum class ProjectionSessionState {
     Idle,
+    AwaitingApproval,
     Starting,
     Streaming,
     Revoked,
@@ -17,6 +18,16 @@ enum class ProjectionSessionState {
 
 class AndroidProjectionSession final {
 public:
+    /// Begins one user-visible Android consent request. The returned generation
+    /// is supplied to Java so a late activity result cannot approve a newer
+    /// request.
+    [[nodiscard]] std::uint64_t beginProjectionRequest() noexcept;
+    /// Accepts a matching user approval and allows native capture startup.
+    [[nodiscard]] bool approveProjection(std::uint64_t generation) noexcept;
+    /// Resolves a matching user denial without leaving a pending session.
+    [[nodiscard]] bool denyProjection(std::uint64_t generation) noexcept;
+    /// Compatibility helper for callers that already hold an approved Android
+    /// projection token and therefore do not need a separate consent phase.
     [[nodiscard]] std::uint64_t beginApprovedProjection() noexcept;
     [[nodiscard]] bool markStreaming(std::uint64_t generation) noexcept;
     /// Returns true exactly once when the current projection was revoked.

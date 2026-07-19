@@ -21,6 +21,8 @@
 #if defined(__APPLE__)
 #include "capture/macos/MacScreenCaptureBackend.h"
 #include "capture/macos/MacDeviceCaptureBackend.h"
+#elif defined(ANDROID)
+#include "app/android/AndroidScreenCaptureBackend.h"
 #endif
 #include "project_store/ProjectPackageStore.h"
 #include "project_store/SqliteStudioStore.h"
@@ -101,6 +103,14 @@ int main(int argc, char* argv[]) {
     creator::app::ScreenCaptureController screenCaptureController{
         std::move(screenCaptureBackend.permission), std::move(screenCaptureBackend.discovery),
         std::move(screenCaptureBackend.sourceFactory), &app};
+#elif defined(ANDROID)
+    creator::app::DeviceCaptureController deviceCaptureController{
+        std::make_unique<creator::capture::UnsupportedDeviceCaptureBackend>(), &app};
+    auto androidScreenCaptureBackend = creator::app::android::makeAndroidScreenCaptureBackend();
+    creator::app::ScreenCaptureController screenCaptureController{
+        std::move(androidScreenCaptureBackend.permission),
+        std::move(androidScreenCaptureBackend.discovery),
+        std::move(androidScreenCaptureBackend.sourceFactory), &app};
 #elif defined(_WIN32) && defined(CS_APP_ENABLE_FFMPEG)
     auto windowsCaptureBackend =
         creator::ffmpeg_adapter::windows::makeWindowsCaptureBackend();

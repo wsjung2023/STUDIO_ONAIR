@@ -596,6 +596,12 @@ endif()
 
 if(WIN32)
     add_test(
+        NAME AndroidProjectionBridgePolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidProjectionBridgePolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
         NAME AndroidManifestPolicy
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidManifestPolicyTest.ps1"
