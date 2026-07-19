@@ -3,6 +3,11 @@ cs_add_qtfree_library(cs_avatar
         ExpressionParameters.h
         AvatarParameterMapper.h
         AvatarParameterMapper.cpp
+        AvatarRenderFrame.h
+        AvatarRenderFrame.cpp
+        IAvatarRenderer.h
+        AvatarRenderPipeline.h
+        AvatarRenderPipeline.cpp
         TrackingResult.h
         AvatarProviderId.h
         ITrackingProvider.h
@@ -29,8 +34,6 @@ cs_add_qtfree_library(cs_avatar
         openseeface/OpenSeeFaceParser.cpp
         openseeface/OpenSeeFaceUdpSource.h
         openseeface/OpenSeeFaceUdpSource.cpp
-        openseeface/OpenSeeFaceProcessSupervisor.h
-        openseeface/OpenSeeFaceProcessSupervisor.cpp
         openseeface/OpenSeeFaceProcessSupervisor.h
         openseeface/OpenSeeFaceProcessSupervisor.cpp
     DEPENDS

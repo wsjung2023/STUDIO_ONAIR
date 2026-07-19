@@ -43,3 +43,9 @@ mapper validates uniqueness and finite ranges, then emits deterministic,
 clamped values from the canonical nine tracking channels. This makes the
 Inochi2D adapter a replaceable consumer instead of leaking model-library types
 into `cs_avatar`.
+
+`AvatarRenderPipeline` completes the next handoff: it maps one timestamped
+motion sample and submits the values to `IAvatarRenderer`, which returns an
+immutable BGRA8 `AvatarRenderFrame`. The frame type has an explicit transparent
+constructor and validates stride/byte ownership, so an eventual Inochi2D
+adapter can be added without changing tracking or app capture contracts.
