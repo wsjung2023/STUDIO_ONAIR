@@ -18,6 +18,15 @@ function(cs_apply_warnings target)
         endif()
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+        # The workflow command layer intentionally uses C++20 designated
+        # initializers to select a request's payload while every omitted
+        # field keeps its explicit in-class default. Clang diagnoses that
+        # standards-defined pattern as a warning, whereas MSVC does not.
+        # Keep every other warning fatal; only this non-actionable diagnostic
+        # is disabled so Android builds have the same semantics as Windows.
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(${target} PRIVATE -Wno-missing-field-initializers)
+        endif()
         if(CS_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE -Werror)
         endif()

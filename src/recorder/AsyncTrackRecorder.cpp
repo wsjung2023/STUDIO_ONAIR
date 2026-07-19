@@ -244,7 +244,7 @@ core::Result<void> AsyncTrackRecorder::process(const media::VideoFrame& frame) {
     if (auto accepted = encoder_->accept(frame); !accepted.hasValue()) {
         return accepted.error();
     }
-    lastMediaEndTime_ = std::max(lastMediaEndTime_, frame.timestamp + core::Nanoseconds{1});
+    lastMediaEndTime_ = std::max(lastMediaEndTime_, frame.timestamp + core::DurationNs{1});
     {
         std::lock_guard lock{mutex_};
         ++summary_.videoFramesAccepted;

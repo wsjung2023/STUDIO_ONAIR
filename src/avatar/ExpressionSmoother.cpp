@@ -65,6 +65,8 @@ void ExpressionSmoother::OneEuroFilter::reset() {
     dxPrev_ = 0.0F;
 }
 
+ExpressionSmoother::ExpressionSmoother() : ExpressionSmoother(Constants{}) {}
+
 ExpressionSmoother::ExpressionSmoother(Constants constants) : constants_(constants) {}
 
 ExpressionParameters ExpressionSmoother::smooth(const ExpressionParameters& raw,

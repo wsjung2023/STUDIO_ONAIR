@@ -146,11 +146,13 @@ public:
     DirectoryWriteGuard(const DirectoryWriteGuard&) = delete;
     DirectoryWriteGuard& operator=(const DirectoryWriteGuard&) = delete;
 
+ #ifdef _WIN32
     DirectoryWriteGuard(DirectoryWriteGuard&& other) noexcept
-#ifdef _WIN32
         : handles_(std::move(other.handles_))
-#endif
     {}
+ #else
+    DirectoryWriteGuard(DirectoryWriteGuard&&) noexcept = default;
+ #endif
 
     ~DirectoryWriteGuard() {
 #ifdef _WIN32

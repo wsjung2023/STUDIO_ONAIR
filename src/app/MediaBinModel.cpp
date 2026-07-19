@@ -27,8 +27,10 @@ QVariant videoMetadata(const domain::MediaAsset& asset) {
     return QVariantMap{
         {QStringLiteral("width"), video.width},
         {QStringLiteral("height"), video.height},
-        {QStringLiteral("frameRateNumerator"), video.frameRate.numerator()},
-        {QStringLiteral("frameRateDenominator"), video.frameRate.denominator()},
+        {QStringLiteral("frameRateNumerator"),
+         static_cast<qlonglong>(video.frameRate.numerator())},
+        {QStringLiteral("frameRateDenominator"),
+         static_cast<qlonglong>(video.frameRate.denominator())},
     };
 }
 

@@ -49,7 +49,10 @@ core::Result<void> MultiTrackRecordingService::addTrack(
         return core::AppError{core::ErrorCode::AlreadyExists,
                               "A source already has a recording track"};
     }
-    entries_.push_back(Entry{.recorder = std::move(recorder)});
+    entries_.push_back(Entry{.recorder = std::move(recorder),
+                             .started = false,
+                             .completed = false,
+                             .summary = std::nullopt});
     return core::ok();
 }
 
@@ -190,6 +193,7 @@ void MultiTrackRecordingService::observeCompletion(StopCompletion observer) {
 MultiTrackRecordingSnapshot MultiTrackRecordingService::snapshot() const {
     std::lock_guard lock{mutex_};
     MultiTrackRecordingSnapshot result{.state = state_,
+                                       .tracks = {},
                                        .terminalError = terminalError_};
     result.tracks.reserve(entries_.size());
     for (const auto& entry : entries_) {

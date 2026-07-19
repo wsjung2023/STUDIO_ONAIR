@@ -237,6 +237,12 @@ qt_add_qml_module(creator_studio
         qml/TestPattern.qml
 )
 
+if(ANDROID)
+    set_property(TARGET creator_studio PROPERTY
+        QT_ANDROID_PACKAGE_SOURCE_DIR "${PROJECT_SOURCE_DIR}/android"
+    )
+endif()
+
 target_link_libraries(creator_studio
     PRIVATE
         cs_app
@@ -332,6 +338,7 @@ cs_apply_warnings(creator_studio)
 install(TARGETS creator_studio
     BUNDLE DESTINATION .
     RUNTIME DESTINATION bin
+    LIBRARY DESTINATION lib
 )
 
 if(CS_ENABLE_MLT)

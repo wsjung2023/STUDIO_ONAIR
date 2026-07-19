@@ -48,7 +48,8 @@ public:
         double dCutoffHz{1.0};
     };
 
-    explicit ExpressionSmoother(Constants constants = Constants{});
+    ExpressionSmoother();
+    explicit ExpressionSmoother(Constants constants);
 
     /// Advances all nine per-field filters by one frame and returns the
     /// smoothed parameters.

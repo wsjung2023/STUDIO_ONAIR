@@ -89,6 +89,25 @@
       }
     },
     {
+      "name": "android-arm64-debug",
+      "displayName": "Android arm64 Debug (Qt + NDK)",
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CS_BUILD_TESTS": "OFF",
+        "CMAKE_TOOLCHAIN_FILE": "$env{CS_QT_ANDROID_ROOT}/lib/cmake/Qt6/qt.toolchain.cmake",
+        "QT_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake",
+        "QT_HOST_PATH": "$env{CS_QT_HOST_ROOT}",
+        "QT_HOST_PATH_CMAKE_DIR": "$env{CS_QT_HOST_ROOT}/lib/cmake",
+        "QT_ADDITIONAL_PACKAGES_PREFIX_PATH": "$env{CS_QT_ANDROID_ROOT}",
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-28",
+        "ANDROID_SDK_ROOT": "$env{ANDROID_SDK_ROOT}",
+        "ANDROID_NDK_ROOT": "$env{ANDROID_NDK_ROOT}"
+      }
+    },
+    {
       "name": "macos-debug",
       "displayName": "macOS Debug (AppleClang + Ninja)",
       "inherits": "base",
@@ -118,6 +137,7 @@
     { "name": "windows-rnnoise-release", "configurePreset": "windows-rnnoise-release" },
     { "name": "windows-whisper-debug", "configurePreset": "windows-whisper-debug" },
     { "name": "windows-whisper-release", "configurePreset": "windows-whisper-release" },
+    { "name": "android-arm64-debug", "configurePreset": "android-arm64-debug" },
     { "name": "macos-debug", "configurePreset": "macos-debug" },
     { "name": "macos-release", "configurePreset": "macos-release" }
   ],
