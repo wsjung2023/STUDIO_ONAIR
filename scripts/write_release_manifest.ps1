@@ -1,9 +1,10 @@
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Explicit')]
 param(
     [Parameter(Mandatory)] [string] $ArtifactRoot,
     [Parameter(Mandatory)] [string] $OutputPath,
     [Parameter(Mandatory)] [string] $ProductVersion,
-    [Parameter(Mandatory)] [string] $SourceRevision,
+    [Parameter(Mandatory, ParameterSetName = 'Explicit')] [string] $SourceRevision,
+    [Parameter(Mandatory, ParameterSetName = 'Git')] [string] $RepositoryRoot,
     [Parameter(Mandatory)] [string] $Target,
     [Parameter(Mandatory)] [string[]] $Artifact
 )
@@ -13,6 +14,22 @@ $ErrorActionPreference = 'Stop'
 function Require-Token([string] $Name, [string] $Value) {
     if ([string]::IsNullOrWhiteSpace($Value) -or $Value -match '[\s\p{Cc}]') {
         throw "$Name must be a non-empty token."
+    }
+}
+
+if ($PSCmdlet.ParameterSetName -eq 'Git') {
+    $repository = [IO.Path]::GetFullPath($RepositoryRoot)
+    $head = & git -C $repository rev-parse --verify HEAD 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($head)) {
+        throw 'RepositoryRoot must identify a Git worktree with a valid HEAD.'
+    }
+    $changes = @(& git -C $repository status --porcelain --untracked-files=no 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not inspect the Git worktree state.'
+    }
+    $SourceRevision = $head.Trim()
+    if ($changes.Count -gt 0) {
+        $SourceRevision += '-dirty'
     }
 }
 
@@ -48,13 +65,16 @@ $document = [ordered]@{
 $destination = [IO.Path]::GetFullPath($OutputPath)
 [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
 $temporary = Join-Path ([IO.Path]::GetDirectoryName($destination)) ('.' + [IO.Path]::GetFileName($destination) + '.part-' + [guid]::NewGuid().ToString('N'))
+$backup = Join-Path ([IO.Path]::GetDirectoryName($destination)) ('.' + [IO.Path]::GetFileName($destination) + '.backup-' + [guid]::NewGuid().ToString('N'))
 try {
     [IO.File]::WriteAllText($temporary, ($document | ConvertTo-Json -Depth 4) + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
     if (Test-Path -LiteralPath $destination) {
-        [IO.File]::Replace($temporary, $destination, $null)
+        [IO.File]::Replace($temporary, $destination, $backup)
+        Remove-Item -LiteralPath $backup -Force
     } else {
         [IO.File]::Move($temporary, $destination)
     }
 } finally {
     if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+    if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force }
 }

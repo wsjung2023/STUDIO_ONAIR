@@ -335,6 +335,24 @@ endif()
 
 cs_apply_warnings(creator_studio)
 
+if(WIN32 OR APPLE)
+    find_program(CS_POWERSHELL_EXECUTABLE NAMES pwsh powershell REQUIRED)
+    add_custom_target(release-metadata
+        COMMAND "${CS_POWERSHELL_EXECUTABLE}"
+            -NoProfile
+            -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/scripts/write_release_manifest.ps1"
+            -ArtifactRoot "$<TARGET_FILE_DIR:creator_studio>"
+            -OutputPath "${CMAKE_BINARY_DIR}/release-manifest.json"
+            -ProductVersion "${PROJECT_VERSION}"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+            -Target "${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}-${CMAKE_BUILD_TYPE}"
+            -Artifact "$<TARGET_FILE_NAME:creator_studio>"
+        DEPENDS creator_studio
+        VERBATIM
+    )
+endif()
+
 install(TARGETS creator_studio
     BUNDLE DESTINATION .
     RUNTIME DESTINATION bin
