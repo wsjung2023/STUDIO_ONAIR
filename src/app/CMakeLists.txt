@@ -78,6 +78,8 @@ add_library(cs_app STATIC
     EditorPreviewItem.cpp
     ExportWorker.h
     ExportWorker.cpp
+    IExportDestinationResolver.h
+    IExportDestinationResolver.cpp
     ExportController.h
     ExportController.cpp
     AvatarFrameTrackingCoordinator.h
@@ -123,6 +125,8 @@ if(ANDROID)
         android/AndroidDeviceCaptureBackend.cpp
         android/AndroidScreenCaptureBackend.h
         android/AndroidScreenCaptureBackend.cpp
+        android/AndroidExportDestinationResolver.h
+        android/AndroidExportDestinationResolver.cpp
     )
 endif()
 add_library(CreatorStudio::cs_app ALIAS cs_app)

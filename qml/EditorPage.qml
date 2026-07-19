@@ -5,6 +5,8 @@ import CreatorStudio.Native 1.0
 
 Item {
     id: root
+    readonly property bool compact: width < 700
+    property string compactSection: "preview"
 
     required property var controller
     readonly property real nanosecondsPerPixel: 10000000
@@ -369,13 +371,38 @@ Item {
             }
         }
 
+        TabBar {
+            objectName: "editorCompactTabs"
+            visible: root.compact
+            Layout.fillWidth: true
+            Layout.preferredHeight: visible ? implicitHeight : 0
+            TabButton {
+                text: qsTr("Media")
+                checked: root.compactSection === "media"
+                onClicked: root.compactSection = "media"
+            }
+            TabButton {
+                text: qsTr("Preview")
+                checked: root.compactSection === "preview"
+                onClicked: root.compactSection = "preview"
+            }
+            TabButton {
+                text: qsTr("Inspector")
+                checked: root.compactSection === "inspector"
+                onClicked: root.compactSection = "inspector"
+            }
+        }
+
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 1
 
             Pane {
-                Layout.preferredWidth: 280
+                objectName: "editorMediaPane"
+                visible: !root.compact || root.compactSection === "media"
+                Layout.preferredWidth: root.compact ? parent.width : 280
+                Layout.fillWidth: root.compact
                 Layout.fillHeight: true
 
                 ColumnLayout {
@@ -434,6 +461,8 @@ Item {
             }
 
             Rectangle {
+                objectName: "editorPreviewPane"
+                visible: !root.compact || root.compactSection === "preview"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 color: "#171a1f"
@@ -471,7 +500,10 @@ Item {
             }
 
             Pane {
-                Layout.preferredWidth: 340
+                objectName: "editorInspectorPane"
+                visible: !root.compact || root.compactSection === "inspector"
+                Layout.preferredWidth: root.compact ? parent.width : 340
+                Layout.fillWidth: root.compact
                 Layout.fillHeight: true
 
                 ScrollView {
@@ -998,7 +1030,7 @@ Item {
 
         Pane {
             Layout.fillWidth: true
-            Layout.preferredHeight: 270
+            Layout.preferredHeight: root.compact ? 180 : 270
             padding: 6
 
             Flickable {

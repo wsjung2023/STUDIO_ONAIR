@@ -1,6 +1,7 @@
 #pragma once
 
 #include "edit_engine/IEditEngine.h"
+#include "app/IExportDestinationResolver.h"
 
 #include <QObject>
 #include <QString>
@@ -27,6 +28,9 @@ class ExportController final : public QObject {
 public:
     explicit ExportController(std::unique_ptr<edit_engine::IEditEngine> engine,
                               QObject* parent = nullptr);
+    ExportController(std::unique_ptr<edit_engine::IEditEngine> engine,
+                     std::unique_ptr<IExportDestinationResolver> destinations,
+                     QObject* parent = nullptr);
     ~ExportController() override;
 
     void setRequest(edit_engine::RenderRequest request);
@@ -65,6 +69,8 @@ private:
     std::shared_ptr<std::atomic_bool> cancellationRequested_;
     QThread workerThread_;
     ExportWorker* worker_{};
+    std::unique_ptr<IExportDestinationResolver> destinations_;
+    ExportPublishAction publishAction_;
     std::optional<edit_engine::RenderRequest> request_;
     std::optional<Source> source_;
     bool busy_{};

@@ -621,6 +621,18 @@ if(WIN32)
             -RepositoryRoot "${PROJECT_SOURCE_DIR}"
     )
     add_test(
+        NAME AndroidScopedStoragePolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidScopedStoragePolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME MobileAdaptiveLayoutPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/MobileAdaptiveLayoutPolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
         NAME AndroidManifestPolicy
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidManifestPolicyTest.ps1"

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "edit_engine/IEditEngine.h"
+#include "app/IExportDestinationResolver.h"
 
 #include <QObject>
 
@@ -15,7 +16,8 @@ public:
     ExportWorker(std::unique_ptr<edit_engine::IEditEngine> engine,
                  std::shared_ptr<std::atomic_bool> cancellationRequested);
 
-    void start(edit_engine::RenderRequest request);
+    void start(edit_engine::RenderRequest request,
+               ExportPublishAction publish = {});
 
 signals:
     void progressChanged(int state, double fraction, qint64 renderedNs,

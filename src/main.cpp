@@ -23,6 +23,7 @@
 #include "capture/macos/MacDeviceCaptureBackend.h"
 #elif defined(ANDROID)
 #include "app/android/AndroidDeviceCaptureBackend.h"
+#include "app/android/AndroidExportDestinationResolver.h"
 #include "app/android/AndroidScreenCaptureBackend.h"
 #endif
 #include "project_store/ProjectPackageStore.h"
@@ -216,7 +217,14 @@ int main(int argc, char* argv[]) {
         std::make_unique<creator::edit_engine::UnavailableEditEngine>();
 #endif
     creator::app::EditorController editorController{std::move(editEngine), &app};
+#if defined(ANDROID)
+    creator::app::ExportController exportController{
+        std::move(exportEngine),
+        std::make_unique<creator::app::android::AndroidExportDestinationResolver>(),
+        &app};
+#else
     creator::app::ExportController exportController{std::move(exportEngine), &app};
+#endif
     creator::app::StudioRecordingBinding studioRecordingBinding{
         studioController, studioWorkflowController,
         [&projectController] { return projectController.projectUrl(); }, &app};

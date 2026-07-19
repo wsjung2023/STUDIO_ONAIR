@@ -1216,6 +1216,49 @@ TEST(QmlSmokeTest, EditorPageRendersTypedModelsAndPreviewState) {
     EXPECT_EQ(controller.lastSeekNs(), 1'500'000'000);
 }
 
+TEST(QmlSmokeTest, EditorPageExposesCompactTouchWorkspaceAtPhoneSize) {
+    QQmlEngine engine;
+    FakeEditorController controller;
+    QSignalSpy warningSpy{&engine, &QQmlEngine::warnings};
+    QQmlComponent component{
+        &engine,
+        QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/EditorPage.qml"))};
+    QVariantMap initialProperties{
+        {QStringLiteral("controller"),
+         QVariant::fromValue(static_cast<QObject*>(&controller))},
+        {QStringLiteral("width"), 360},
+        {QStringLiteral("height"), 640}};
+    std::unique_ptr<QObject> object{
+        component.createWithInitialProperties(initialProperties)};
+
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    auto* rootItem = qobject_cast<QQuickItem*>(object.get());
+    ASSERT_NE(rootItem, nullptr);
+    QQuickWindow window;
+    window.setGeometry(0, 0, 360, 640);
+    rootItem->setParentItem(window.contentItem());
+    window.show();
+    QCoreApplication::processEvents();
+
+    auto* tabs = object->findChild<QObject*>(QStringLiteral("editorCompactTabs"));
+    auto* preview = object->findChild<QObject*>(QStringLiteral("editorPreviewPane"));
+    auto* media = object->findChild<QObject*>(QStringLiteral("editorMediaPane"));
+    auto* inspector = object->findChild<QObject*>(QStringLiteral("editorInspectorPane"));
+    ASSERT_NE(tabs, nullptr);
+    ASSERT_NE(preview, nullptr);
+    ASSERT_NE(media, nullptr);
+    ASSERT_NE(inspector, nullptr);
+    EXPECT_TRUE(tabs->property("visible").toBool());
+    EXPECT_TRUE(preview->property("visible").toBool());
+    EXPECT_FALSE(media->property("visible").toBool());
+
+    rootItem->setProperty("compactSection", QStringLiteral("inspector"));
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(preview->property("visible").toBool());
+    EXPECT_TRUE(inspector->property("visible").toBool());
+    EXPECT_EQ(warningSpy.count(), 0);
+}
+
 TEST(QmlSmokeTest, EditorPageProvidesDurableEditControls) {
     QQmlEngine engine;
     FakeEditorController controller;
@@ -1701,10 +1744,11 @@ TEST(QmlSmokeTest, StudioShortcutsShareVisibleActionsAndStateGuards) {
 }
 
 TEST(QmlSmokeTest, StudioPageProvidesModelDrivenAccessibleWorkflowAtAllSizes) {
-    const std::array<std::tuple<int, int, qreal>, 3> fixtures{
+    const std::array<std::tuple<int, int, qreal>, 4> fixtures{
         std::tuple{1280, 720, 1.0}, std::tuple{1440, 900, 1.0},
         // A 1440x900 display at 200% exposes 720x450 device-independent pixels.
-        std::tuple{720, 450, 2.0}};
+        std::tuple{720, 450, 2.0},
+        std::tuple{360, 640, 3.0}};
     for (const auto& [width, height, scale] : fixtures) {
         QQmlEngine engine;
         FakeStudioController studioController;
@@ -1796,6 +1840,15 @@ TEST(QmlSmokeTest, StudioPageProvidesModelDrivenAccessibleWorkflowAtAllSizes) {
         }
         EXPECT_EQ(warningSpy.count(), 0) << warningText.toStdString();
 
+        if (width < 700) {
+            auto* tabs = object->findChild<QObject*>(
+                QStringLiteral("studioCompactTabs"));
+            ASSERT_NE(tabs, nullptr);
+            EXPECT_TRUE(tabs->property("visible").toBool());
+            rootItem->setProperty("compactSection", QStringLiteral("capture"));
+            QCoreApplication::processEvents();
+        }
+
         auto* leftScroll = qobject_cast<QQuickItem*>(object->findChild<QObject*>(
             QStringLiteral("studioLeftScroll")));
         ASSERT_NE(leftScroll, nullptr);
@@ -1828,6 +1881,10 @@ TEST(QmlSmokeTest, StudioPageProvidesModelDrivenAccessibleWorkflowAtAllSizes) {
         auto* cameraComposition = qobject_cast<QQuickItem*>(
             object->findChild<QObject*>(
                 QStringLiteral("studioCameraCompositionPreview")));
+        if (width < 700) {
+            rootItem->setProperty("compactSection", QStringLiteral("preview"));
+            QCoreApplication::processEvents();
+        }
         ASSERT_NE(cameraComposition, nullptr);
         auto* canvas = cameraComposition->parentItem();
         ASSERT_NE(canvas, nullptr);

@@ -5,6 +5,7 @@ import QtQuick.Layouts
 
 Pane {
     id: root
+    readonly property bool compact: width < 720
 
     FileDialog {
         id: newProjectDialog
@@ -23,38 +24,47 @@ Pane {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 48
+        anchors.margins: root.compact ? 16 : 48
         spacing: 20
 
         Label {
             text: qsTr("Create, record, and safely recover your project")
-            font.pixelSize: 30
+            font.pixelSize: root.compact ? 24 : 30
             font.bold: true
             Layout.alignment: Qt.AlignHCenter
         }
 
-        RowLayout {
-            Layout.alignment: Qt.AlignHCenter
-            spacing: 12
+        GridLayout {
+            Layout.fillWidth: root.compact
+            Layout.alignment: root.compact ? Qt.AlignVCenter : Qt.AlignHCenter
+            columns: root.compact ? 1 : 4
+            rowSpacing: 12
+            columnSpacing: 12
 
             TextField {
                 id: projectName
                 placeholderText: qsTr("Project name")
                 text: qsTr("Untitled Project")
                 enabled: !projectController.busy
-                Layout.preferredWidth: 320
+                Layout.preferredWidth: root.compact ? -1 : 320
+                Layout.fillWidth: root.compact
+                Layout.minimumHeight: 44
             }
 
             Button {
                 text: qsTr("Create Project")
                 enabled: !projectController.busy && projectName.text.trim().length > 0
                 onClicked: newProjectDialog.open()
+                Layout.fillWidth: root.compact
+                Layout.minimumHeight: 44
             }
 
             Button {
                 text: qsTr("Open Project")
                 enabled: !projectController.busy
                 onClicked: openProjectDialog.open()
+                Layout.fillWidth: root.compact
+                Layout.minimumHeight: 44
             }
 
             BusyIndicator {

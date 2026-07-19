@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
@@ -30,6 +31,9 @@ import android.view.Surface;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Arrays;
 
 import org.qtproject.qt.android.bindings.QtActivity;
@@ -100,6 +104,38 @@ public class CreatorStudioActivity extends QtActivity {
         int sampleCount, int sampleRate, int channels, long timestampNs);
     public static native void nativeSystemAudioFailed(long generation);
     public static native void nativeSystemAudioStopped(long generation);
+
+    /** Copies a completed private-cache render into a user-selected SAF URI. */
+    public static String publishExport(String stagedPath, String destinationUri,
+                                       boolean replaceExisting) {
+        final CreatorStudioActivity activity = activeActivity;
+        if (activity == null) return "Android activity is unavailable";
+        final Uri uri;
+        try {
+            uri = Uri.parse(destinationUri);
+        } catch (RuntimeException error) {
+            return "Android export destination is invalid";
+        }
+        if (!"content".equals(uri.getScheme())) {
+            return "Android export destination is not a content URI";
+        }
+        final String mode = replaceExisting ? "wt" : "w";
+        try (InputStream input = new FileInputStream(stagedPath);
+             OutputStream output = activity.getContentResolver().openOutputStream(uri, mode)) {
+            if (output == null) return "Android could not open the export destination";
+            final byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = input.read(buffer)) >= 0) {
+                if (read > 0) output.write(buffer, 0, read);
+            }
+            output.flush();
+            return "";
+        } catch (Exception error) {
+            final String message = error.getMessage();
+            return message == null || message.isEmpty()
+                ? "Android scoped-storage export failed" : message;
+        }
+    }
 
     public static int mediaPermissionStatus(int kind) {
         final CreatorStudioActivity activity = activeActivity;

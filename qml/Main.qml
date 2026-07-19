@@ -11,6 +11,7 @@ ApplicationWindow {
     title: projectController.hasOpenProject
            ? qsTr("Creator Studio — %1").arg(projectController.projectName)
            : qsTr("Creator Studio")
+    readonly property bool compact: width < 720
 
     readonly property var navigationPages: ["Home", "Studio", "Editor", "Export"]
     readonly property var stackPages: ["Home", "Studio", "Editor", "Export", "Recovery"]
@@ -54,9 +55,10 @@ ApplicationWindow {
     header: ToolBar {
         RowLayout {
             anchors.fill: parent
-            spacing: 12
+            spacing: window.compact ? 2 : 12
 
             Label {
+                visible: !window.compact
                 text: qsTr("Creator Studio")
                 font.pixelSize: 20
                 font.bold: true
@@ -68,6 +70,8 @@ ApplicationWindow {
                 ToolButton {
                     required property string modelData
                     text: modelData
+                    Layout.minimumWidth: window.compact ? 56 : implicitWidth
+                    Layout.minimumHeight: 44
                     checked: window.currentPage === modelData
                     enabled: !studioController.recording
                              && !studioController.busy
@@ -81,14 +85,14 @@ ApplicationWindow {
             Item { Layout.fillWidth: true }
 
             Label {
-                visible: projectController.hasOpenProject
+                visible: projectController.hasOpenProject && !window.compact
                 text: projectController.projectName
                 elide: Text.ElideMiddle
                 Layout.maximumWidth: 280
             }
 
             Label {
-                visible: window.currentPage === "Studio"
+                visible: window.currentPage === "Studio" && !window.compact
                 text: studioController.takeDuration
                 font.family: "monospace"
                 font.pixelSize: 16
@@ -98,6 +102,7 @@ ApplicationWindow {
                 objectName: "studioRecordButton"
                 action: studioRecordAction
                 visible: window.currentPage === "Studio"
+                Layout.minimumHeight: 44
                 highlighted: studioController.recording
             }
         }
