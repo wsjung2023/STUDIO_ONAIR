@@ -46,6 +46,7 @@ std::mutex callbackMutex;
 AndroidDeviceBackend* callbackBackend{};
 AndroidCameraSource* callbackCamera{};
 AndroidMicrophoneSource* callbackMicrophone{};
+AndroidMicrophoneSource* callbackSystemAudio{};
 
 class AndroidCameraSource final : public capture::IDeviceCaptureSource {
 public:
@@ -134,33 +135,41 @@ private:
 
 class AndroidMicrophoneSource final : public capture::IDeviceCaptureSource {
 public:
-    explicit AndroidMicrophoneSource(std::shared_ptr<capture::IAudioBlockSink> sink)
-        : sink_(std::move(sink)), id_(domain::SourceId::create("android-microphone").value()) {}
+    AndroidMicrophoneSource(std::shared_ptr<capture::IAudioBlockSink> sink, bool systemAudio)
+        : sink_(std::move(sink)), systemAudio_(systemAudio),
+          id_(domain::SourceId::create(systemAudio ? "android-system-audio" : "android-microphone").value()) {}
     ~AndroidMicrophoneSource() override { static_cast<void>(stop()); }
     [[nodiscard]] domain::SourceId id() const override { return id_; }
-    [[nodiscard]] std::string displayName() const override { return "Android microphone"; }
+    [[nodiscard]] std::string displayName() const override {
+        return systemAudio_ ? "Android playback audio" : "Android microphone";
+    }
     [[nodiscard]] core::Result<void> start(const capture::CaptureConfig&) override {
         if (!sink_) return core::AppError{core::ErrorCode::InvalidArgument, "microphone sink is required"};
         if (started_.exchange(true)) return core::AppError{core::ErrorCode::InvalidState, "microphone is already started"};
         generation_ = nextGeneration_.fetch_add(1);
-        { std::lock_guard lock(callbackMutex); callbackMicrophone = this; }
-        QJniObject::callStaticMethod<void>(kActivityClass, "startMicrophone", "(J)V",
+        { std::lock_guard lock(callbackMutex);
+          if (systemAudio_) callbackSystemAudio = this; else callbackMicrophone = this; }
+        QJniObject::callStaticMethod<void>(kActivityClass,
+                                            systemAudio_ ? "startPlaybackAudio" : "startMicrophone", "(J)V",
                                             static_cast<jlong>(generation_));
         QJniEnvironment environment;
         if (environment.checkAndClearExceptions()) {
             clearCallback(); started_ = false;
-            return core::AppError{core::ErrorCode::IoFailure, "Android could not start AudioRecord"};
+            return core::AppError{core::ErrorCode::IoFailure,
+                                  systemAudio_ ? "Android could not start playback capture" : "Android could not start AudioRecord"};
         }
         return core::ok();
     }
     [[nodiscard]] core::Result<void> stop() override {
         if (!started_.exchange(false)) return core::ok();
         clearCallback();
-        QJniObject::callStaticMethod<void>(kActivityClass, "stopMicrophone", "(J)V",
+        QJniObject::callStaticMethod<void>(kActivityClass,
+                                            systemAudio_ ? "stopPlaybackAudio" : "stopMicrophone", "(J)V",
                                             static_cast<jlong>(generation_));
         QJniEnvironment environment;
         if (environment.checkAndClearExceptions()) {
-            return core::AppError{core::ErrorCode::IoFailure, "Android could not stop AudioRecord"};
+            return core::AppError{core::ErrorCode::IoFailure,
+                                  systemAudio_ ? "Android could not stop playback capture" : "Android could not stop AudioRecord"};
         }
         return core::ok();
     }
@@ -186,8 +195,13 @@ public:
         if (started_.exchange(false) && sink_) sink_->onCaptureError({core::ErrorCode::IoFailure, message});
     }
 private:
-    void clearCallback() noexcept { std::lock_guard lock(callbackMutex); if (callbackMicrophone == this) callbackMicrophone = nullptr; }
+    void clearCallback() noexcept {
+        std::lock_guard lock(callbackMutex);
+        auto& callback = systemAudio_ ? callbackSystemAudio : callbackMicrophone;
+        if (callback == this) callback = nullptr;
+    }
     std::shared_ptr<capture::IAudioBlockSink> sink_;
+    bool systemAudio_{};
     domain::SourceId id_;
     capture::AudioCaptureBlockAssembler assembler_;
     std::atomic_bool started_{};
@@ -230,12 +244,12 @@ public:
     [[nodiscard]] core::Result<std::unique_ptr<capture::IDeviceCaptureSource>> createMicrophone(
         const domain::CaptureDeviceId&, std::shared_ptr<capture::IAudioBlockSink> sink) override {
         if (!sink) return core::AppError{core::ErrorCode::InvalidArgument, "microphone sink is required"};
-        return std::unique_ptr<capture::IDeviceCaptureSource>{std::make_unique<AndroidMicrophoneSource>(std::move(sink))};
+        return std::unique_ptr<capture::IDeviceCaptureSource>{std::make_unique<AndroidMicrophoneSource>(std::move(sink), false)};
     }
     [[nodiscard]] core::Result<std::unique_ptr<capture::IDeviceCaptureSource>> createSystemAudio(
-        std::shared_ptr<capture::IAudioBlockSink>) override {
-        return core::AppError{core::ErrorCode::UnsupportedVersion,
-                              "Android playback capture requires a separate MediaProjection audio session"};
+        std::shared_ptr<capture::IAudioBlockSink> sink) override {
+        if (!sink) return core::AppError{core::ErrorCode::InvalidArgument, "system-audio sink is required"};
+        return std::unique_ptr<capture::IDeviceCaptureSource>{std::make_unique<AndroidMicrophoneSource>(std::move(sink), true)};
     }
     void resolvePermission(int kind, std::uint64_t generation, bool granted) {
         PermissionCompletion completion;
@@ -298,6 +312,25 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_studioonair_creatorstudio_CreatorStudioActivity_nativeMicrophoneFailed(JNIEnv*, jclass, jlong) {
     std::lock_guard lock(creator::app::android::callbackMutex);
     if (creator::app::android::callbackMicrophone) creator::app::android::callbackMicrophone->failed("Android AudioRecord failed");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_studioonair_creatorstudio_CreatorStudioActivity_nativeSystemAudioPcm16(
+    JNIEnv* environment, jclass, jlong generation, jobject buffer, jint sampleCount,
+    jint sampleRate, jint channels, jlong timestampNs) {
+    std::lock_guard lock(creator::app::android::callbackMutex);
+    if (!creator::app::android::callbackSystemAudio || sampleCount <= 0) return;
+    auto* pcm = static_cast<std::int16_t*>(environment->GetDirectBufferAddress(buffer));
+    creator::app::android::callbackSystemAudio->pcm16(static_cast<std::uint64_t>(generation), pcm,
+        static_cast<std::size_t>(sampleCount), sampleRate, channels, timestampNs);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_studioonair_creatorstudio_CreatorStudioActivity_nativeSystemAudioFailed(JNIEnv*, jclass, jlong) {
+    std::lock_guard lock(creator::app::android::callbackMutex);
+    if (creator::app::android::callbackSystemAudio) {
+        creator::app::android::callbackSystemAudio->failed("Android playback audio capture failed");
+    }
 }
 
 }  // namespace creator::app::android

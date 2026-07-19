@@ -14,6 +14,7 @@ $checks = @(
     @{ Path = $backend; Pattern = 'createSystemAudio'; Name = 'explicit system-audio capability boundary' },
     @{ Path = $activity; Pattern = 'CameraManager'; Name = 'Camera2 capture boundary' },
     @{ Path = $activity; Pattern = 'AudioRecord'; Name = 'AudioRecord capture boundary' },
+    @{ Path = $activity; Pattern = 'AudioPlaybackCaptureConfiguration'; Name = 'MediaProjection playback-audio boundary' },
     @{ Path = $activity; Pattern = 'requestMediaPermission'; Name = 'runtime permission boundary' },
     @{ Path = $main; Pattern = 'makeAndroidDeviceCaptureBackend'; Name = 'Android application wiring' }
 )

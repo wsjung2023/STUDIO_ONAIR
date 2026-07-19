@@ -12,6 +12,7 @@ import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
+import android.media.AudioPlaybackCaptureConfiguration;
 import android.media.MediaRecorder;
 import android.media.projection.MediaProjectionManager;
 import android.media.projection.MediaProjection;
@@ -21,6 +22,7 @@ import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.graphics.PixelFormat;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Size;
@@ -62,6 +64,10 @@ public class CreatorStudioActivity extends QtActivity {
     private Thread microphoneThread;
     private volatile boolean microphoneRunning;
     private long microphoneGeneration;
+    private AudioRecord playbackRecord;
+    private Thread playbackThread;
+    private volatile boolean playbackRunning;
+    private long playbackGeneration;
 
     public static native void nativeProjectionResult(long generation, boolean granted);
     public static native boolean nativeProjectionFrame(long generation, java.nio.ByteBuffer bytes,
@@ -74,6 +80,9 @@ public class CreatorStudioActivity extends QtActivity {
         int sampleCount, int sampleRate, int channels, long timestampNs);
     public static native void nativeCameraFailed(long generation);
     public static native void nativeMicrophoneFailed(long generation);
+    public static native void nativeSystemAudioPcm16(long generation, ByteBuffer bytes,
+        int sampleCount, int sampleRate, int channels, long timestampNs);
+    public static native void nativeSystemAudioFailed(long generation);
 
     public static int mediaPermissionStatus(int kind) {
         final CreatorStudioActivity activity = activeActivity;
@@ -108,6 +117,7 @@ public class CreatorStudioActivity extends QtActivity {
     protected void onDestroy() {
         stopCameraOnUiThread(cameraGeneration);
         stopMicrophoneOnUiThread(microphoneGeneration);
+        stopPlaybackAudioOnUiThread(playbackGeneration);
         if (activeActivity == this) {
             activeActivity = null;
         }
@@ -240,6 +250,7 @@ public class CreatorStudioActivity extends QtActivity {
         if (projectionDisplay != null) { projectionDisplay.release(); projectionDisplay = null; }
         if (projectionReader != null) { projectionReader.close(); projectionReader = null; }
         final MediaProjection projectionToStop = projection;
+        stopPlaybackAudioOnUiThread(playbackGeneration);
         projection = null;
         approvedGeneration = 0;
         projectionResultCode = 0;
@@ -431,5 +442,69 @@ public class CreatorStudioActivity extends QtActivity {
             microphoneRecord.release(); microphoneRecord = null;
         }
         microphoneThread = null;
+    }
+
+    public static void startPlaybackAudio(long generation) {
+        final CreatorStudioActivity activity = activeActivity;
+        if (activity == null) { nativeSystemAudioFailed(generation); return; }
+        activity.runOnUiThread(() -> activity.startPlaybackAudioOnUiThread(generation));
+    }
+
+    public static void stopPlaybackAudio(long generation) {
+        final CreatorStudioActivity activity = activeActivity;
+        if (activity != null) activity.runOnUiThread(() -> activity.stopPlaybackAudioOnUiThread(generation));
+    }
+
+    private void startPlaybackAudioOnUiThread(long generation) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || playbackRunning || projection == null) {
+            nativeSystemAudioFailed(generation); return;
+        }
+        final int sampleRate = 48000;
+        final int channelMask = AudioFormat.CHANNEL_IN_STEREO;
+        final int minimum = AudioRecord.getMinBufferSize(sampleRate, channelMask,
+            AudioFormat.ENCODING_PCM_16BIT);
+        if (minimum <= 0) { nativeSystemAudioFailed(generation); return; }
+        try {
+            final AudioPlaybackCaptureConfiguration config =
+                new AudioPlaybackCaptureConfiguration.Builder(projection)
+                    .addMatchingUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .addMatchingUsage(android.media.AudioAttributes.USAGE_GAME)
+                    .build();
+            playbackRecord = new AudioRecord.Builder()
+                .setAudioFormat(new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sampleRate).setChannelMask(channelMask).build())
+                .setBufferSizeInBytes(Math.max(minimum, 7680))
+                .setAudioPlaybackCaptureConfig(config)
+                .build();
+            if (playbackRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+                playbackRecord.release(); playbackRecord = null; nativeSystemAudioFailed(generation); return;
+            }
+            playbackGeneration = generation;
+            playbackRunning = true;
+            playbackRecord.startRecording();
+            final AudioRecord recorder = playbackRecord;
+            playbackThread = new Thread(() -> {
+                final ByteBuffer pcm = ByteBuffer.allocateDirect(1920 * 4).order(ByteOrder.nativeOrder());
+                while (playbackRunning && playbackGeneration == generation) {
+                    pcm.clear();
+                    final int read = recorder.read(pcm, 1920 * 4, AudioRecord.READ_BLOCKING);
+                    if (read <= 0) { if (playbackRunning) nativeSystemAudioFailed(generation); break; }
+                    pcm.rewind();
+                    nativeSystemAudioPcm16(generation, pcm, read / 2, sampleRate, 2, System.nanoTime());
+                }
+            }, "CreatorStudioPlaybackAudio");
+            playbackThread.start();
+        } catch (IllegalStateException | SecurityException error) { nativeSystemAudioFailed(generation); }
+    }
+
+    private void stopPlaybackAudioOnUiThread(long generation) {
+        if (generation != 0 && generation != playbackGeneration) return;
+        playbackRunning = false;
+        playbackGeneration = 0;
+        if (playbackRecord != null) {
+            try { playbackRecord.stop(); } catch (IllegalStateException ignored) { }
+            playbackRecord.release(); playbackRecord = null;
+        }
+        playbackThread = null;
     }
 }
