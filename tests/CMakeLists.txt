@@ -167,6 +167,12 @@ add_executable(cs_cursor_tests
     cursor/CursorNdjsonSinkTest.cpp
 )
 
+if(WIN32)
+    target_sources(cs_cursor_tests PRIVATE
+        cursor/WindowsRawInputCursorSourceTest.cpp
+    )
+endif()
+
 target_link_libraries(cs_cursor_tests
     PRIVATE
         cs_core

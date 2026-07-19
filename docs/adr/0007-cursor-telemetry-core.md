@@ -1,8 +1,8 @@
 # ADR-0007: Cursor Telemetry Core (R2-01)
 
 ## Status
-Accepted (gate-free core; OS capture hook, durable recorder/migration, and editor
-features deferred)
+Accepted (gate-free core plus Windows Raw Input source; durable recorder/
+migration and editor features remain deferred)
 
 ## Context
 R2-01 ("커서 좌표·클릭 이벤트 소스 분리 기록") records the cursor as a

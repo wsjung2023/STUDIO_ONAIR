@@ -49,13 +49,10 @@ using RawCursorSample = std::variant<RawCursorMoveSample, RawCursorClickSample>;
 /// reports failure out-of-band on its own lifecycle port (mirroring
 /// ICaptureSource), never by throwing across this interface (CLAUDE.md §4).
 ///
-/// DEFERRED (do NOT build in R2-01 core): the REAL OS cursor hook. On Windows
-/// that is the application-owned Raw Input adapter (RIDEV_INPUTSINK +
-/// GetPhysicalCursorPos, per the design doc); on macOS an explicit
-/// "unavailable" adapter until Input Monitoring is designed and physically
-/// tested. Those are platform capture, like the real camera/mic backends, and
-/// slot in behind this port later. The only implementation shipped now is the
-/// deterministic FakeCursorSource used by tests.
+/// Platform adapters stay behind this port. The Windows implementation uses an
+/// application-owned Raw Input message window (RIDEV_INPUTSINK) and physical
+/// cursor coordinates; deterministic fakes remain available for tests and
+/// platforms without an approved global-input implementation.
 class ICursorSource {
 public:
     virtual ~ICursorSource() = default;
