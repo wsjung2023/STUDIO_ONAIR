@@ -113,3 +113,9 @@ advances physics, invokes `in_puppet_draw`, validates the default 2D vertex and
 renderer-neutral batches. Unsupported SDK symbols, layouts, malformed commands,
 or texture failures remain explicit errors; the core build still has no SDK
 link-time dependency.
+
+`Inochi2dAvatarRenderer` is the final SDK adapter: it applies mapped
+parameters, derives a monotonic frame delta, obtains the draw-list snapshot,
+and composites it into `AvatarRenderFrame`. Its `open()` factory keeps runtime
+loading explicit, while a missing runtime remains an actionable error instead
+of silently substituting a placeholder avatar.

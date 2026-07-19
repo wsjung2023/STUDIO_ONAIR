@@ -48,6 +48,8 @@ cs_add_qtfree_library(cs_avatar
         openseeface/OpenSeeFaceProcessSupervisor.cpp
         inochi2d/Inochi2dModelRuntime.h
         inochi2d/Inochi2dModelRuntime.cpp
+        inochi2d/Inochi2dAvatarRenderer.h
+        inochi2d/Inochi2dAvatarRenderer.cpp
     DEPENDS
         cs_core
         cs_media
