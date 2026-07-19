@@ -12,6 +12,7 @@ enum class ProjectionSessionState {
     AwaitingApproval,
     Starting,
     Streaming,
+    Stopping,
     Revoked,
     Stopped,
 };
@@ -30,6 +31,9 @@ public:
     /// projection token and therefore do not need a separate consent phase.
     [[nodiscard]] std::uint64_t beginApprovedProjection() noexcept;
     [[nodiscard]] bool markStreaming(std::uint64_t generation) noexcept;
+    /// Bars new frames immediately while Java releases MediaProjection.
+    /// Returns true only for the first matching stop request.
+    [[nodiscard]] bool requestStop(std::uint64_t generation) noexcept;
     /// Returns true exactly once when the current projection was revoked.
     /// Callers use that transition to stop recorder tracks durably.
     [[nodiscard]] bool onProjectionRevoked(std::uint64_t generation) noexcept;

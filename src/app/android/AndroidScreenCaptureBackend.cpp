@@ -6,8 +6,10 @@
 #include "domain/Identifiers.h"
 
 #include <QGuiApplication>
+#include <QCoreApplication>
 #include <QJniEnvironment>
 #include <QJniObject>
+#include <QMetaObject>
 #include <QScreen>
 
 #include <cstdint>
@@ -15,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -70,6 +73,37 @@ public:
         if (completion) completion(status);
     }
 
+    [[nodiscard]] bool acceptFrame(std::uint64_t generation) {
+        std::lock_guard lock(mutex_);
+        if (generation != session_.generation()) return false;
+        if (session_.state() == capture::ProjectionSessionState::Starting) {
+            return session_.markStreaming(generation);
+        }
+        return session_.state() == capture::ProjectionSessionState::Streaming;
+    }
+
+    [[nodiscard]] bool requestStop(std::uint64_t generation) {
+        std::lock_guard lock(mutex_);
+        return session_.requestStop(generation);
+    }
+
+    [[nodiscard]] bool revoke(std::uint64_t generation) {
+        std::lock_guard lock(mutex_);
+        return session_.onProjectionRevoked(generation);
+    }
+
+    [[nodiscard]] bool finishStop(std::uint64_t generation) {
+        std::lock_guard lock(mutex_);
+        return session_.markStopped(generation);
+    }
+
+    [[nodiscard]] std::optional<capture::ProjectionSessionState> state(
+        std::uint64_t generation) const {
+        std::lock_guard lock(mutex_);
+        if (generation != session_.generation()) return std::nullopt;
+        return session_.state();
+    }
+
 private:
     mutable std::mutex mutex_;
     capture::AndroidProjectionSession session_;
@@ -78,8 +112,8 @@ private:
 
 std::mutex callbackMutex;
 std::weak_ptr<ProjectionConsentState> callbackState;
-class AndroidScreenCaptureSource;
-AndroidScreenCaptureSource* callbackSource{};
+class ProjectionSourceState;
+std::shared_ptr<ProjectionSourceState> callbackSourceState;
 
 class AndroidScreenPermission final : public capture::IScreenCapturePermission {
 public:
@@ -138,55 +172,99 @@ public:
     }
 };
 
-class AndroidScreenCaptureSource final : public capture::IScreenCaptureSource {
+class ProjectionSourceState final {
 public:
-    AndroidScreenCaptureSource(std::shared_ptr<ProjectionConsentState> state,
-                               std::shared_ptr<capture::IVideoFrameSink> sink)
-        : state_(std::move(state)), sink_(std::move(sink)),
-          id_(domain::SourceId::create("android-screen").value()) {}
-    ~AndroidScreenCaptureSource() override { static_cast<void>(stop()); }
-    [[nodiscard]] domain::SourceId id() const override { return id_; }
-    [[nodiscard]] std::string displayName() const override { return "Android display"; }
-    [[nodiscard]] core::Result<void> start(const capture::CaptureConfig& config) override {
-        const auto generation = state_->approvedGeneration();
-        if (!generation) return core::AppError{core::ErrorCode::InvalidState,
-                                                "Android screen recording permission is not active"};
-        generation_ = *generation;
+    ProjectionSourceState(std::shared_ptr<ProjectionConsentState> consent,
+                          std::shared_ptr<capture::IVideoFrameSink> sink)
+        : consent_(std::move(consent)), sink_(std::move(sink)) {}
+
+    void begin(std::uint64_t generation) {
+        std::lock_guard lock(mutex_);
+        generation_ = generation;
+        acceptingFrames_ = true;
+        released_ = false;
+        releaseRequested_ = false;
+        captureStarted_ = false;
+        terminalError_.reset();
+        stopCompletions_.clear();
+    }
+
+    [[nodiscard]] std::uint64_t generation() const noexcept {
+        std::lock_guard lock(mutex_);
+        return generation_;
+    }
+
+    [[nodiscard]] bool requestStop(capture::IScreenCaptureSource::StopCompletion completion) {
+        capture::IScreenCaptureSource::StopCompletion immediate;
+        bool requestJavaRelease = false;
         {
-            std::lock_guard lock(callbackMutex);
-            callbackSource = this;
+            std::lock_guard lock(mutex_);
+            acceptingFrames_ = false;
+            if (released_ || generation_ == 0) {
+                immediate = std::move(completion);
+            } else {
+                if (completion) stopCompletions_.push_back(std::move(completion));
+                if (!releaseRequested_) {
+                    const auto current = consent_->state(generation_);
+                    if (current == capture::ProjectionSessionState::Starting ||
+                        current == capture::ProjectionSessionState::Streaming) {
+                        releaseRequested_ = consent_->requestStop(generation_);
+                        requestJavaRelease = releaseRequested_;
+                    } else if (current == capture::ProjectionSessionState::Stopping ||
+                               current == capture::ProjectionSessionState::Revoked) {
+                        releaseRequested_ = true;
+                    } else {
+                        released_ = true;
+                        immediate = takeLastCompletion();
+                    }
+                }
+            }
         }
-        QJniObject::callStaticMethod<void>(kActivityClass, "startProjection", "(JII)V",
-                                            static_cast<jlong>(generation_),
-                                            static_cast<jint>(config.targetWidth),
-                                            static_cast<jint>(config.targetHeight));
-        QJniEnvironment environment;
-        if (environment.checkAndClearExceptions()) return core::AppError{
-            core::ErrorCode::IoFailure, "Android could not start MediaProjection"};
-        return core::ok();
+        if (immediate) immediate(core::ok());
+        return requestJavaRelease;
     }
-    [[nodiscard]] core::Result<void> stop() override {
-        QJniObject::callStaticMethod<void>(kActivityClass, "stopProjection", "(J)V",
-                                            static_cast<jlong>(generation_));
-        QJniEnvironment environment;
-        if (environment.checkAndClearExceptions()) return core::AppError{
-            core::ErrorCode::IoFailure, "Android could not stop MediaProjection"};
-        std::lock_guard lock(callbackMutex);
-        if (callbackSource == this) callbackSource = nullptr;
-        return core::ok();
+
+    void failStop(core::AppError error) {
+        std::vector<capture::IScreenCaptureSource::StopCompletion> completions;
+        {
+            std::lock_guard lock(mutex_);
+            acceptingFrames_ = false;
+            released_ = true;
+            static_cast<void>(consent_->finishStop(generation_));
+            completions = std::move(stopCompletions_);
+        }
+        for (auto& completion : completions) {
+            if (completion) completion(error);
+        }
     }
-    void stopAsync(StopCompletion completion) override {
-        const auto result = stop();
-        if (completion) completion(result);
+
+    void abortStart() {
+        std::lock_guard lock(mutex_);
+        acceptingFrames_ = false;
+        static_cast<void>(consent_->revoke(generation_));
+        static_cast<void>(consent_->finishStop(generation_));
+        released_ = true;
     }
-    [[nodiscard]] capture::CaptureStats stats() const noexcept override { return stats_; }
+
+    [[nodiscard]] capture::CaptureStats stats() const noexcept {
+        std::lock_guard lock(mutex_);
+        return stats_;
+    }
+
     [[nodiscard]] bool onProjectionFrame(std::uint64_t generation, const std::byte* bytes, std::size_t size,
                                          std::uint32_t width, std::uint32_t height,
                                          std::uint32_t rowStride, std::uint32_t pixelStride,
                                          std::int64_t timestampNs) noexcept {
-        if (generation != generation_ || !bytes || width == 0 || height == 0 || pixelStride < 4 ||
-            rowStride < width * pixelStride || size < static_cast<std::size_t>(rowStride) * height) {
-            ++stats_.invalidFrames; return false;
+        std::lock_guard lock(mutex_);
+        if (generation != generation_ || !acceptingFrames_) {
+            ++stats_.ignoredFrames;
+            return false;
+        }
+        if (!bytes || width == 0 || height == 0 || pixelStride < 4 ||
+            rowStride < width * pixelStride ||
+            size < static_cast<std::size_t>(rowStride) * height) {
+            ++stats_.invalidFrames;
+            return false;
         }
         auto pixels = std::make_shared<std::vector<std::byte>>(static_cast<std::size_t>(width) * height * 4);
         for (std::uint32_t y = 0; y < height; ++y) for (std::uint32_t x = 0; x < width; ++x) {
@@ -199,18 +277,144 @@ public:
             .timestamp = {timestampNs, 1'000'000'000}, .width = width, .height = height,
             .pixelFormat = media::PixelFormat::Bgra8, .platformHandle = std::move(pixels)});
         if (!assembled.hasValue() || !assembled.value()) { ++stats_.invalidFrames; return false; }
-        if (!started_) { started_ = true; sink_->onCaptureStarted(); }
+        if (!consent_->acceptFrame(generation)) {
+            ++stats_.ignoredFrames;
+            return false;
+        }
+        if (!captureStarted_) { captureStarted_ = true; sink_->onCaptureStarted(); }
         sink_->onVideoFrame(std::move(*assembled.value())); ++stats_.receivedFrames; return true;
     }
+
     void onProjectionRevoked(std::uint64_t generation) noexcept {
-        if (generation != generation_) return;
-        sink_->onCaptureError(core::AppError{core::ErrorCode::InvalidState,
-                                             "Android revoked screen recording permission"});
+        std::lock_guard lock(mutex_);
+        if (generation != generation_ || !consent_->revoke(generation)) return;
+        acceptingFrames_ = false;
+        terminalError_ = core::AppError{core::ErrorCode::InvalidState,
+                                        "Android revoked screen recording permission"};
+        sink_->onCaptureError(*terminalError_);
     }
+
+    void onProjectionReleased(std::uint64_t generation, bool revoked) {
+        std::vector<capture::IScreenCaptureSource::StopCompletion> completions;
+        std::optional<core::AppError> resultError;
+        {
+            std::lock_guard lock(mutex_);
+            if (generation != generation_ || released_) return;
+            if (revoked && consent_->revoke(generation)) {
+                acceptingFrames_ = false;
+                terminalError_ = core::AppError{
+                    core::ErrorCode::InvalidState,
+                    "Android revoked screen recording permission"};
+                sink_->onCaptureError(*terminalError_);
+            }
+            if (!consent_->finishStop(generation)) return;
+            acceptingFrames_ = false;
+            released_ = true;
+            resultError = terminalError_;
+            completions = std::move(stopCompletions_);
+        }
+        for (auto& completion : completions) {
+            if (!completion) continue;
+            if (resultError) completion(*resultError);
+            else completion(core::ok());
+        }
+    }
+
 private:
-    std::shared_ptr<ProjectionConsentState> state_; std::shared_ptr<capture::IVideoFrameSink> sink_;
-    domain::SourceId id_; capture::ScreenCaptureFrameAssembler assembler_; capture::CaptureStats stats_{};
-    std::uint64_t generation_{}; bool started_{};
+    capture::IScreenCaptureSource::StopCompletion takeLastCompletion() {
+        if (stopCompletions_.empty()) return {};
+        auto completion = std::move(stopCompletions_.back());
+        stopCompletions_.pop_back();
+        return completion;
+    }
+
+private:
+    std::shared_ptr<ProjectionConsentState> consent_;
+    std::shared_ptr<capture::IVideoFrameSink> sink_;
+    capture::ScreenCaptureFrameAssembler assembler_;
+    mutable std::mutex mutex_;
+    capture::CaptureStats stats_{};
+    std::uint64_t generation_{};
+    bool acceptingFrames_{};
+    bool releaseRequested_{};
+    bool released_{true};
+    bool captureStarted_{};
+    std::optional<core::AppError> terminalError_;
+    std::vector<capture::IScreenCaptureSource::StopCompletion> stopCompletions_;
+};
+
+std::shared_ptr<ProjectionSourceState> activeProjectionSource() {
+    std::lock_guard lock(callbackMutex);
+    return callbackSourceState;
+}
+
+void clearProjectionSource(const std::shared_ptr<ProjectionSourceState>& source) {
+    std::lock_guard lock(callbackMutex);
+    if (callbackSourceState == source) callbackSourceState.reset();
+}
+
+class AndroidScreenCaptureSource final : public capture::IScreenCaptureSource {
+public:
+    AndroidScreenCaptureSource(std::shared_ptr<ProjectionConsentState> state,
+                               std::shared_ptr<capture::IVideoFrameSink> sink)
+        : consent_(std::move(state)),
+          sourceState_(std::make_shared<ProjectionSourceState>(consent_, std::move(sink))),
+          id_(domain::SourceId::create("android-screen").value()) {}
+    ~AndroidScreenCaptureSource() override { static_cast<void>(stop()); }
+    [[nodiscard]] domain::SourceId id() const override { return id_; }
+    [[nodiscard]] std::string displayName() const override { return "Android display"; }
+    [[nodiscard]] core::Result<void> start(const capture::CaptureConfig& config) override {
+        const auto generation = consent_->approvedGeneration();
+        if (!generation) return core::AppError{core::ErrorCode::InvalidState,
+                                                "Android screen recording permission is not active"};
+        sourceState_->begin(*generation);
+        {
+            std::lock_guard lock(callbackMutex);
+            callbackSourceState = sourceState_;
+        }
+        QJniObject::callStaticMethod<void>(kActivityClass, "startProjection", "(JII)V",
+                                            static_cast<jlong>(*generation),
+                                            static_cast<jint>(config.targetWidth),
+                                            static_cast<jint>(config.targetHeight));
+        QJniEnvironment environment;
+        if (environment.checkAndClearExceptions()) {
+            sourceState_->abortStart();
+            clearProjectionSource(sourceState_);
+            return core::AppError{core::ErrorCode::IoFailure,
+                                  "Android could not start MediaProjection"};
+        }
+        return core::ok();
+    }
+    [[nodiscard]] core::Result<void> stop() override {
+        return requestStop({});
+    }
+    void stopAsync(StopCompletion completion) override {
+        static_cast<void>(requestStop(std::move(completion)));
+    }
+    [[nodiscard]] capture::CaptureStats stats() const noexcept override {
+        return sourceState_->stats();
+    }
+
+private:
+    [[nodiscard]] core::Result<void> requestStop(StopCompletion completion) {
+        const auto generation = sourceState_->generation();
+        if (!sourceState_->requestStop(std::move(completion))) return core::ok();
+        QJniObject::callStaticMethod<void>(kActivityClass, "stopProjection", "(J)V",
+                                            static_cast<jlong>(generation));
+        QJniEnvironment environment;
+        if (environment.checkAndClearExceptions()) {
+            auto error = core::AppError{core::ErrorCode::IoFailure,
+                                        "Android could not stop MediaProjection"};
+            sourceState_->failStop(error);
+            clearProjectionSource(sourceState_);
+            return error;
+        }
+        return core::ok();
+    }
+
+    std::shared_ptr<ProjectionConsentState> consent_;
+    std::shared_ptr<ProjectionSourceState> sourceState_;
+    domain::SourceId id_;
 };
 
 class AndroidScreenSourceFactory final : public capture::IScreenCaptureSourceFactory {
@@ -230,6 +434,15 @@ std::shared_ptr<ProjectionConsentState> activeCallbackState() {
     return callbackState.lock();
 }
 
+void queueOnApplicationThread(std::function<void()> callback) {
+    auto* context = QCoreApplication::instance();
+    if (!context) {
+        callback();
+        return;
+    }
+    QMetaObject::invokeMethod(context, std::move(callback), Qt::QueuedConnection);
+}
+
 }  // namespace
 
 AndroidScreenCaptureBackend makeAndroidScreenCaptureBackend() {
@@ -247,11 +460,11 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_studioonair_creatorstudio_CreatorStudioActivity_nativeProjectionFrame(
     JNIEnv* environment, jclass, jlong generation, jobject buffer, jint width, jint height,
     jint rowStride, jint pixelStride, jlong timestampNs) {
-    std::lock_guard lock(creator::app::android::callbackMutex);
-    if (!creator::app::android::callbackSource) return JNI_FALSE;
+    auto source = creator::app::android::activeProjectionSource();
+    if (!source) return JNI_FALSE;
     auto* bytes = static_cast<std::byte*>(environment->GetDirectBufferAddress(buffer));
     const auto size = environment->GetDirectBufferCapacity(buffer);
-    return creator::app::android::callbackSource->onProjectionFrame(
+    return source->onProjectionFrame(
                static_cast<std::uint64_t>(generation), bytes,
                size < 0 ? 0 : static_cast<std::size_t>(size), width, height,
                rowStride, pixelStride, timestampNs) ? JNI_TRUE : JNI_FALSE;
@@ -260,11 +473,25 @@ Java_com_studioonair_creatorstudio_CreatorStudioActivity_nativeProjectionFrame(
 extern "C" JNIEXPORT void JNICALL
 Java_com_studioonair_creatorstudio_CreatorStudioActivity_nativeProjectionRevoked(
     JNIEnv*, jclass, jlong generation) {
-    std::lock_guard lock(creator::app::android::callbackMutex);
-    if (creator::app::android::callbackSource) {
-        creator::app::android::callbackSource->onProjectionRevoked(
-            static_cast<std::uint64_t>(generation));
-    }
+    auto source = creator::app::android::activeProjectionSource();
+    if (!source) return;
+    creator::app::android::queueOnApplicationThread(
+        [source = std::move(source), generation = static_cast<std::uint64_t>(generation)] {
+            source->onProjectionRevoked(generation);
+        });
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_studioonair_creatorstudio_CreatorStudioActivity_nativeProjectionReleased(
+    JNIEnv*, jclass, jlong generation, jboolean revoked) {
+    auto source = creator::app::android::activeProjectionSource();
+    if (!source) return;
+    creator::app::android::queueOnApplicationThread(
+        [source = std::move(source), generation = static_cast<std::uint64_t>(generation),
+         revoked = revoked == JNI_TRUE] {
+            source->onProjectionReleased(generation, revoked);
+            creator::app::android::clearProjectionSource(source);
+        });
 }
 
 }  // namespace creator::app::android

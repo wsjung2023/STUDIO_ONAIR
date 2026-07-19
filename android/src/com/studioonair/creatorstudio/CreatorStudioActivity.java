@@ -50,8 +50,12 @@ public class CreatorStudioActivity extends QtActivity {
     private MediaProjection projection;
     private ImageReader projectionReader;
     private VirtualDisplay projectionDisplay;
+    private HandlerThread projectionThread;
+    private Handler projectionHandler;
     private boolean releasingProjection;
     private long revokedGeneration;
+    private long releasedGeneration;
+    private volatile long requestedStopGeneration;
     private long pendingCameraPermissionGeneration;
     private long pendingMicrophonePermissionGeneration;
     private HandlerThread cameraThread;
@@ -73,6 +77,7 @@ public class CreatorStudioActivity extends QtActivity {
     public static native boolean nativeProjectionFrame(long generation, java.nio.ByteBuffer bytes,
         int width, int height, int rowStride, int pixelStride, long timestampNs);
     public static native void nativeProjectionRevoked(long generation);
+    public static native void nativeProjectionReleased(long generation, boolean revoked);
     public static native void nativeMediaPermissionResult(int kind, long generation, boolean granted);
     public static native void nativeCameraFrame(long generation, ByteBuffer bytes,
         int width, int height, long timestampNs);
@@ -115,6 +120,21 @@ public class CreatorStudioActivity extends QtActivity {
 
     @Override
     protected void onDestroy() {
+        if (pendingGeneration != 0) {
+            nativeProjectionResult(pendingGeneration, false);
+            pendingGeneration = 0;
+        }
+        if (pendingCameraPermissionGeneration != 0) {
+            nativeMediaPermissionResult(CAMERA_KIND, pendingCameraPermissionGeneration, false);
+            pendingCameraPermissionGeneration = 0;
+        }
+        if (pendingMicrophonePermissionGeneration != 0) {
+            nativeMediaPermissionResult(MICROPHONE_KIND, pendingMicrophonePermissionGeneration, false);
+            pendingMicrophonePermissionGeneration = 0;
+        }
+        if (approvedGeneration != 0) {
+            releaseProjection(approvedGeneration, true, true);
+        }
         stopCameraOnUiThread(cameraGeneration);
         stopMicrophoneOnUiThread(microphoneGeneration);
         stopPlaybackAudioOnUiThread(playbackGeneration);
@@ -205,59 +225,117 @@ public class CreatorStudioActivity extends QtActivity {
 
     public static void startProjection(long generation, int width, int height) {
         final CreatorStudioActivity activity = activeActivity;
-        if (activity != null) activity.runOnUiThread(
+        if (activity == null) {
+            nativeProjectionRevoked(generation);
+            nativeProjectionReleased(generation, true);
+            return;
+        }
+        activity.runOnUiThread(
             () -> activity.startProjectionOnUiThread(generation, width, height));
     }
 
     public static void stopProjection(long generation) {
         final CreatorStudioActivity activity = activeActivity;
-        if (activity != null) activity.runOnUiThread(() -> {
-            if (generation == activity.approvedGeneration) activity.releaseProjection();
+        if (activity == null) {
+            nativeProjectionReleased(generation, false);
+            return;
+        }
+        activity.runOnUiThread(() -> {
+            if (generation == activity.approvedGeneration) {
+                activity.releaseProjection(generation, false, true);
+            } else {
+                nativeProjectionReleased(generation, false);
+            }
         });
     }
 
     private void startProjectionOnUiThread(long generation, int width, int height) {
         if (generation != approvedGeneration || projectionData == null || projection != null ||
-            releasingProjection) return;
-        CreatorStudioProjectionService.start(this);
-        MediaProjectionManager manager = (MediaProjectionManager)
-            getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-        projection = manager.getMediaProjection(projectionResultCode, projectionData);
-        projection.registerCallback(new MediaProjection.Callback() {
-            @Override public void onStop() {
-                notifyProjectionRevoked(generation);
-                releaseProjection();
+            releasingProjection || width <= 0 || height <= 0) {
+            failProjectionStart(generation);
+            return;
+        }
+        try {
+            CreatorStudioProjectionService.start(this);
+            final MediaProjectionManager manager = (MediaProjectionManager)
+                getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+            if (manager == null) {
+                failProjectionStart(generation);
+                return;
             }
-        }, null);
-        projectionReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
-        projectionReader.setOnImageAvailableListener(reader -> {
-            Image image = reader.acquireLatestImage();
-            if (image == null) return;
-            try {
-                Image.Plane plane = image.getPlanes()[0];
-                nativeProjectionFrame(generation, plane.getBuffer(), image.getWidth(), image.getHeight(),
-                    plane.getRowStride(), plane.getPixelStride(), image.getTimestamp());
-            } finally { image.close(); }
-        }, null);
-        projectionDisplay = projection.createVirtualDisplay("CreatorStudioCapture", width, height,
-            getResources().getDisplayMetrics().densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, projectionReader.getSurface(), null, null);
+            projection = manager.getMediaProjection(projectionResultCode, projectionData);
+            if (projection == null) {
+                failProjectionStart(generation);
+                return;
+            }
+            projectionThread = new HandlerThread("CreatorStudioProjection");
+            projectionThread.start();
+            projectionHandler = new Handler(projectionThread.getLooper());
+            projection.registerCallback(new MediaProjection.Callback() {
+                @Override public void onStop() {
+                    if (requestedStopGeneration == generation) return;
+                    runOnUiThread(() -> releaseProjection(generation, true, false));
+                }
+            }, projectionHandler);
+            projectionReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
+            projectionReader.setOnImageAvailableListener(reader -> {
+                final Image image = reader.acquireLatestImage();
+                if (image == null) return;
+                try {
+                    final Image.Plane plane = image.getPlanes()[0];
+                    nativeProjectionFrame(generation, plane.getBuffer(), image.getWidth(),
+                        image.getHeight(), plane.getRowStride(), plane.getPixelStride(),
+                        image.getTimestamp());
+                } finally {
+                    image.close();
+                }
+            }, projectionHandler);
+            projectionDisplay = projection.createVirtualDisplay("CreatorStudioCapture", width, height,
+                getResources().getDisplayMetrics().densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, projectionReader.getSurface(),
+                null, projectionHandler);
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException error) {
+            failProjectionStart(generation);
+        }
     }
 
-    private void releaseProjection() {
-        if (releasingProjection) return;
+    private void failProjectionStart(long generation) {
+        releaseProjection(generation, true, projection != null);
+    }
+
+    private void releaseProjection(long generation, boolean revoked, boolean stopProjection) {
+        if (generation == 0 || releasedGeneration == generation || releasingProjection) return;
+        if (generation != approvedGeneration) {
+            nativeProjectionReleased(generation, revoked);
+            return;
+        }
         releasingProjection = true;
+        if (!revoked) requestedStopGeneration = generation;
         if (projectionDisplay != null) { projectionDisplay.release(); projectionDisplay = null; }
-        if (projectionReader != null) { projectionReader.close(); projectionReader = null; }
+        if (projectionReader != null) {
+            projectionReader.setOnImageAvailableListener(null, null);
+            projectionReader.close();
+            projectionReader = null;
+        }
         final MediaProjection projectionToStop = projection;
         stopPlaybackAudioOnUiThread(playbackGeneration);
         projection = null;
         approvedGeneration = 0;
         projectionResultCode = 0;
         projectionData = null;
-        if (projectionToStop != null) projectionToStop.stop();
+        if (stopProjection && projectionToStop != null) {
+            try { projectionToStop.stop(); } catch (IllegalStateException ignored) { }
+        }
+        if (projectionThread != null) {
+            projectionThread.quitSafely();
+            projectionThread = null;
+            projectionHandler = null;
+        }
         CreatorStudioProjectionService.stop(this);
         releasingProjection = false;
+        if (revoked) notifyProjectionRevoked(generation);
+        releasedGeneration = generation;
+        nativeProjectionReleased(generation, revoked);
     }
 
     private void notifyProjectionRevoked(long generation) {
