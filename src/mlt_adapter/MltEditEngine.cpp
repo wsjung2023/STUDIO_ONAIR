@@ -347,6 +347,19 @@ struct VisualFilterContext final : CreatorFilterContext {
     std::atomic<int> lastErrorStage{};
 };
 
+struct CursorVisualFilterContext final : CreatorFilterContext {
+    CursorVisualFilterContext(std::shared_ptr<const CursorVisualEffectsPlan> value,
+                              std::uint32_t width, std::uint32_t height,
+                              core::FrameRate rate)
+        : plan(std::move(value)), canvasWidth(width), canvasHeight(height),
+          frameRate(rate) {}
+    std::shared_ptr<const CursorVisualEffectsPlan> plan;
+    std::uint32_t canvasWidth;
+    std::uint32_t canvasHeight;
+    core::FrameRate frameRate;
+    std::atomic<int> lastErrorStage{};
+};
+
 struct AudioFilterContext final : CreatorFilterContext {
     AudioFilterContext(domain::AudioEnvelope value, core::FrameRate rate,
                        std::uint64_t frameCount)
@@ -374,6 +387,7 @@ void closeCreatorFilter(mlt_filter filter) {
 }
 
 mlt_frame processVisualFrame(mlt_filter filter, mlt_frame frame);
+mlt_frame processCursorVisualFrame(mlt_filter filter, mlt_frame frame);
 mlt_frame processAudioFrame(mlt_filter filter, mlt_frame frame);
 mlt_frame processAudioProcessingFrame(mlt_filter filter, mlt_frame frame);
 
@@ -513,9 +527,105 @@ int getTransformedImage(mlt_frame frame, std::uint8_t** image,
     }
 }
 
+int getCursorEffectsImage(mlt_frame frame, std::uint8_t** image,
+                          mlt_image_format* format, int* width,
+                          int* height, int) noexcept {
+    auto* filter = static_cast<mlt_filter>(mlt_frame_pop_service(frame));
+    auto* context = filter
+                        ? static_cast<CursorVisualFilterContext*>(filter->child)
+                        : nullptr;
+    if (!context || !context->plan || !image || !format || !width || !height) {
+        return 1;
+    }
+    const auto fail = [context](int stage) {
+        context->lastErrorStage.store(stage, std::memory_order_relaxed);
+        return 1;
+    };
+    try {
+        *format = mlt_image_rgba;
+        const int result =
+            mlt_frame_get_image(frame, image, format, width, height, 1);
+        if (result != 0 || !*image || *width <= 0 || *height <= 0 ||
+            *width > static_cast<int>(kMaximumPreviewDimension) ||
+            *height > static_cast<int>(kMaximumPreviewDimension)) {
+            return fail(1);
+        }
+        const auto pixelCount = static_cast<std::uint64_t>(*width) *
+                                static_cast<std::uint64_t>(*height);
+        if (pixelCount > std::numeric_limits<std::size_t>::max() / 4U) {
+            return fail(2);
+        }
+        const auto byteCount = static_cast<std::size_t>(pixelCount * 4U);
+        std::vector<std::uint8_t> bgra(byteCount);
+        for (std::size_t offset = 0; offset < byteCount; offset += 4U) {
+            bgra[offset] = (*image)[offset + 2U];
+            bgra[offset + 1U] = (*image)[offset + 1U];
+            bgra[offset + 2U] = (*image)[offset];
+            bgra[offset + 3U] = (*image)[offset + 3U];
+        }
+        const auto position = core::frameToTimestamp(
+            mlt_frame_get_position(frame), context->frameRate);
+        auto processed = applyCursorVisualEffects(
+            BgraFrameView{bgra, static_cast<std::uint32_t>(*width),
+                          static_cast<std::uint32_t>(*height),
+                          static_cast<std::uint32_t>(*width) * 4U},
+            context->canvasWidth, context->canvasHeight, position,
+            *context->plan);
+        if (!processed.hasValue()) return fail(3);
+        const auto output = processed.value().bytes();
+        const auto outputPixels = output.size() / 4U;
+        if (outputPixels > std::numeric_limits<std::size_t>::max() / 3U ||
+            outputPixels > std::numeric_limits<std::size_t>::max()) {
+            return fail(4);
+        }
+        auto* rgb = static_cast<std::uint8_t*>(
+            mlt_pool_alloc(static_cast<int>(outputPixels * 3U)));
+        auto* alpha = static_cast<std::uint8_t*>(
+            mlt_pool_alloc(static_cast<int>(outputPixels)));
+        if (!rgb || !alpha) {
+            if (rgb) mlt_pool_release(rgb);
+            if (alpha) mlt_pool_release(alpha);
+            return fail(5);
+        }
+        for (std::size_t pixel = 0; pixel < outputPixels; ++pixel) {
+            const auto source = pixel * 4U;
+            const auto destination = pixel * 3U;
+            rgb[destination] = output[source + 2U];
+            rgb[destination + 1U] = output[source + 1U];
+            rgb[destination + 2U] = output[source];
+            alpha[pixel] = output[source + 3U];
+        }
+        if (mlt_frame_set_image(frame, rgb,
+                                static_cast<int>(outputPixels * 3U),
+                                mlt_pool_release) != 0) {
+            mlt_pool_release(rgb);
+            mlt_pool_release(alpha);
+            return fail(6);
+        }
+        if (mlt_frame_set_alpha(frame, alpha, static_cast<int>(outputPixels),
+                                mlt_pool_release) != 0) {
+            mlt_pool_release(alpha);
+            return fail(6);
+        }
+        *image = rgb;
+        *format = mlt_image_rgb;
+        *width = static_cast<int>(context->canvasWidth);
+        *height = static_cast<int>(context->canvasHeight);
+        return 0;
+    } catch (...) {
+        return fail(7);
+    }
+}
+
 mlt_frame processVisualFrame(mlt_filter filter, mlt_frame frame) {
     mlt_frame_push_service(frame, filter);
     mlt_frame_push_get_image(frame, getTransformedImage);
+    return frame;
+}
+
+mlt_frame processCursorVisualFrame(mlt_filter filter, mlt_frame frame) {
+    mlt_frame_push_service(frame, filter);
+    mlt_frame_push_get_image(frame, getCursorEffectsImage);
     return frame;
 }
 
@@ -661,6 +771,7 @@ class MltEditEngine::Impl final {
         std::vector<std::unique_ptr<Mlt::Filter>> filters;
         std::vector<std::unique_ptr<Mlt::Transition>> transitions;
         std::vector<VisualFilterContext*> visualFilterContexts;
+        std::vector<CursorVisualFilterContext*> cursorVisualFilterContexts;
         std::vector<AudioFilterContext*> audioFilterContexts;
         std::vector<AudioProcessingFilterContext*> audioProcessingFilterContexts;
         domain::TimelineRevision revision;
@@ -1007,6 +1118,23 @@ class MltEditEngine::Impl final {
             ++graph->videoCompositeTransitions;
             graph->transitions.push_back(std::move(composite));
         }
+        if (config_.cursorVisualEffects) {
+            auto context = std::make_unique<CursorVisualFilterContext>(
+                config_.cursorVisualEffects,
+                static_cast<std::uint32_t>(config_.previewWidth),
+                static_cast<std::uint32_t>(config_.previewHeight),
+                plan.frameRate);
+            auto* contextObserver = context.get();
+            auto creatorFilter = makeCreatorFilter(
+                std::move(context), processCursorVisualFrame);
+            if (!creatorFilter.hasValue()) return creatorFilter.error();
+            if (graph->tractor->attach(*creatorFilter.value()) != 0) {
+                return stateError(
+                    "MLT could not attach the cursor visual effects filter");
+            }
+            graph->filters.push_back(std::move(creatorFilter).value());
+            graph->cursorVisualFilterContexts.push_back(contextObserver);
+        }
         if (config_.audioProcessingChain) {
             auto context = std::make_unique<AudioProcessingFilterContext>(
                 config_.audioProcessingChain);
@@ -1134,6 +1262,9 @@ core::Result<edit_engine::PreviewFrame> MltEditEngine::requestFrame(
     for (auto* context : impl_->graph_->visualFilterContexts) {
         context->lastErrorStage.store(0, std::memory_order_relaxed);
     }
+    for (auto* context : impl_->graph_->cursorVisualFilterContexts) {
+        context->lastErrorStage.store(0, std::memory_order_relaxed);
+    }
     impl_->graph_->tractor->seek(static_cast<int>(frameNumber));
     std::unique_ptr<Mlt::Frame> frame{impl_->graph_->tractor->get_frame()};
     if (!frame || !frame->is_valid()) return stateError("MLT did not return a frame");
@@ -1149,6 +1280,15 @@ core::Result<edit_engine::PreviewFrame> MltEditEngine::requestFrame(
         if (stage != 0) {
             return stateError(
                 "Creator visual processor failed at stage " +
+                std::to_string(stage));
+        }
+    }
+    for (const auto* context : impl_->graph_->cursorVisualFilterContexts) {
+        const int stage =
+            context->lastErrorStage.load(std::memory_order_relaxed);
+        if (stage != 0) {
+            return stateError(
+                "Creator cursor visual effects failed at stage " +
                 std::to_string(stage));
         }
     }
@@ -1218,22 +1358,6 @@ core::Result<edit_engine::PreviewFrame> MltEditEngine::requestFrame(
         }
     } else {
         return stateError("MLT returned an unsupported preview pixel format");
-    }
-    if (impl_->config_.cursorVisualEffects) {
-        auto processed = applyCursorVisualEffects(
-            BgraFrameView{.bytes = std::span<const std::uint8_t>{*pixels},
-                          .width = static_cast<std::uint32_t>(width),
-                          .height = static_cast<std::uint32_t>(height),
-                          .stride = static_cast<std::uint32_t>(width * 4)},
-            static_cast<std::uint32_t>(width),
-            static_cast<std::uint32_t>(height), position,
-            *impl_->config_.cursorVisualEffects);
-        if (!processed.hasValue()) return processed.error();
-        const auto bytes = processed.value().bytes();
-        if (!processed.value().aliasesInput()) {
-            pixels = std::make_shared<std::vector<std::uint8_t>>(
-                bytes.begin(), bytes.end());
-        }
     }
     media::VideoFrame video{
         .timestamp = position,
