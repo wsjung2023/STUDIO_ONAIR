@@ -45,9 +45,9 @@
 - Consumes: `MobilePerformanceBudget::maximumModelBytes`.
 - Produces: `ModelStoragePolicy::admit(ModelInstallRequest, ModelStorageSnapshot)` returning an exact staging/final-path plan.
 
-- [ ] Write tests that reject a zero-byte model, a model above the device budget, insufficient free space, a path outside the configured model root, and a hash other than 64 lowercase hexadecimal characters.
-- [ ] Run `scripts/studio-build-verify.ps1 -SkipTests`; expect failure because `ModelStoragePolicy.h` is absent.
-- [ ] Implement validation with `std::filesystem::weakly_canonical`, overflow-safe size checks, and a same-root `.part` staging path:
+- [x] Write tests that reject a zero-byte model, a model above the device budget, insufficient free space, a path outside the configured model root, and a hash other than 64 lowercase hexadecimal characters.
+- [x] Run `scripts/studio-build-verify.ps1 -SkipTests`; expect failure because `ModelStoragePolicy.h` is absent.
+- [x] Implement validation with `std::filesystem::weakly_canonical`, overflow-safe size checks, and a same-root `.part` staging path:
 
 ```cpp
 struct ModelInstallPlan final {
@@ -59,8 +59,8 @@ struct ModelInstallPlan final {
     const ModelInstallRequest&, const ModelStorageSnapshot&) const;
 ```
 
-- [ ] Run `ctest --test-dir build/windows-debug -R ModelStoragePolicyTest --output-on-failure`; expect all cases to pass.
-- [ ] Commit with `git commit -m "feat(r4): bound mobile model storage"`.
+- [x] Run `ctest --test-dir build/windows-debug -R ModelStoragePolicyTest --output-on-failure`; all seven cases pass.
+- [x] Commit with `git commit -m "feat(r4): bound mobile model storage"`.
 
 ### Task 3: Cross-platform project interchange gate
 

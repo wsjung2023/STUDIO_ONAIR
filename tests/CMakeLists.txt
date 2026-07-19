@@ -22,6 +22,7 @@ include(GoogleTest)
 add_executable(cs_platform_release_tests
     platform_release/PlatformCapabilityTest.cpp
     platform_release/MobilePerformancePolicyTest.cpp
+    platform_release/ModelStoragePolicyTest.cpp
     platform_release/ReleaseManifestTest.cpp
 )
 target_link_libraries(cs_platform_release_tests
