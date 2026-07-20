@@ -4,6 +4,11 @@
 #include "core/Uuid.h"
 #include "audio_dsp/AudioBuffer.h"
 #include "audio_dsp/AudioFormat.h"
+#include "audio_dsp/AudioProcessingChain.h"
+#include "audio_dsp/GainProcessor.h"
+#include "audio_dsp/LimiterProcessor.h"
+#include "audio_dsp/LoudnessMeter.h"
+#include "ffmpeg_adapter/FfmpegConcatRemuxer.h"
 #include "ffmpeg_adapter/FfmpegMediaProbe.h"
 #include "mlt_adapter/ExportEncoderProbe.h"
 #include "mlt_adapter/FrameEffects.h"
@@ -32,8 +37,10 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <new>
 #include <optional>
@@ -47,6 +54,7 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <Windows.h>
+#include <malloc.h>
 #endif
 
 namespace creator::mlt_adapter {
@@ -56,6 +64,19 @@ constexpr std::uint32_t kMaximumPreviewDimension = 8192;
 
 core::AppError stateError(std::string message) {
     return core::AppError{core::ErrorCode::InvalidState, std::move(message)};
+}
+
+void releaseTransientExportMemory() noexcept {
+    // MLT intentionally pools released image/audio blocks. Between the
+    // analysis and encoding passes those blocks are no longer reusable at
+    // the same profile size, so retain no value and duplicate peak memory.
+    mlt_pool_purge();
+#ifdef _WIN32
+    static_cast<void>(_heapmin());
+    static_cast<void>(SetProcessWorkingSetSize(
+        GetCurrentProcess(), static_cast<SIZE_T>(-1),
+        static_cast<SIZE_T>(-1)));
+#endif
 }
 
 core::AppError ioError(std::string message) {
@@ -759,6 +780,14 @@ bool isIdentityTransform(const domain::VisualTransform& transform) noexcept {
            transform.cropBottom() == 0.0 && transform.opacity() == 1.0;
 }
 
+struct MltMediaSource final {
+    Mlt::Producer* borrowedProducer{};
+
+    [[nodiscard]] Mlt::Producer& service() const {
+        return *borrowedProducer;
+    }
+};
+
 } // namespace
 
 class MltEditEngine::Impl final {
@@ -784,6 +813,7 @@ class MltEditEngine::Impl final {
         std::size_t transformedVisualBranchCount{};
         std::size_t audioEnvelopeBranchCount{};
         std::size_t missingOverlayCount{};
+
     };
 
     explicit Impl(MltEditEngineConfig config) : config_(std::move(config)) {}
@@ -855,6 +885,73 @@ class MltEditEngine::Impl final {
             static_cast<int>(plan.frameRate.denominator()));
         graph->tractor = std::make_unique<Mlt::Tractor>(*graph->profile);
 
+        const auto configureProducer = [](Mlt::Producer& producer,
+                                          bool audio) {
+            producer.set("threads", 1);
+            producer.set("autoclose", 1);
+            producer.set("cache", 0);
+            producer.set("noimagecache", 1);
+            producer.set("astream", audio ? 0 : -1);
+            producer.set("vstream", audio ? -1 : 0);
+        };
+        std::map<std::filesystem::path, std::filesystem::path>
+            materializedConcatPaths;
+        std::map<std::pair<std::string, bool>, Mlt::Producer*>
+            reusableMediaProducers;
+        const auto buildMediaSource =
+            [&](const std::filesystem::path& mediaPath,
+                bool audio) -> core::Result<MltMediaSource> {
+            auto decoderPath = mediaPath;
+            if (mediaPath.extension() == ".ffconcat") {
+                const auto cached = materializedConcatPaths.find(mediaPath);
+                if (cached != materializedConcatPaths.end()) {
+                    decoderPath = cached->second;
+                } else {
+                    auto materialized =
+                        ffmpeg_adapter::materializeFfmpegConcatForEditing(
+                            mediaPath);
+                    if (!materialized.hasValue()) return materialized.error();
+                    decoderPath = std::move(materialized).value();
+                    materializedConcatPaths.emplace(mediaPath, decoderPath);
+                }
+            }
+            const auto resource = utf8Path(decoderPath);
+            const auto cacheKey = std::pair{resource, audio};
+            const auto cached = reusableMediaProducers.find(cacheKey);
+            if (cached != reusableMediaProducers.end()) {
+                return MltMediaSource{.borrowedProducer = cached->second};
+            }
+            auto producer = std::make_unique<Mlt::Producer>(
+                *graph->profile, "avformat", resource.c_str());
+            configureProducer(*producer, audio);
+            if (!producer->is_valid()) {
+                return stateError("MLT could not open a media asset");
+            }
+            if (audio) {
+                auto converter = std::make_unique<Mlt::Filter>(
+                    *graph->profile, "audioconvert");
+                if (!converter->is_valid() ||
+                    producer->attach(*converter) != 0) {
+                    return stateError(
+                        "MLT could not attach the audio format converter");
+                }
+                graph->filters.push_back(std::move(converter));
+                auto channelConverter = std::make_unique<Mlt::Filter>(
+                    *graph->profile, "audiochannels");
+                if (!channelConverter->is_valid() ||
+                    producer->attach(*channelConverter) != 0) {
+                    return stateError(
+                        "MLT could not attach the audio channel converter");
+                }
+                graph->filters.push_back(std::move(channelConverter));
+            }
+            ++graph->mediaProducerCount;
+            auto* borrowed = producer.get();
+            reusableMediaProducers.emplace(cacheKey, borrowed);
+            graph->producers.push_back(std::move(producer));
+            return MltMediaSource{.borrowedProducer = borrowed};
+        };
+
         int trackIndex = 0;
         const auto isAudible = [](const MltGraphTrack& track) {
             return std::any_of(track.clips.begin(), track.clips.end(),
@@ -881,28 +978,20 @@ class MltEditEngine::Impl final {
                 if (!clip.enabled || !clip.available) {
                     playlist->blank(length - 1);
                 } else {
-                    auto producer = std::make_unique<Mlt::Producer>(
-                        *graph->profile, "avformat",
-                        utf8Path(clip.mediaPath).c_str());
-                    producer->set("threads", 1);
-                    producer->set("autoclose", 1);
-                    producer->set("cache", 0);
-                    producer->set("noimagecache", 1);
-                    producer->set("astream", 0);
-                    producer->set("vstream", -1);
-                    if (!producer->is_valid()) {
-                        return stateError("MLT could not open an audio asset");
-                    }
-                    ++graph->mediaProducerCount;
-                    auto converter = std::make_unique<Mlt::Filter>(
-                        *graph->profile, "audioconvert");
-                    if (!converter->is_valid() ||
-                        producer->attach(*converter) != 0) {
-                        return stateError(
-                            "MLT could not attach the audio format converter");
-                    }
-                    graph->filters.push_back(std::move(converter));
+                    auto built = buildMediaSource(clip.mediaPath, true);
+                    if (!built.hasValue()) return built.error();
+                    auto source = std::move(built).value();
+                    auto* producer = &source.service();
+                    std::unique_ptr<Mlt::Producer> clipCut;
                     if (clip.audioEnvelope.has_value()) {
+                        clipCut.reset(producer->cut(
+                            static_cast<int>(clip.sourceIn),
+                            static_cast<int>(clip.sourceOut)));
+                        if (!clipCut || !clipCut->is_valid()) {
+                            return stateError(
+                                "MLT could not create an audio clip cut");
+                        }
+                        producer = clipCut.get();
                         auto context = std::make_unique<AudioFilterContext>(
                             *clip.audioEnvelope, plan.frameRate,
                             static_cast<std::uint64_t>(length));
@@ -921,12 +1010,17 @@ class MltEditEngine::Impl final {
                         graph->audioFilterContexts.push_back(contextObserver);
                         ++graph->audioEnvelopeBranchCount;
                     }
-                    if (playlist->append(
-                            *producer, static_cast<int>(clip.sourceIn),
-                            static_cast<int>(clip.sourceOut)) != 0) {
+                    const int appended = clipCut
+                        ? playlist->append(*producer)
+                        : playlist->append(
+                              *producer, static_cast<int>(clip.sourceIn),
+                              static_cast<int>(clip.sourceOut));
+                    if (appended != 0) {
                         return stateError("MLT could not place an audio asset");
                     }
-                    graph->producers.push_back(std::move(producer));
+                    if (clipCut) {
+                        graph->producers.push_back(std::move(clipCut));
+                    }
                 }
                 cursor = timelineIn + length;
             }
@@ -1007,31 +1101,24 @@ class MltEditEngine::Impl final {
                     ++graph->missingOverlayCount;
                 }
             } else {
-                auto producer = std::make_unique<Mlt::Producer>(
-                    *graph->profile, "avformat",
-                    utf8Path(branch.sourcePath).c_str());
-                producer->set("threads", 1);
-                producer->set("autoclose", 1);
-                producer->set("cache", 0);
-                producer->set("noimagecache", 1);
-                producer->set("astream", -1);
-                producer->set("vstream", 0);
-                if (!producer->is_valid()) {
-                    return stateError("MLT could not open a visual branch");
-                }
-                ++graph->mediaProducerCount;
                 const bool transformed =
                     !isIdentityTransform(branch.transform);
                 const bool extractsPackedAlpha =
                     requiresPackedAlphaExtraction(branch);
+                auto built = buildMediaSource(branch.sourcePath, false);
+                if (!built.hasValue()) return built.error();
+                auto source = std::move(built).value();
+                auto& producer = source.service();
                 if (transformed || extractsPackedAlpha) {
                     auto converter = std::make_unique<Mlt::Filter>(
                         *graph->profile, "imageconvert");
                     if (!converter->is_valid() ||
-                        producer->attach(*converter) != 0) {
+                        playlist->attach(*converter) != 0) {
                         return stateError(
                             "MLT could not attach the visual format converter");
                     }
+                    converter->set_in_and_out(timelineIn,
+                                              timelineIn + length - 1);
                     graph->filters.push_back(std::move(converter));
                     auto context = std::make_unique<VisualFilterContext>(
                         branch.transform, config_.previewWidth,
@@ -1042,10 +1129,12 @@ class MltEditEngine::Impl final {
                     if (!creatorFilter.hasValue()) {
                         return creatorFilter.error();
                     }
-                    if (producer->attach(*creatorFilter.value()) != 0) {
+                    if (playlist->attach(*creatorFilter.value()) != 0) {
                         return stateError(
                             "MLT could not attach the visual branch processor");
                     }
+                    creatorFilter.value()->set_in_and_out(
+                        timelineIn, timelineIn + length - 1);
                     graph->filters.push_back(
                         std::move(creatorFilter).value());
                     graph->visualFilterContexts.push_back(contextObserver);
@@ -1054,17 +1143,19 @@ class MltEditEngine::Impl final {
                     }
                 }
                 if (branch.mediaKind == domain::MediaKind::Image) {
-                    if (playlist->append(*producer, 0, 0) != 0 ||
+                    if (playlist->append(producer, 0, 0) != 0 ||
                         playlist->repeat(playlist->count() - 1, length) != 0) {
                         return stateError(
                             "MLT could not hold a visual still branch");
                     }
-                } else if (playlist->append(
-                               *producer, static_cast<int>(branch.sourceIn),
-                               static_cast<int>(branch.sourceOut)) != 0) {
-                    return stateError("MLT could not place a visual branch");
+                } else {
+                    if (playlist->append(
+                            producer, static_cast<int>(branch.sourceIn),
+                            static_cast<int>(branch.sourceOut)) != 0) {
+                        return stateError(
+                            "MLT could not place a visual branch");
+                    }
                 }
-                graph->producers.push_back(std::move(producer));
             }
             const int cursor = timelineIn + length;
             if (graphDurationFrames > cursor) {
@@ -1135,9 +1226,60 @@ class MltEditEngine::Impl final {
             graph->filters.push_back(std::move(creatorFilter).value());
             graph->cursorVisualFilterContexts.push_back(contextObserver);
         }
-        if (config_.audioProcessingChain) {
+        if (config_.audioProcessingChain && config_.audioProcessingFactory) {
+            return core::AppError{
+                core::ErrorCode::InvalidArgument,
+                "configure either an audio processing chain or a factory, not both"};
+        }
+        if (config_.audioProcessingChain &&
+            config_.appliedExportGainDb.has_value()) {
+            return core::AppError{
+                core::ErrorCode::InvalidArgument,
+                "two-pass loudness requires an isolated audio processor factory"};
+        }
+        if (config_.appliedExportGainDb.has_value() &&
+            !config_.exportLoudnessNormalization.has_value()) {
+            return core::AppError{
+                core::ErrorCode::InvalidArgument,
+                "export loudness gain is missing its limiter configuration"};
+        }
+        std::unique_ptr<audio_dsp::IAudioProcessor> ownedAudioProcessor;
+        std::shared_ptr<audio_dsp::IAudioProcessor> audioProcessor =
+            config_.audioProcessingChain;
+        if (config_.audioProcessingFactory) {
+            auto created = config_.audioProcessingFactory();
+            if (!created.hasValue()) return created.error();
+            ownedAudioProcessor = std::move(created).value();
+            if (!ownedAudioProcessor) {
+                return core::AppError{
+                    core::ErrorCode::InvalidState,
+                    "audio processing factory returned no processor"};
+            }
+        }
+        if (config_.appliedExportGainDb.has_value()) {
+            auto format = audio_dsp::AudioFormat::create(48'000, 2);
+            if (!format.hasValue()) return format.error();
+            audio_dsp::LimiterProcessor::Parameters limiterParameters;
+            limiterParameters.ceilingDbtp =
+                config_.exportLoudnessNormalization->truePeakCeilingDbtp;
+            auto limiter = audio_dsp::LimiterProcessor::create(
+                limiterParameters, format.value());
+            if (!limiter.hasValue()) return limiter.error();
+            auto chain = std::make_unique<audio_dsp::AudioProcessingChain>();
+            chain->add(std::move(ownedAudioProcessor));
+            chain->add(std::make_unique<audio_dsp::GainProcessor>(
+                *config_.appliedExportGainDb));
+            chain->add(std::make_unique<audio_dsp::LimiterProcessor>(
+                std::move(limiter).value()));
+            ownedAudioProcessor = std::move(chain);
+        }
+        if (ownedAudioProcessor) {
+            audioProcessor = std::shared_ptr<audio_dsp::IAudioProcessor>(
+                std::move(ownedAudioProcessor));
+        }
+        if (audioProcessor) {
             auto context = std::make_unique<AudioProcessingFilterContext>(
-                config_.audioProcessingChain);
+                std::move(audioProcessor));
             auto* contextObserver = context.get();
             auto creatorFilter = makeCreatorFilter(
                 std::move(context), processAudioProcessingFrame);
@@ -1485,6 +1627,9 @@ core::Result<void> MltEditEngine::renderFrozen(
     const edit_engine::RenderRequest& request, std::stop_token stopToken,
     const std::function<bool(edit_engine::RenderJobState, double,
                              core::TimestampNs)>& report) {
+    if (stopToken.stop_requested()) {
+        return stateError("export cancelled before encoder preflight");
+    }
     const auto probeRoot = std::filesystem::temp_directory_path() /
                            ("creator-studio-export-preflight-" +
                             core::generateUuidV4());
@@ -1507,6 +1652,101 @@ core::Result<void> MltEditEngine::renderFrozen(
         return stateError("export cancelled during encoder preflight");
     }
 
+    constexpr double kMeasurementFraction = 0.1;
+    const double encodingStartFraction =
+        std::nextafter(kMeasurementFraction, 1.0);
+    if (impl_->config_.exportLoudnessNormalization.has_value()) {
+        auto format = audio_dsp::AudioFormat::create(48'000, 2);
+        if (!format.hasValue()) return format.error();
+        auto meter = audio_dsp::LoudnessMeter::create(format.value());
+        if (!meter.hasValue()) return meter.error();
+        auto analyzer = audio_dsp::ExportLoudnessAnalyzer::create(
+            *impl_->config_.exportLoudnessNormalization);
+        if (!analyzer.hasValue()) return analyzer.error();
+
+        auto measurementConfig = impl_->config_;
+        measurementConfig.renderLifecycle.reset();
+        measurementConfig.exportLoudnessNormalization.reset();
+        measurementConfig.appliedExportGainDb.reset();
+        // The first pass reads mixed audio only. Keeping the 1080p/2160p
+        // export profile here needlessly builds and retains full-size video
+        // composition buffers before the real encoding pass.
+        measurementConfig.previewWidth = 16;
+        measurementConfig.previewHeight = 16;
+        MltEditEngine measurement{std::move(measurementConfig)};
+        auto measuredGraph = measurement.impl_->loadSnapshot(
+            request.snapshot(), request.preset().frameRate());
+        if (!measuredGraph.hasValue()) return measuredGraph.error();
+        if (!measurement.impl_->graph_) {
+            return stateError("loudness measurement graph was not constructed");
+        }
+
+        const auto durationFrames = std::max<std::int64_t>(
+            measurement.impl_->graph_->durationFrames, 1);
+        const auto cadence = std::max<std::int64_t>(1, durationFrames / 1000);
+        for (std::int64_t frame = 0; frame < durationFrames; ++frame) {
+            if (stopToken.stop_requested()) {
+                return stateError("export cancelled during loudness measurement");
+            }
+            const auto firstSample = samplesAtTimelineFrame(
+                static_cast<std::uint64_t>(frame), 48'000,
+                request.preset().frameRate());
+            const auto nextSample = samplesAtTimelineFrame(
+                static_cast<std::uint64_t>(frame + 1), 48'000,
+                request.preset().frameRate());
+            if (!firstSample.has_value() || !nextSample.has_value() ||
+                *nextSample <= *firstSample ||
+                *nextSample - *firstSample >
+                    static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+                return stateError("loudness measurement sample range overflowed");
+            }
+            const auto requestedSamples =
+                static_cast<int>(*nextSample - *firstSample);
+            auto block = measurement.requestMixedAudio(
+                core::frameToTimestamp(frame, request.preset().frameRate()),
+                48'000, 2, requestedSamples);
+            if (!block.hasValue()) return block.error();
+            if (block.value().size() !=
+                static_cast<std::size_t>(requestedSamples) * 2U) {
+                return stateError(
+                    "loudness measurement returned an incomplete audio block");
+            }
+            audio_dsp::AudioBuffer view{block.value().data(),
+                                        block.value().size() / 2U,
+                                        format.value()};
+            auto added = meter.value().addBlock(view);
+            if (!added.hasValue()) return added.error();
+
+            if ((frame + 1) % cadence == 0 || frame + 1 == durationFrames) {
+                const double fraction = kMeasurementFraction *
+                    static_cast<double>(frame + 1) /
+                    static_cast<double>(durationFrames);
+                if (!report(edit_engine::RenderJobState::Running, fraction,
+                            core::TimestampNs{})) {
+                    return stateError("export measurement progress was rejected");
+                }
+                if (impl_->config_.renderLifecycle) {
+                    auto progress = edit_engine::RenderProgress::create(
+                        edit_engine::RenderJobState::Running, fraction,
+                        core::TimestampNs{}, renderDuration(request.snapshot()));
+                    if (!progress.hasValue()) return progress.error();
+                    auto recorded = impl_->config_.renderLifecycle->advance(
+                        request.jobId(), progress.value());
+                    if (!recorded.hasValue()) return recorded.error();
+                }
+            }
+        }
+        auto decision = analyzer.value().decide(meter.value());
+        if (!decision.hasValue()) return decision.error();
+        if (decision.value().shouldNormalize) {
+            impl_->config_.appliedExportGainDb = decision.value().gainDb;
+        } else {
+            impl_->config_.appliedExportGainDb.reset();
+        }
+        measurement.impl_->graph_.reset();
+        releaseTransientExportMemory();
+    }
+
     auto loaded = impl_->loadSnapshot(request.snapshot(),
                                       request.preset().frameRate());
     if (!loaded.hasValue()) return loaded;
@@ -1527,6 +1767,10 @@ core::Result<void> MltEditEngine::renderFrozen(
         }
         const auto& selected = encoder.value().selected;
         consumer.set("real_time", -1);
+        // MLT defaults to a 25-frame read-ahead queue. A 1080p composite
+        // frame can retain every source image, so that default duplicates
+        // close to a gigabyte while the editor graph remains open.
+        consumer.set("buffer", 1);
         consumer.set("terminate_on_pause", 1);
         consumer.set("f", "mp4");
         consumer.set("vcodec", selected.videoCodec.c_str());
@@ -1571,9 +1815,15 @@ core::Result<void> MltEditEngine::renderFrozen(
                 std::clamp<std::int64_t>(consumer.position(), 0,
                                          durationFrames));
             lastReportedPosition = position;
+            const double rawFraction =
+                static_cast<double>(position) /
+                static_cast<double>(durationFrames);
             const double fraction = std::min(
-                0.998, static_cast<double>(position) /
-                           static_cast<double>(durationFrames));
+                0.998,
+                impl_->config_.exportLoudnessNormalization.has_value()
+                    ? encodingStartFraction +
+                          (0.998 - encodingStartFraction) * rawFraction
+                    : rawFraction);
             const auto through = std::min(
                 core::frameToTimestamp(
                     position, request.snapshot().timeline.frameRate()),

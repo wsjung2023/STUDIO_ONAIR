@@ -58,6 +58,9 @@ public:
     [[nodiscard]] virtual core::Result<void> accept(const media::AudioBlock& block) = 0;
     [[nodiscard]] virtual core::Result<EncodedSegment> finish(core::TimestampNs endTime) = 0;
     virtual void abort() noexcept = 0;
+    [[nodiscard]] virtual SegmentContainer container() const noexcept {
+        return SegmentContainer::Matroska;
+    }
 
 protected:
     ITrackSegmentEncoder() = default;

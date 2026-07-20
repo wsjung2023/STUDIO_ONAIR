@@ -14,13 +14,20 @@
 
 namespace creator::app {
 
-enum class LiveRecordingOperationState { Idle, Preparing, Recording, Finalizing };
+enum class LiveRecordingOperationState {
+    Idle,
+    Preparing,
+    Recording,
+    Finalizing,
+    Paused
+};
 
 /// QML-facing owner of the production live recording lifecycle.
 class LiveRecordingController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool busy READ isBusy NOTIFY operationStateChanged)
     Q_PROPERTY(bool recording READ isRecording NOTIFY recordingChanged)
+    Q_PROPERTY(bool paused READ isPaused NOTIFY operationStateChanged)
     Q_PROPERTY(bool recordingAvailable READ recordingAvailable CONSTANT)
     Q_PROPERTY(int segmentCount READ segmentCount NOTIFY diagnosticsChanged)
     Q_PROPERTY(int trackCount READ trackCount NOTIFY diagnosticsChanged)
@@ -58,6 +65,9 @@ public:
     }
     [[nodiscard]] bool isBusy() const noexcept;
     [[nodiscard]] bool isRecording() const noexcept;
+    [[nodiscard]] bool isPaused() const noexcept {
+        return operationState_ == LiveRecordingOperationState::Paused;
+    }
     [[nodiscard]] bool recordingAvailable() const noexcept;
     [[nodiscard]] int segmentCount() const noexcept { return segmentCount_; }
     [[nodiscard]] int trackCount() const noexcept { return trackCount_; }
@@ -87,10 +97,15 @@ public:
     [[nodiscard]] qlonglong recordingStartedAtNs() const noexcept;
     [[nodiscard]] qlonglong recordingPositionNs() const noexcept;
     [[nodiscard]] QString statusMessage() const { return statusMessage_; }
+    [[nodiscard]] const LiveRecordingStart* activeRecordingStart() const noexcept {
+        return pendingStart_ ? &*pendingStart_ : nullptr;
+    }
 
     void setRecordingPreparation(RecordingPreparation preparation);
 
     Q_INVOKABLE void startRecording();
+    Q_INVOKABLE void pauseRecording();
+    Q_INVOKABLE void resumeRecording();
     Q_INVOKABLE void stopRecording();
 
 public slots:
@@ -108,6 +123,7 @@ signals:
 private:
     void handleBeginFinished(quint64 generation, domain::SessionId sessionId,
                              core::Result<void> result);
+    void beginRecording();
     void handlePreparationFinished(quint64 generation,
                                    domain::SessionId sessionId,
                                    core::Result<void> result);
@@ -118,6 +134,7 @@ private:
                                    domain::SessionId sessionId,
                                    core::Result<void> result);
     void abortStartedSession(core::AppError error);
+    void finalizeActiveRecording(QString statusMessage);
     void setOperationState(LiveRecordingOperationState state);
     void setStatusMessage(QString message);
     void resetDiagnostics();
@@ -132,6 +149,7 @@ private:
     std::optional<LiveRecordingStart> pendingStart_;
     std::optional<LiveRecordingCompletion> pendingCompletion_;
     std::optional<core::AppError> pendingTerminalError_;
+    bool pauseRequested_{false};
     quint64 generation_{0};
     int segmentCount_{0};
     int trackCount_{0};

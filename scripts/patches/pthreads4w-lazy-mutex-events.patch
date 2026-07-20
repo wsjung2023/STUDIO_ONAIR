@@ -1,0 +1,239 @@
+diff --git a/implement.h b/implement.h
+index 78623e9..3fd247c 100644
+--- a/implement.h
++++ b/implement.h
+@@ -274,6 +274,32 @@ struct pthread_mutex_t_
+                     robustNode; /* Extra state for robust mutexes  */
+ };
+ 
++static HANDLE
++__ptw32_mutex_get_event (pthread_mutex_t mx)
++{
++  HANDLE event = (HANDLE) InterlockedCompareExchangePointer (
++      (PVOID volatile *) &mx->event, NULL, NULL);
++  if (event == NULL)
++    {
++      HANDLE candidate = CreateEvent (NULL, __PTW32_FALSE, __PTW32_FALSE, NULL);
++      if (candidate == NULL)
++        {
++          return NULL;
++        }
++      event = (HANDLE) InterlockedCompareExchangePointer (
++          (PVOID volatile *) &mx->event, candidate, NULL);
++      if (event != NULL)
++        {
++          CloseHandle (candidate);
++        }
++      else
++        {
++          event = candidate;
++        }
++    }
++  return event;
++}
++
+ enum __ptw32_robust_state_t_
+ {
+    __PTW32_ROBUST_CONSISTENT,
+diff --git a/pthread_mutex_destroy.c b/pthread_mutex_destroy.c
+index 688201f..00719fd 100644
+--- a/pthread_mutex_destroy.c
++++ b/pthread_mutex_destroy.c
+@@ -84,7 +84,7 @@ pthread_mutex_destroy (pthread_mutex_t * mutex)
+                     {
+                       free(mx->robustNode);
+                     }
+-		  if (!CloseHandle (mx->event))
++                  if (mx->event != NULL && !CloseHandle (mx->event))
+ 		    {
+ 		      *mutex = mx;
+ 		      result = EINVAL;
+diff --git a/pthread_mutex_init.c b/pthread_mutex_init.c
+index bc61dfc..3a45150 100644
+--- a/pthread_mutex_init.c
++++ b/pthread_mutex_init.c
+@@ -123,14 +123,7 @@ pthread_mutex_init (pthread_mutex_t * mutex, const pthread_mutexattr_t * attr)
+ 	{
+ 	  mx->ownerThread.p = NULL;
+ 
+-	  mx->event = CreateEvent (NULL,  __PTW32_FALSE,    /* manual reset = No */
+-				    __PTW32_FALSE,           /* initial state = not signalled */
+-				   NULL);                 /* event name */
+-
+-	  if (0 == mx->event)
+-	    {
+-	      result = ENOSPC;
+-	    }
++          mx->event = NULL;
+ 	}
+     }
+ 
+diff --git a/pthread_mutex_lock.c b/pthread_mutex_lock.c
+index fcfedaa..43a93e2 100644
+--- a/pthread_mutex_lock.c
++++ b/pthread_mutex_lock.c
+@@ -87,7 +87,7 @@ pthread_mutex_lock (pthread_mutex_t * mutex)
+                                (__PTW32_INTERLOCKED_LONGPTR) &mx->lock_idx,
+ 			       (__PTW32_INTERLOCKED_LONG) -1) != 0)
+ 	        {
+-	          if (WAIT_OBJECT_0 != WaitForSingleObject (mx->event, INFINITE))
++                  if (WAIT_OBJECT_0 != WaitForSingleObject (__ptw32_mutex_get_event (mx), INFINITE))
+ 	            {
+ 	              result = EINVAL;
+ 		      break;
+@@ -126,7 +126,7 @@ pthread_mutex_lock (pthread_mutex_t * mutex)
+                                    (__PTW32_INTERLOCKED_LONGPTR) &mx->lock_idx,
+ 			           (__PTW32_INTERLOCKED_LONG) -1) != 0)
+ 		    {
+-	              if (WAIT_OBJECT_0 != WaitForSingleObject (mx->event, INFINITE))
++                      if (WAIT_OBJECT_0 != WaitForSingleObject (__ptw32_mutex_get_event (mx), INFINITE))
+ 		        {
+ 	                  result = EINVAL;
+ 		          break;
+@@ -174,7 +174,7 @@ pthread_mutex_lock (pthread_mutex_t * mutex)
+                                         (__PTW32_INTERLOCKED_LONGPTR) &mx->lock_idx,
+                                         (__PTW32_INTERLOCKED_LONG) -1) != 0)
+                     {
+-                      if (WAIT_OBJECT_0 != WaitForSingleObject (mx->event, INFINITE))
++                      if (WAIT_OBJECT_0 != WaitForSingleObject (__ptw32_mutex_get_event (mx), INFINITE))
+                         {
+                           result = EINVAL;
+                           break;
+@@ -185,7 +185,7 @@ pthread_mutex_lock (pthread_mutex_t * mutex)
+                                      (__PTW32_INTERLOCKED_LONG)0))
+                         {
+                           /* Unblock the next thread */
+-                          SetEvent(mx->event);
++                          SetEvent (__ptw32_mutex_get_event (mx));
+                           result = ENOTRECOVERABLE;
+                           break;
+                         }
+@@ -234,7 +234,7 @@ pthread_mutex_lock (pthread_mutex_t * mutex)
+                                             (__PTW32_INTERLOCKED_LONGPTR) &mx->lock_idx,
+                                             (__PTW32_INTERLOCKED_LONG) -1) != 0)
+                         {
+-                          if (WAIT_OBJECT_0 != WaitForSingleObject (mx->event, INFINITE))
++                          if (WAIT_OBJECT_0 != WaitForSingleObject (__ptw32_mutex_get_event (mx), INFINITE))
+                             {
+                               result = EINVAL;
+                               break;
+@@ -245,7 +245,7 @@ pthread_mutex_lock (pthread_mutex_t * mutex)
+                                          (__PTW32_INTERLOCKED_LONG)0))
+                             {
+                               /* Unblock the next thread */
+-                              SetEvent(mx->event);
++                              SetEvent (__ptw32_mutex_get_event (mx));
+                               result = ENOTRECOVERABLE;
+                               break;
+                             }
+diff --git a/pthread_mutex_timedlock.c b/pthread_mutex_timedlock.c
+index 10d5bd1..2c7ab22 100644
+--- a/pthread_mutex_timedlock.c
++++ b/pthread_mutex_timedlock.c
+@@ -151,7 +151,7 @@ pthread_mutex_timedlock (pthread_mutex_t * mutex,
+                                (__PTW32_INTERLOCKED_LONGPTR) &mx->lock_idx,
+ 			       (__PTW32_INTERLOCKED_LONG) -1) != 0)
+                 {
+-	          if (0 != (result = __ptw32_timed_eventwait (mx->event, abstime)))
++                  if (0 != (result = __ptw32_timed_eventwait (__ptw32_mutex_get_event (mx), abstime)))
+ 		    {
+ 		      return result;
+ 		    }
+@@ -189,7 +189,7 @@ pthread_mutex_timedlock (pthread_mutex_t * mutex,
+                                    (__PTW32_INTERLOCKED_LONGPTR) &mx->lock_idx,
+ 			           (__PTW32_INTERLOCKED_LONG) -1) != 0)
+                     {
+-		      if (0 != (result = __ptw32_timed_eventwait (mx->event, abstime)))
++                      if (0 != (result = __ptw32_timed_eventwait (__ptw32_mutex_get_event (mx), abstime)))
+ 		        {
+ 		          return result;
+ 		        }
+@@ -233,7 +233,7 @@ pthread_mutex_timedlock (pthread_mutex_t * mutex,
+                                    (__PTW32_INTERLOCKED_LONGPTR) &mx->lock_idx,
+ 			           (__PTW32_INTERLOCKED_LONG) -1) != 0)
+                     {
+-	              if (0 != (result = __ptw32_timed_eventwait (mx->event, abstime)))
++                      if (0 != (result = __ptw32_timed_eventwait (__ptw32_mutex_get_event (mx), abstime)))
+ 		        {
+ 		          return result;
+ 		        }
+@@ -243,7 +243,7 @@ pthread_mutex_timedlock (pthread_mutex_t * mutex,
+                                      (__PTW32_INTERLOCKED_LONG)0))
+                         {
+                           /* Unblock the next thread */
+-                          SetEvent(mx->event);
++                          SetEvent (__ptw32_mutex_get_event (mx));
+                           result = ENOTRECOVERABLE;
+                           break;
+                         }
+@@ -295,7 +295,7 @@ pthread_mutex_timedlock (pthread_mutex_t * mutex,
+                                            (__PTW32_INTERLOCKED_LONGPTR) &mx->lock_idx,
+ 			                   (__PTW32_INTERLOCKED_LONG) -1) != 0)
+                         {
+-		          if (0 != (result = __ptw32_timed_eventwait (mx->event, abstime)))
++                          if (0 != (result = __ptw32_timed_eventwait (__ptw32_mutex_get_event (mx), abstime)))
+ 		            {
+ 		              return result;
+ 		            }
+@@ -307,7 +307,7 @@ pthread_mutex_timedlock (pthread_mutex_t * mutex,
+                                      (__PTW32_INTERLOCKED_LONG)0))
+                         {
+                           /* Unblock the next thread */
+-                          SetEvent(mx->event);
++                          SetEvent (__ptw32_mutex_get_event (mx));
+                           result = ENOTRECOVERABLE;
+                         }
+                       else if (0 == result || EOWNERDEAD == result)
+diff --git a/pthread_mutex_unlock.c b/pthread_mutex_unlock.c
+index 740f443..afbb93c 100644
+--- a/pthread_mutex_unlock.c
++++ b/pthread_mutex_unlock.c
+@@ -74,7 +74,7 @@ pthread_mutex_unlock (pthread_mutex_t * mutex)
+ 		      /*
+ 		       * Someone may be waiting on that mutex.
+ 		       */
+-		      if (SetEvent (mx->event) == 0)
++                      if (SetEvent (__ptw32_mutex_get_event (mx)) == 0)
+ 		        {
+ 		          result = EINVAL;
+ 		        }
+@@ -94,7 +94,7 @@ pthread_mutex_unlock (pthread_mutex_t * mutex)
+ 						           (__PTW32_INTERLOCKED_LONG)0) < 0L)
+ 		        {
+ 		          /* Someone may be waiting on that mutex */
+-		          if (SetEvent (mx->event) == 0)
++                          if (SetEvent (__ptw32_mutex_get_event (mx)) == 0)
+ 			    {
+ 			      result = EINVAL;
+ 			    }
+@@ -132,7 +132,7 @@ pthread_mutex_unlock (pthread_mutex_t * mutex)
+                       /*
+                        * Someone may be waiting on that mutex.
+                        */
+-                      if (SetEvent (mx->event) == 0)
++                      if (SetEvent (__ptw32_mutex_get_event (mx)) == 0)
+                         {
+                           result = EINVAL;
+                         }
+@@ -151,7 +151,7 @@ pthread_mutex_unlock (pthread_mutex_t * mutex)
+                           /*
+                            * Someone may be waiting on that mutex.
+                            */
+-                          if (SetEvent (mx->event) == 0)
++                          if (SetEvent (__ptw32_mutex_get_event (mx)) == 0)
+                             {
+                               result = EINVAL;
+                             }
+diff --git a/pthread_win32_attach_detach_np.c b/pthread_win32_attach_detach_np.c
+index b7f16cb..8f5af15 100644
+--- a/pthread_win32_attach_detach_np.c
++++ b/pthread_win32_attach_detach_np.c
+@@ -243,7 +243,7 @@ pthread_win32_thread_detach_np ()
+                * sleep, wake up immediately and then go back to sleep.
+                * See pthread_mutex_lock.c.
+                */
+-              SetEvent(mx->event);
++              SetEvent (__ptw32_mutex_get_event (mx));
+             }
+ 
+ 

@@ -25,7 +25,11 @@ public:
 
 private:
     std::shared_ptr<IVideoFrameSink> primary_;
+#if defined(_MSC_VER)
     std::atomic<std::shared_ptr<IVideoFrameSink>> secondary_;
+#else
+    std::shared_ptr<IVideoFrameSink> secondary_;
+#endif
 };
 
 /// Audio counterpart of VideoFrameFanoutSink. The primary mailbox continues
@@ -42,7 +46,11 @@ public:
 
 private:
     std::shared_ptr<IAudioBlockSink> primary_;
+#if defined(_MSC_VER)
     std::atomic<std::shared_ptr<IAudioBlockSink>> secondary_;
+#else
+    std::shared_ptr<IAudioBlockSink> secondary_;
+#endif
 };
 
 }  // namespace creator::capture

@@ -5,8 +5,11 @@ import CreatorStudio.Native 1.0
 
 Item {
     id: root
+    readonly property bool compact: width < 700
+    property string compactSection: "preview"
 
     required property var controller
+    property var intelligenceController: null
     readonly property real nanosecondsPerPixel: 10000000
     readonly property bool editingReady: controller.timelineRevision >= 0
                                          && !controller.busy
@@ -369,13 +372,38 @@ Item {
             }
         }
 
+        TabBar {
+            objectName: "editorCompactTabs"
+            visible: root.compact
+            Layout.fillWidth: true
+            Layout.preferredHeight: visible ? implicitHeight : 0
+            TabButton {
+                text: qsTr("Media")
+                checked: root.compactSection === "media"
+                onClicked: root.compactSection = "media"
+            }
+            TabButton {
+                text: qsTr("Preview")
+                checked: root.compactSection === "preview"
+                onClicked: root.compactSection = "preview"
+            }
+            TabButton {
+                text: qsTr("Inspector")
+                checked: root.compactSection === "inspector"
+                onClicked: root.compactSection = "inspector"
+            }
+        }
+
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 1
 
             Pane {
-                Layout.preferredWidth: 280
+                objectName: "editorMediaPane"
+                visible: !root.compact || root.compactSection === "media"
+                Layout.preferredWidth: root.compact ? parent.width : 280
+                Layout.fillWidth: root.compact
                 Layout.fillHeight: true
 
                 ColumnLayout {
@@ -434,6 +462,8 @@ Item {
             }
 
             Rectangle {
+                objectName: "editorPreviewPane"
+                visible: !root.compact || root.compactSection === "preview"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 color: "#171a1f"
@@ -471,7 +501,10 @@ Item {
             }
 
             Pane {
-                Layout.preferredWidth: 340
+                objectName: "editorInspectorPane"
+                visible: !root.compact || root.compactSection === "inspector"
+                Layout.preferredWidth: root.compact ? parent.width : 340
+                Layout.fillWidth: root.compact
                 Layout.fillHeight: true
 
                 ScrollView {
@@ -858,6 +891,112 @@ Item {
                                 text: qsTr("Transcript / captions")
                                 font.bold: true
                             }
+                            ColumnLayout {
+                                objectName: "editorLocalAiPanel"
+                                Layout.fillWidth: true
+                                visible: root.intelligenceController !== null
+                                spacing: 4
+
+                                Label {
+                                    text: qsTr("Local AI proposals")
+                                    font.bold: true
+                                }
+                                Label {
+                                    objectName: "editorLocalAiStatus"
+                                    Layout.fillWidth: true
+                                    text: root.intelligenceController
+                                          ? root.intelligenceController.statusMessage : ""
+                                    wrapMode: Text.Wrap
+                                    color: "#aeb7c4"
+                                }
+                                RowLayout {
+                                    Button {
+                                        objectName: "editorLocalAiAnalyzeButton"
+                                        text: qsTr("Analyze locally")
+                                        enabled: root.editingReady
+                                                 && root.intelligenceController
+                                                 && !root.intelligenceController.busy
+                                        Accessible.name: qsTr("Analyze project locally")
+                                        onClicked: root.intelligenceController.analyzeProject()
+                                    }
+                                    Button {
+                                        objectName: "editorLocalAiCancelButton"
+                                        text: qsTr("Cancel")
+                                        enabled: root.intelligenceController
+                                                 && root.intelligenceController.busy
+                                        Accessible.name: qsTr("Cancel local AI analysis")
+                                        onClicked: root.intelligenceController.cancelAnalysis()
+                                    }
+                                    Button {
+                                        objectName: "editorLocalAiRejectButton"
+                                        text: qsTr("Discard")
+                                        enabled: root.intelligenceController
+                                                 && root.intelligenceController.hasPendingProposal
+                                        Accessible.name: qsTr("Discard local AI proposals")
+                                        onClicked: root.intelligenceController.rejectProposal()
+                                    }
+                                }
+                                ListView {
+                                    id: localAiTranscriptList
+                                    objectName: "editorLocalAiTranscriptList"
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: count > 0 ? 72 : 0
+                                    clip: true
+                                    model: root.intelligenceController
+                                           ? root.intelligenceController.transcriptProposal : []
+                                    delegate: Label {
+                                        required property var modelData
+                                        width: localAiTranscriptList.width
+                                        text: modelData.text
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                                Button {
+                                    objectName: "editorLocalAiApproveTranscriptButton"
+                                    text: qsTr("Approve transcript")
+                                    enabled: root.intelligenceController
+                                             && localAiTranscriptList.count > 0
+                                    Accessible.name: qsTr("Approve local AI transcript")
+                                    onClicked: root.intelligenceController.approveTranscript()
+                                }
+                                ListView {
+                                    id: localAiCutList
+                                    objectName: "editorLocalAiCutList"
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: count > 0 ? 110 : 0
+                                    clip: true
+                                    model: root.intelligenceController
+                                           ? root.intelligenceController.cutSuggestions : []
+                                    delegate: RowLayout {
+                                        required property var modelData
+                                        required property int index
+                                        width: localAiCutList.width
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: qsTr("%1 · %2 ms · %3%")
+                                                  .arg(modelData.reason)
+                                                  .arg(Math.round(modelData.durationNs / 1000000))
+                                                  .arg(Math.round(modelData.score * 100))
+                                        }
+                                        Button {
+                                            objectName: "editorLocalAiApproveCut-" + index
+                                            text: qsTr("Apply")
+                                            enabled: root.editingReady
+                                            Accessible.name: qsTr("Approve suggested cut")
+                                            onClicked: root.intelligenceController.approveCut(index)
+                                        }
+                                    }
+                                }
+                                Button {
+                                    objectName: "editorLocalAiApproveFirstCutButton"
+                                    text: qsTr("Apply first suggested cut")
+                                    enabled: root.editingReady
+                                             && localAiCutList.count > 0
+                                    visible: localAiCutList.count > 0
+                                    Accessible.name: qsTr("Approve first suggested cut")
+                                    onClicked: root.intelligenceController.approveCut(0)
+                                }
+                            }
                             Label {
                                 objectName: "editorTranscriptPanelHint"
                                 Layout.fillWidth: true
@@ -998,7 +1137,7 @@ Item {
 
         Pane {
             Layout.fillWidth: true
-            Layout.preferredHeight: 270
+            Layout.preferredHeight: root.compact ? 180 : 270
             padding: 6
 
             Flickable {

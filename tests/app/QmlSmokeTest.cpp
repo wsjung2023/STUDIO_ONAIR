@@ -107,6 +107,10 @@ class FakeExportController final : public QObject {
     Q_PROPERTY(int state READ state NOTIFY changed)
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY changed)
     Q_PROPERTY(bool ready READ ready NOTIFY changed)
+    Q_PROPERTY(quint32 maximumExportHeight READ maximumExportHeight NOTIFY changed)
+    Q_PROPERTY(bool foregroundExportRequired READ foregroundExportRequired NOTIFY changed)
+    Q_PROPERTY(bool exportAllowed READ exportAllowed NOTIFY changed)
+    Q_PROPERTY(bool applicationActive READ applicationActive NOTIFY changed)
 
 public:
     using QObject::QObject;
@@ -118,12 +122,26 @@ public:
         return busy_ ? QStringLiteral("Exporting") : QString{};
     }
     [[nodiscard]] bool ready() const noexcept { return true; }
+    [[nodiscard]] quint32 maximumExportHeight() const noexcept {
+        return maximumExportHeight_;
+    }
+    [[nodiscard]] bool foregroundExportRequired() const noexcept { return true; }
+    [[nodiscard]] bool exportAllowed() const noexcept { return exportAllowed_; }
+    [[nodiscard]] bool applicationActive() const noexcept { return applicationActive_; }
     Q_INVOKABLE void exportTo(const QUrl&, const QString&, bool) {
         ++exportCalls_;
     }
     Q_INVOKABLE void cancelExport() { ++cancelCalls_; }
     void setBusy(bool value) {
         busy_ = value;
+        emit changed();
+    }
+    void setMaximumExportHeight(quint32 value) {
+        maximumExportHeight_ = value;
+        emit changed();
+    }
+    void setExportAllowed(bool value) {
+        exportAllowed_ = value;
         emit changed();
     }
     [[nodiscard]] int exportCalls() const noexcept { return exportCalls_; }
@@ -134,14 +152,65 @@ signals:
 
 private:
     bool busy_{};
+    quint32 maximumExportHeight_{2'160};
+    bool exportAllowed_{true};
+    bool applicationActive_{true};
     int exportCalls_{};
     int cancelCalls_{};
+};
+
+class FakeCommercialControlsController final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(QString entitlementState READ entitlementState NOTIFY changed)
+    Q_PROPERTY(QString entitlementReason READ entitlementReason NOTIFY changed)
+    Q_PROPERTY(bool diagnosticsConsent READ diagnosticsConsent NOTIFY changed)
+    Q_PROPERTY(bool busy READ busy NOTIFY changed)
+    Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY changed)
+
+public:
+    using QObject::QObject;
+    [[nodiscard]] QString entitlementState() const {
+        return QStringLiteral("active");
+    }
+    [[nodiscard]] QString entitlementReason() const {
+        return QStringLiteral("community-development-build");
+    }
+    [[nodiscard]] bool diagnosticsConsent() const noexcept { return consent_; }
+    [[nodiscard]] bool busy() const noexcept { return false; }
+    [[nodiscard]] QString statusMessage() const { return {}; }
+    Q_INVOKABLE void setDiagnosticsConsent(bool consent) {
+        ++consentCalls_;
+        consent_ = consent;
+        emit changed();
+    }
+    Q_INVOKABLE void signOut() { ++signOutCalls_; }
+    Q_INVOKABLE void deleteLocalAccountData(bool confirmed) {
+        ++deleteCalls_;
+        lastDeleteConfirmed_ = confirmed;
+    }
+    [[nodiscard]] int consentCalls() const noexcept { return consentCalls_; }
+    [[nodiscard]] int signOutCalls() const noexcept { return signOutCalls_; }
+    [[nodiscard]] int deleteCalls() const noexcept { return deleteCalls_; }
+    [[nodiscard]] bool lastDeleteConfirmed() const noexcept {
+        return lastDeleteConfirmed_;
+    }
+
+signals:
+    void changed();
+
+private:
+    bool consent_{false};
+    int consentCalls_{0};
+    int signOutCalls_{0};
+    int deleteCalls_{0};
+    bool lastDeleteConfirmed_{false};
 };
 
 class FakeStudioController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
     Q_PROPERTY(bool recording READ recording NOTIFY stateChanged)
+    Q_PROPERTY(bool paused READ paused NOTIFY stateChanged)
     Q_PROPERTY(bool recordingAvailable READ recordingAvailable CONSTANT)
     Q_PROPERTY(int segmentCount READ segmentCount CONSTANT)
     Q_PROPERTY(int trackCount READ trackCount CONSTANT)
@@ -161,6 +230,7 @@ public:
     using QObject::QObject;
     [[nodiscard]] bool busy() const noexcept { return busy_; }
     [[nodiscard]] bool recording() const noexcept { return recording_; }
+    [[nodiscard]] bool paused() const noexcept { return paused_; }
     [[nodiscard]] bool recordingAvailable() const noexcept { return true; }
     [[nodiscard]] int segmentCount() const noexcept { return 1; }
     [[nodiscard]] int trackCount() const noexcept { return 2; }
@@ -179,11 +249,25 @@ public:
     [[nodiscard]] qlonglong recordingPositionNs() const noexcept { return 777; }
     Q_INVOKABLE void startRecording() {
         ++startCalls_;
+        paused_ = false;
         setRecording(true);
     }
     Q_INVOKABLE void stopRecording() {
         ++stopCalls_;
+        paused_ = false;
         setRecording(false);
+    }
+    Q_INVOKABLE void pauseRecording() {
+        ++pauseCalls_;
+        recording_ = false;
+        paused_ = true;
+        emit stateChanged();
+    }
+    Q_INVOKABLE void resumeRecording() {
+        ++resumeCalls_;
+        paused_ = false;
+        recording_ = true;
+        emit stateChanged();
     }
     void setBusy(bool busy) {
         if (busy_ == busy) return;
@@ -197,6 +281,8 @@ public:
     }
     [[nodiscard]] int startCalls() const noexcept { return startCalls_; }
     [[nodiscard]] int stopCalls() const noexcept { return stopCalls_; }
+    [[nodiscard]] int pauseCalls() const noexcept { return pauseCalls_; }
+    [[nodiscard]] int resumeCalls() const noexcept { return resumeCalls_; }
 
 signals:
     void stateChanged();
@@ -204,8 +290,28 @@ signals:
 private:
     bool busy_{false};
     bool recording_{false};
+    bool paused_{false};
     int startCalls_{0};
     int stopCalls_{0};
+    int pauseCalls_{0};
+    int resumeCalls_{0};
+};
+
+class FakeCursorRecordingController final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(bool available READ available CONSTANT)
+    Q_PROPERTY(bool active READ active CONSTANT)
+    Q_PROPERTY(qulonglong eventCount READ eventCount CONSTANT)
+    Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
+
+public:
+    using QObject::QObject;
+    [[nodiscard]] bool available() const noexcept { return true; }
+    [[nodiscard]] bool active() const noexcept { return true; }
+    [[nodiscard]] qulonglong eventCount() const noexcept { return 42; }
+    [[nodiscard]] QString statusMessage() const {
+        return QStringLiteral("Cursor data: recording");
+    }
 };
 
 class FakeShortcutSettingsController final : public QObject {
@@ -1007,6 +1113,55 @@ private:
     int captionRemoveCalls_{0};
 };
 
+class FakeIntelligenceController final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(bool busy READ busy NOTIFY changed)
+    Q_PROPERTY(bool hasPendingProposal READ hasPendingProposal NOTIFY changed)
+    Q_PROPERTY(QVariantList transcriptProposal READ transcriptProposal NOTIFY changed)
+    Q_PROPERTY(QVariantList cutSuggestions READ cutSuggestions NOTIFY changed)
+    Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY changed)
+public:
+    bool busy() const noexcept { return false; }
+    bool hasPendingProposal() const noexcept { return true; }
+    QVariantList transcriptProposal() const {
+        return {QVariantMap{{QStringLiteral("text"),
+                             QStringLiteral("Local transcript proposal")}}};
+    }
+    QVariantList cutSuggestions() const {
+        return {QVariantMap{{QStringLiteral("reason"), QStringLiteral("silence")},
+                            {QStringLiteral("durationNs"), 600'000'000LL},
+                            {QStringLiteral("score"), 0.9}}};
+    }
+    QString statusMessage() const {
+        return QStringLiteral("Review before applying");
+    }
+    Q_INVOKABLE bool analyzeProject() {
+        ++analyzeCalls_;
+        return true;
+    }
+    Q_INVOKABLE void cancelAnalysis() { ++cancelCalls_; }
+    Q_INVOKABLE void rejectProposal() { ++rejectCalls_; }
+    Q_INVOKABLE bool approveTranscript() {
+        ++transcriptCalls_;
+        return true;
+    }
+    Q_INVOKABLE bool approveCut(int index) {
+        approvedCutIndex_ = index;
+        return true;
+    }
+    int analyzeCalls() const noexcept { return analyzeCalls_; }
+    int transcriptCalls() const noexcept { return transcriptCalls_; }
+    int approvedCutIndex() const noexcept { return approvedCutIndex_; }
+signals:
+    void changed();
+private:
+    int analyzeCalls_{};
+    int cancelCalls_{};
+    int rejectCalls_{};
+    int transcriptCalls_{};
+    int approvedCutIndex_{-1};
+};
+
 TEST(QmlSmokeTest, RecoveryPageLoadsWithProjectControllerContract) {
     QQmlEngine engine;
     FakeProjectController controller;
@@ -1030,6 +1185,7 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
     FakeStudioWorkflowController studioWorkflowController;
     FakeShortcutSettingsController shortcutSettingsController;
     FakeExportController exportController;
+    FakeCommercialControlsController commercialControlsController;
     engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
                                              &projectController);
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
@@ -1046,6 +1202,9 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
         QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
     engine.rootContext()->setContextProperty(QStringLiteral("exportController"),
                                              &exportController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("commercialControlsController"),
+        &commercialControlsController);
     QQmlComponent component{
         &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/Main.qml"))};
 
@@ -1065,6 +1224,7 @@ TEST(QmlSmokeTest, MainRecordShortcutSharesVisibleActionAndStateGuard) {
     FakeStudioWorkflowController studioWorkflowController;
     FakeShortcutSettingsController shortcutSettingsController;
     FakeExportController exportController;
+    FakeCommercialControlsController commercialControlsController;
     projectController.setHasOpenProject(true);
     engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
                                              &projectController);
@@ -1082,6 +1242,9 @@ TEST(QmlSmokeTest, MainRecordShortcutSharesVisibleActionAndStateGuard) {
         QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
     engine.rootContext()->setContextProperty(QStringLiteral("exportController"),
                                              &exportController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("commercialControlsController"),
+        &commercialControlsController);
     QQmlComponent component{
         &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/Main.qml"))};
     std::unique_ptr<QObject> object{component.create()};
@@ -1092,15 +1255,31 @@ TEST(QmlSmokeTest, MainRecordShortcutSharesVisibleActionAndStateGuard) {
     auto* action = object->findChild<QObject*>(QStringLiteral("studioRecordAction"));
     auto* button = object->findChild<QObject*>(QStringLiteral("studioRecordButton"));
     auto* shortcut = object->findChild<QObject*>(QStringLiteral("studioRecordShortcut"));
+    auto* pauseAction =
+        object->findChild<QObject*>(QStringLiteral("studioPauseAction"));
+    auto* pauseButton =
+        object->findChild<QObject*>(QStringLiteral("studioPauseButton"));
     ASSERT_NE(action, nullptr);
     ASSERT_NE(button, nullptr);
     ASSERT_NE(shortcut, nullptr);
+    ASSERT_NE(pauseAction, nullptr);
+    ASSERT_NE(pauseButton, nullptr);
     EXPECT_EQ(button->property("action").value<QObject*>(), action);
     EXPECT_TRUE(action->property("enabled").toBool());
     EXPECT_TRUE(shortcut->property("enabled").toBool());
+    EXPECT_FALSE(pauseAction->property("enabled").toBool());
 
     ASSERT_TRUE(QMetaObject::invokeMethod(action, "trigger"));
     EXPECT_EQ(studioController.startCalls(), 1);
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(pauseAction->property("enabled").toBool());
+    EXPECT_EQ(pauseButton->property("action").value<QObject*>(), pauseAction);
+    ASSERT_TRUE(QMetaObject::invokeMethod(pauseAction, "trigger"));
+    EXPECT_EQ(studioController.pauseCalls(), 1);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(pauseAction->property("text").toString(), QStringLiteral("Resume"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(pauseAction, "trigger"));
+    EXPECT_EQ(studioController.resumeCalls(), 1);
     studioController.setRecording(false);
     ASSERT_TRUE(QMetaObject::invokeMethod(shortcut, "activated"));
     EXPECT_EQ(studioController.startCalls(), 2);
@@ -1109,6 +1288,71 @@ TEST(QmlSmokeTest, MainRecordShortcutSharesVisibleActionAndStateGuard) {
     QCoreApplication::processEvents();
     EXPECT_FALSE(action->property("enabled").toBool());
     EXPECT_FALSE(shortcut->property("enabled").toBool());
+}
+
+TEST(QmlSmokeTest, SettingsExposesPrivacyAndTwoStepDeletionAtCompactSize) {
+    QQmlEngine engine;
+    FakeCommercialControlsController controller;
+    QQmlComponent component{
+        &engine,
+        QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/SettingsPage.qml"))};
+    QVariantMap initialProperties{
+        {QStringLiteral("controller"),
+         QVariant::fromValue(static_cast<QObject*>(&controller))},
+        {QStringLiteral("width"), 360},
+        {QStringLiteral("height"), 640}};
+    std::unique_ptr<QObject> object{
+        component.createWithInitialProperties(initialProperties)};
+
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    auto* status = object->findChild<QObject*>(
+        QStringLiteral("settingsEntitlementStatus"));
+    auto* content = object->findChild<QObject*>(QStringLiteral("settingsContent"));
+    auto* consent = object->findChild<QObject*>(
+        QStringLiteral("settingsDiagnosticsConsent"));
+    auto* signOut = object->findChild<QObject*>(
+        QStringLiteral("settingsSignOutButton"));
+    auto* reveal = object->findChild<QObject*>(
+        QStringLiteral("settingsDeleteRevealButton"));
+    auto* confirmation = object->findChild<QObject*>(
+        QStringLiteral("settingsDeleteConfirmation"));
+    auto* confirm = object->findChild<QObject*>(
+        QStringLiteral("settingsDeleteConfirmButton"));
+    ASSERT_NE(status, nullptr);
+    ASSERT_NE(content, nullptr);
+    ASSERT_NE(consent, nullptr);
+    ASSERT_NE(signOut, nullptr);
+    ASSERT_NE(reveal, nullptr);
+    ASSERT_NE(confirmation, nullptr);
+    ASSERT_NE(confirm, nullptr);
+    EXPECT_TRUE(status->property("text").toString().contains(
+        QStringLiteral("active"), Qt::CaseInsensitive));
+    EXPECT_FALSE(consent->property("checked").toBool());
+    EXPECT_FALSE(confirmation->property("visible").toBool());
+    EXPECT_EQ(object->property("width").toInt(), 360);
+    EXPECT_EQ(object->property("height").toInt(), 640);
+    EXPECT_GE(content->property("x").toDouble(), 0.0);
+    EXPECT_LE(content->property("x").toDouble() +
+                  content->property("width").toDouble(),
+              360.0);
+    EXPECT_EQ(object->findChild<QObject*>(QStringLiteral("settingsPurchaseButton")),
+              nullptr);
+
+    ASSERT_TRUE(consent->setProperty("checked", true));
+    ASSERT_TRUE(QMetaObject::invokeMethod(consent, "toggled"));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(controller.consentCalls(), 1);
+    EXPECT_TRUE(consent->property("checked").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(signOut, "clicked"));
+    EXPECT_EQ(controller.signOutCalls(), 1);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(reveal, "clicked"));
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(confirmation->property("visible").toBool());
+    EXPECT_EQ(controller.deleteCalls(), 0);
+    ASSERT_TRUE(QMetaObject::invokeMethod(confirm, "clicked"));
+    EXPECT_EQ(controller.deleteCalls(), 1);
+    EXPECT_TRUE(controller.lastDeleteConfirmed());
 }
 
 TEST(QmlSmokeTest, ExportPageExposesProductPresetsProgressAndCancellation) {
@@ -1149,6 +1393,14 @@ TEST(QmlSmokeTest, ExportPageExposesProductPresetsProgressAndCancellation) {
     EXPECT_DOUBLE_EQ(progress->property("value").toDouble(), 0.4);
     ASSERT_TRUE(QMetaObject::invokeMethod(cancel, "clicked"));
     EXPECT_EQ(controller.cancelCalls(), 1);
+
+    controller.setBusy(false);
+    controller.setMaximumExportHeight(1'080);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(preset->property("count").toInt(), 1);
+    controller.setExportAllowed(false);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(start->property("enabled").toBool());
 }
 
 TEST(QmlSmokeTest, EditorPageRendersTypedModelsAndPreviewState) {
@@ -1214,6 +1466,49 @@ TEST(QmlSmokeTest, EditorPageRendersTypedModelsAndPreviewState) {
     seekSlider->setProperty("value", 1'500'000'000);
     ASSERT_TRUE(QMetaObject::invokeMethod(seekSlider, "moved"));
     EXPECT_EQ(controller.lastSeekNs(), 1'500'000'000);
+}
+
+TEST(QmlSmokeTest, EditorPageExposesCompactTouchWorkspaceAtPhoneSize) {
+    QQmlEngine engine;
+    FakeEditorController controller;
+    QSignalSpy warningSpy{&engine, &QQmlEngine::warnings};
+    QQmlComponent component{
+        &engine,
+        QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/EditorPage.qml"))};
+    QVariantMap initialProperties{
+        {QStringLiteral("controller"),
+         QVariant::fromValue(static_cast<QObject*>(&controller))},
+        {QStringLiteral("width"), 360},
+        {QStringLiteral("height"), 640}};
+    std::unique_ptr<QObject> object{
+        component.createWithInitialProperties(initialProperties)};
+
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    auto* rootItem = qobject_cast<QQuickItem*>(object.get());
+    ASSERT_NE(rootItem, nullptr);
+    QQuickWindow window;
+    window.setGeometry(0, 0, 360, 640);
+    rootItem->setParentItem(window.contentItem());
+    window.show();
+    QCoreApplication::processEvents();
+
+    auto* tabs = object->findChild<QObject*>(QStringLiteral("editorCompactTabs"));
+    auto* preview = object->findChild<QObject*>(QStringLiteral("editorPreviewPane"));
+    auto* media = object->findChild<QObject*>(QStringLiteral("editorMediaPane"));
+    auto* inspector = object->findChild<QObject*>(QStringLiteral("editorInspectorPane"));
+    ASSERT_NE(tabs, nullptr);
+    ASSERT_NE(preview, nullptr);
+    ASSERT_NE(media, nullptr);
+    ASSERT_NE(inspector, nullptr);
+    EXPECT_TRUE(tabs->property("visible").toBool());
+    EXPECT_TRUE(preview->property("visible").toBool());
+    EXPECT_FALSE(media->property("visible").toBool());
+
+    rootItem->setProperty("compactSection", QStringLiteral("inspector"));
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(preview->property("visible").toBool());
+    EXPECT_TRUE(inspector->property("visible").toBool());
+    EXPECT_EQ(warningSpy.count(), 0);
 }
 
 TEST(QmlSmokeTest, EditorPageProvidesDurableEditControls) {
@@ -1310,6 +1605,47 @@ TEST(QmlSmokeTest, EditorPageProvidesDurableEditControls) {
         QString::fromUtf8("→")));
     EXPECT_FALSE(range->property("text").toString().contains(
         QStringLiteral("??")));
+}
+
+TEST(QmlSmokeTest, EditorPageProvidesExplicitLocalAiReviewControls) {
+    QQmlEngine engine;
+    FakeEditorController editor;
+    FakeIntelligenceController intelligence;
+    QQmlComponent component{
+        &engine,
+        QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/EditorPage.qml"))};
+    QVariantMap initialProperties{
+        {QStringLiteral("controller"),
+         QVariant::fromValue(static_cast<QObject*>(&editor))},
+        {QStringLiteral("intelligenceController"),
+         QVariant::fromValue(static_cast<QObject*>(&intelligence))},
+        {QStringLiteral("width"), 1200},
+        {QStringLiteral("height"), 720}};
+    std::unique_ptr<QObject> object{
+        component.createWithInitialProperties(initialProperties)};
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    QCoreApplication::processEvents();
+
+    auto* panel =
+        object->findChild<QObject*>(QStringLiteral("editorLocalAiPanel"));
+    auto* analyze = object->findChild<QObject*>(
+        QStringLiteral("editorLocalAiAnalyzeButton"));
+    auto* approveTranscript = object->findChild<QObject*>(
+        QStringLiteral("editorLocalAiApproveTranscriptButton"));
+    auto* approveCut = object->findChild<QObject*>(
+        QStringLiteral("editorLocalAiApproveFirstCutButton"));
+    ASSERT_NE(panel, nullptr);
+    ASSERT_NE(analyze, nullptr);
+    ASSERT_NE(approveTranscript, nullptr);
+    ASSERT_NE(approveCut, nullptr);
+    EXPECT_TRUE(panel->property("visible").toBool());
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(analyze, "clicked"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(approveTranscript, "clicked"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(approveCut, "clicked"));
+    EXPECT_EQ(intelligence.analyzeCalls(), 1);
+    EXPECT_EQ(intelligence.transcriptCalls(), 1);
+    EXPECT_EQ(intelligence.approvedCutIndex(), 0);
 }
 
 TEST(QmlSmokeTest, EditorPageProvidesCompleteAccessibleInspectorControls) {
@@ -1533,12 +1869,16 @@ TEST(QmlSmokeTest, EditorPageProvidesCompleteAccessibleInspectorControls) {
 TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     QQmlEngine engine;
     FakeStudioController studioController;
+    FakeCursorRecordingController cursorRecordingController;
     FakeScreenCaptureController screenCaptureController;
     FakeDeviceCaptureController deviceCaptureController;
     FakeStudioWorkflowController studioWorkflowController;
     FakeShortcutSettingsController shortcutSettingsController;
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
                                              &studioController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("cursorRecordingController"),
+        &cursorRecordingController);
     engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),
                                              &screenCaptureController);
     engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
@@ -1565,6 +1905,10 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     auto* encoder = object->findChild<QObject*>(QStringLiteral("recordingEncoderLabel"));
     auto* queue = object->findChild<QObject*>(QStringLiteral("recordingQueueLabel"));
     auto* sync = object->findChild<QObject*>(QStringLiteral("recordingSyncLabel"));
+    auto* cursorStatus = object->findChild<QObject*>(
+        QStringLiteral("cursorTelemetryStatusLabel"));
+    auto* cursorCount = object->findChild<QObject*>(
+        QStringLiteral("cursorTelemetryCountLabel"));
     ASSERT_NE(selector, nullptr);
     ASSERT_NE(status, nullptr);
     ASSERT_NE(preview, nullptr);
@@ -1575,11 +1919,17 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     ASSERT_NE(encoder, nullptr);
     ASSERT_NE(queue, nullptr);
     ASSERT_NE(sync, nullptr);
+    ASSERT_NE(cursorStatus, nullptr);
+    ASSERT_NE(cursorCount, nullptr);
     EXPECT_TRUE(disk->property("text").toString().contains(QStringLiteral("8.0 GiB")));
     EXPECT_TRUE(encoder->property("text").toString().contains(QStringLiteral("mpeg4, aac")));
     EXPECT_TRUE(queue->property("text").toString().contains(QStringLiteral("Queue: 3")));
     EXPECT_TRUE(sync->property("text").toString().contains(QStringLiteral("duplicate 4")));
     EXPECT_TRUE(sync->property("text").toString().contains(QStringLiteral("8.5 ms")));
+    EXPECT_EQ(cursorStatus->property("text").toString(),
+              QStringLiteral("Cursor data: recording"));
+    EXPECT_TRUE(cursorCount->property("text").toString().contains(
+        QStringLiteral("42")));
     EXPECT_EQ(selector->property("count").toInt(), 1);
     EXPECT_EQ(status->property("text").toString(),
               QStringLiteral("captured window closed"));
@@ -1701,10 +2051,11 @@ TEST(QmlSmokeTest, StudioShortcutsShareVisibleActionsAndStateGuards) {
 }
 
 TEST(QmlSmokeTest, StudioPageProvidesModelDrivenAccessibleWorkflowAtAllSizes) {
-    const std::array<std::tuple<int, int, qreal>, 3> fixtures{
+    const std::array<std::tuple<int, int, qreal>, 4> fixtures{
         std::tuple{1280, 720, 1.0}, std::tuple{1440, 900, 1.0},
         // A 1440x900 display at 200% exposes 720x450 device-independent pixels.
-        std::tuple{720, 450, 2.0}};
+        std::tuple{720, 450, 2.0},
+        std::tuple{360, 640, 3.0}};
     for (const auto& [width, height, scale] : fixtures) {
         QQmlEngine engine;
         FakeStudioController studioController;
@@ -1796,6 +2147,15 @@ TEST(QmlSmokeTest, StudioPageProvidesModelDrivenAccessibleWorkflowAtAllSizes) {
         }
         EXPECT_EQ(warningSpy.count(), 0) << warningText.toStdString();
 
+        if (width < 700) {
+            auto* tabs = object->findChild<QObject*>(
+                QStringLiteral("studioCompactTabs"));
+            ASSERT_NE(tabs, nullptr);
+            EXPECT_TRUE(tabs->property("visible").toBool());
+            rootItem->setProperty("compactSection", QStringLiteral("capture"));
+            QCoreApplication::processEvents();
+        }
+
         auto* leftScroll = qobject_cast<QQuickItem*>(object->findChild<QObject*>(
             QStringLiteral("studioLeftScroll")));
         ASSERT_NE(leftScroll, nullptr);
@@ -1828,6 +2188,10 @@ TEST(QmlSmokeTest, StudioPageProvidesModelDrivenAccessibleWorkflowAtAllSizes) {
         auto* cameraComposition = qobject_cast<QQuickItem*>(
             object->findChild<QObject*>(
                 QStringLiteral("studioCameraCompositionPreview")));
+        if (width < 700) {
+            rootItem->setProperty("compactSection", QStringLiteral("preview"));
+            QCoreApplication::processEvents();
+        }
         ASSERT_NE(cameraComposition, nullptr);
         auto* canvas = cameraComposition->parentItem();
         ASSERT_NE(canvas, nullptr);

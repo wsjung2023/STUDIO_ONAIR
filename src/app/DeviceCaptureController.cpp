@@ -577,8 +577,11 @@ void DeviceCaptureController::drainAudio(SlotKind kind) {
     if (!source || !mailbox || state == DeviceCaptureState::Stopping) return;
     if (state == DeviceCaptureState::Starting && mailbox->takeStarted()) {
         state = DeviceCaptureState::Capturing;
-        if (kind == SlotKind::Microphone) microphoneStatus_ = tr("Microphone capturing");
-        else systemAudioStatus_ = tr("System audio capturing");
+        if (kind == SlotKind::Microphone) {
+            microphoneStatus_ = tr("Microphone capturing");
+        } else {
+            systemAudioStatus_ = tr("System audio capturing");
+        }
         emit stateChanged();
     }
     while (auto block = mailbox->tryPop()) {

@@ -22,7 +22,8 @@ ExportWorker::ExportWorker(
     : engine_(std::move(engine)),
       cancellationRequested_(std::move(cancellationRequested)) {}
 
-void ExportWorker::start(edit_engine::RenderRequest request) {
+void ExportWorker::start(edit_engine::RenderRequest request,
+                         ExportPublishAction publish) {
     auto created = engine_->render(request);
     if (!created.hasValue()) {
         emit finished(false, static_cast<int>(edit_engine::RenderJobState::Failed),
@@ -50,6 +51,19 @@ void ExportWorker::start(edit_engine::RenderRequest request) {
             value.renderedThrough().time_since_epoch().count(),
             value.totalDuration().count());
         if (terminal(value.state())) {
+            if (value.state() == edit_engine::RenderJobState::Completed && publish) {
+                emit progressChanged(
+                    static_cast<int>(edit_engine::RenderJobState::Publishing),
+                    1.0, value.renderedThrough().time_since_epoch().count(),
+                    value.totalDuration().count());
+                auto published = publish(request.destination());
+                if (!published.hasValue()) {
+                    emit finished(false,
+                                  static_cast<int>(edit_engine::RenderJobState::Failed),
+                                  QString::fromStdString(published.error().message()));
+                    return;
+                }
+            }
             emit finished(value.state() == edit_engine::RenderJobState::Completed,
                           static_cast<int>(value.state()),
                           QString::fromStdString(job->diagnostic()));

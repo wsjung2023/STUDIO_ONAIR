@@ -25,6 +25,7 @@ if(CS_ENABLE_MLT)
             MltEditEngine.cpp
         DEPENDS
             cs_mlt_graph_plan
+            cs_audio_dsp
             cs_ffmpeg_adapter
             MLT::PlusPlus
             nlohmann_json::nlohmann_json
@@ -32,5 +33,6 @@ if(CS_ENABLE_MLT)
     target_compile_definitions(cs_mlt_adapter PRIVATE
         CS_MLT_EXPECTED_VERSION="7.40.0"
         CS_MLT_EXPECTED_COMMIT="bef9d89c0c279e558d9625dac3399c2aa3d961bc"
+        CS_MLT_EXPECTED_MUTEX_PATCH="creator-studio-pthreads4w-v3.0.0-lazy-mutex-events-v1"
     )
 endif()

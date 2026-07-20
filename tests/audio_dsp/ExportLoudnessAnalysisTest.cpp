@@ -86,6 +86,32 @@ TEST(ExportLoudnessAnalysisTest, GainMatchesLoudnessNormalizer) {
     EXPECT_NEAR(applied.value().achievedLufsAfter, -14.0, 0.5);
 }
 
+TEST(ExportLoudnessAnalysisTest, StreamingMeterDecisionMatchesOwningBuffer) {
+    auto analyzer = makeAnalyzer(-14.0, -1.0);
+    auto sig = testing::makeSine(stereoFormat(), secToFrames(2.0), 1000.0, -23.0);
+    auto owning = analyzer.analyze(sig.samples(), stereoFormat());
+    ASSERT_TRUE(owning.hasValue());
+
+    auto meter = LoudnessMeter::create(stereoFormat());
+    ASSERT_TRUE(meter.hasValue());
+    constexpr std::size_t kBlockFrames = 4'800;
+    for (std::size_t frame = 0; frame < secToFrames(2.0);
+         frame += kBlockFrames) {
+        AudioBuffer block{sig.samples().data() + frame * 2U,
+                          std::min(kBlockFrames, secToFrames(2.0) - frame),
+                          stereoFormat()};
+        ASSERT_TRUE(meter.value().addBlock(block).hasValue());
+    }
+
+    auto streaming = analyzer.decide(meter.value());
+    ASSERT_TRUE(streaming.hasValue());
+    EXPECT_NEAR(streaming.value().measuredLufs,
+                owning.value().measuredLufs, 1e-9);
+    EXPECT_NEAR(streaming.value().truePeakDbtp,
+                owning.value().truePeakDbtp, 1e-9);
+    EXPECT_NEAR(streaming.value().gainDb, owning.value().gainDb, 1e-9);
+}
+
 // A program already at target should decide ~0 dB of gain.
 TEST(ExportLoudnessAnalysisTest, DecidesNearZeroGainWhenAlreadyAtTarget) {
     // Target -23 so an already ~-23 LUFS program needs no change.

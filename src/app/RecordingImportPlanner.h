@@ -13,6 +13,8 @@
 
 namespace creator::app {
 
+inline constexpr core::DurationNs kMaximumRecordingConcatGap{1'000'000'000};
+
 struct RecordingSegmentProbe final {
     std::string relativePath;
     media::MediaProbeResult media;

@@ -86,12 +86,36 @@ private:
         }
         auto next = edit_engine::RenderProgress::create(
             state, fraction, renderedThrough, progress_.totalDuration());
-        if (!next.hasValue()) return false;
+        if (!next.hasValue()) {
+            diagnostic_ = rejectionDiagnostic(next.error().message(), state,
+                                              fraction, renderedThrough);
+            return false;
+        }
         auto transition =
             edit_engine::validateRenderProgressTransition(progress_, next.value());
-        if (!transition.hasValue()) return false;
+        if (!transition.hasValue()) {
+            diagnostic_ = rejectionDiagnostic(transition.error().message(), state,
+                                              fraction, renderedThrough);
+            return false;
+        }
         progress_ = std::move(next).value();
         return true;
+    }
+
+    std::string rejectionDiagnostic(
+        const std::string& reason, edit_engine::RenderJobState nextState,
+        double nextFraction, core::TimestampNs nextRenderedThrough) const {
+        return "render progress rejected: " + reason +
+               " previous_state=" +
+               std::to_string(static_cast<int>(progress_.state())) +
+               " previous_fraction=" + std::to_string(progress_.fraction()) +
+               " previous_rendered_ns=" +
+               std::to_string(
+                   progress_.renderedThrough().time_since_epoch().count()) +
+               " next_state=" + std::to_string(static_cast<int>(nextState)) +
+               " next_fraction=" + std::to_string(nextFraction) +
+               " next_rendered_ns=" + std::to_string(
+                   nextRenderedThrough.time_since_epoch().count());
     }
 
     void finish(edit_engine::RenderJobState state) {
@@ -106,9 +130,26 @@ private:
         if (next.hasValue()) progress_ = std::move(next).value();
     }
 
+    void recordError(const core::Result<void>& result) {
+        if (result.hasValue()) return;
+        std::lock_guard lock(mutex_);
+        if (diagnostic_.empty()) diagnostic_ = result.error().message();
+    }
+
     void run(std::stop_token token) {
         if (!publish(edit_engine::RenderJobState::Running, 0.0,
                      core::TimestampNs{})) {
+            // The operation owns external lifecycle finalization. Even when
+            // cancellation wins the start race, invoke it once with the
+            // already-requested token so persistent state can become
+            // Cancelled instead of being left Pending for crash recovery.
+            auto result = operation_(
+                request_, token,
+                [this](edit_engine::RenderJobState state, double fraction,
+                       core::TimestampNs renderedThrough) {
+                    return publish(state, fraction, renderedThrough);
+                });
+            recordError(result);
             finish(edit_engine::RenderJobState::Cancelled);
             return;
         }
@@ -119,14 +160,12 @@ private:
                 return publish(state, fraction, renderedThrough);
             });
         if (token.stop_requested()) {
+            recordError(result);
             finish(edit_engine::RenderJobState::Cancelled);
             return;
         }
         if (!result.hasValue()) {
-            {
-                std::lock_guard lock(mutex_);
-                diagnostic_ = result.error().message();
-            }
+            recordError(result);
             finish(edit_engine::RenderJobState::Failed);
             return;
         }

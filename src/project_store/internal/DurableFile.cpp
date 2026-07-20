@@ -34,9 +34,11 @@ AppError durableError(std::string_view operation, std::uint64_t code) {
 }
 
 std::filesystem::path temporaryPathFor(const std::filesystem::path& target) {
-    std::filesystem::path name{"."};
-    name += target.filename();
-    name += ".part-";
+    // Do not repeat the target filename here. Recording concat manifests have
+    // intentionally descriptive names and can already sit close to Windows'
+    // legacy MAX_PATH boundary. A fixed-size sibling name preserves atomic
+    // replacement without making the temporary path depend on target length.
+    std::filesystem::path name{".cs-part-"};
     name += core::generateUuidV4();
     return target.parent_path() / name;
 }

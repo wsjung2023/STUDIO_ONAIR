@@ -95,6 +95,9 @@ struct FileProvenance final {
 
 constexpr std::string_view kVcpkgIdentity =
     "vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e";
+constexpr std::string_view kPatchedPthreadsIdentity =
+    "vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e;patch:"
+    CS_MLT_EXPECTED_MUTEX_PATCH;
 constexpr std::string_view kFfmpegIdentity =
     "sha256:464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c";
 
@@ -114,7 +117,7 @@ std::optional<FileProvenance> expectedProvenance(const std::string& path) {
     }
     if (name.starts_with("pthread") ||
         lower.starts_with("include/mlt-deps/")) {
-        return FileProvenance{"PThreads4W", "3.0.0", kVcpkgIdentity,
+        return FileProvenance{"PThreads4W", "3.0.0", kPatchedPthreadsIdentity,
                               "Apache-2.0"};
     }
     if (name == "iconv-2.dll" || name == "libiconv-2.dll") {
@@ -149,7 +152,7 @@ nlohmann::json expectedDependencies() {
          {"license", "Zlib"}},
         {{"component", "PThreads4W"},
          {"version", "3.0.0"},
-         {"source_identity", kVcpkgIdentity},
+         {"source_identity", kPatchedPthreadsIdentity},
          {"license", "Apache-2.0"}},
         {{"component", "GNU libiconv"},
          {"version", "1.19"},
@@ -216,6 +219,8 @@ Result<void> verifyMltRuntimeManifest(
             manifest.at("version").get<std::string>() != CS_MLT_EXPECTED_VERSION ||
             manifest.at("source_commit").get<std::string>() !=
                 CS_MLT_EXPECTED_COMMIT ||
+            manifest.at("windows_mutex_patch").get<std::string>() !=
+                CS_MLT_EXPECTED_MUTEX_PATCH ||
             manifest.at("linking").get<std::string>() != "dynamic" ||
             manifest.at("allowed_modules") !=
                 nlohmann::json::array({"core", "avformat"}) ||

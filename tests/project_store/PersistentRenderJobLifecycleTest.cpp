@@ -200,4 +200,43 @@ TEST(PersistentRenderJobLifecycleTest,
               edit_engine::RenderJobState::Running);
 }
 
+TEST(PersistentRenderJobLifecycleTest,
+     PersistsCancellingBeforeCancelledTerminalState) {
+    const auto root = fs::absolute(
+        fs::temp_directory_path() /
+        ("creator-studio-cancel-lifecycle-" +
+         std::to_string(std::chrono::steady_clock::now()
+                            .time_since_epoch()
+                            .count())));
+    fs::create_directories(root);
+    struct Cleanup final {
+        fs::path root;
+        ~Cleanup() { fs::remove_all(root); }
+    } cleanup{root};
+    auto renderRequest = request(root / "cancelled.mp4");
+    auto store = std::make_shared<RecordingStore>();
+    project_store::PersistentRenderJobLifecycle lifecycle{store};
+    ASSERT_TRUE(lifecycle.begin(renderRequest, root / "partial.mp4",
+                                core::DurationNs{1'000'000'000})
+                    .hasValue());
+    auto running = edit_engine::RenderProgress::create(
+                       edit_engine::RenderJobState::Running, 0.25,
+                       core::TimestampNs{core::DurationNs{250'000'000}},
+                       core::DurationNs{1'000'000'000})
+                       .value();
+    ASSERT_TRUE(lifecycle.advance(renderRequest.jobId(), running).hasValue());
+
+    ASSERT_TRUE(lifecycle.finish(renderRequest.jobId(),
+                                 edit_engine::RenderJobState::Cancelled,
+                                 "cancelled by user")
+                    .hasValue());
+    ASSERT_GE(store->updates.size(), 3U);
+    EXPECT_EQ(store->updates[store->updates.size() - 2].progress.state(),
+              edit_engine::RenderJobState::Cancelling);
+    EXPECT_EQ(store->updates.back().progress.state(),
+              edit_engine::RenderJobState::Cancelled);
+    EXPECT_EQ(store->record->diagnostics.diagnostic, "cancelled by user");
+    EXPECT_TRUE(store->record->finishedAt.has_value());
+}
+
 }  // namespace

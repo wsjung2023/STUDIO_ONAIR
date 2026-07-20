@@ -76,6 +76,20 @@ TEST_F(TranscriptStoreTest, WriteCreatesMissingDirectory) {
     EXPECT_TRUE(std::filesystem::exists(nested));
 }
 
+TEST_F(TranscriptStoreTest, ReplacesExistingArtifactAtomically) {
+    TranscriptStore store{dir_};
+    ASSERT_TRUE(store.write("local-ai", sampleTranscript()).hasValue());
+
+    const auto replaced = store.write("local-ai", sampleTranscript());
+
+    ASSERT_TRUE(replaced.hasValue()) << replaced.error().message();
+    EXPECT_TRUE(store.read(replaced.value()).hasValue());
+    for (const auto& entry : std::filesystem::directory_iterator(dir_)) {
+        EXPECT_EQ(entry.path().filename().string().find(".part-"),
+                  std::string::npos);
+    }
+}
+
 TEST_F(TranscriptStoreTest, RejectsEmptyName) {
     TranscriptStore store{dir_};
     const auto result = store.write("", sampleTranscript());

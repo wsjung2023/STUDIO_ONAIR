@@ -19,6 +19,47 @@ FetchContent_MakeAvailable(googletest)
 
 include(GoogleTest)
 
+add_executable(cs_platform_release_tests
+    platform_release/PlatformCapabilityTest.cpp
+    platform_release/MobilePerformancePolicyTest.cpp
+    platform_release/ModelStoragePolicyTest.cpp
+    platform_release/ReleaseManifestTest.cpp
+    platform_release/UpdateManifestTest.cpp
+    platform_release/DiagnosticBundleTest.cpp
+    platform_release/EntitlementPolicyTest.cpp
+    platform_release/EntitlementStoreTest.cpp
+)
+target_link_libraries(cs_platform_release_tests
+    PRIVATE
+        cs_core
+        cs_platform_release
+        nlohmann_json::nlohmann_json
+        GTest::gtest_main
+)
+set_target_properties(cs_platform_release_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+cs_apply_warnings(cs_platform_release_tests)
+gtest_discover_tests(cs_platform_release_tests)
+
+add_executable(cs_r4_project_interchange_acceptance_tests
+    acceptance/R4ProjectInterchangeAcceptanceTest.cpp
+)
+target_link_libraries(cs_r4_project_interchange_acceptance_tests
+    PRIVATE
+        cs_project_store
+        GTest::gtest_main
+)
+set_target_properties(cs_r4_project_interchange_acceptance_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+cs_apply_warnings(cs_r4_project_interchange_acceptance_tests)
+gtest_discover_tests(cs_r4_project_interchange_acceptance_tests)
+
 add_executable(cs_crash_recovery_fixture
     helpers/CrashRecoveryFixture.cpp
 )
@@ -32,6 +73,7 @@ cs_apply_warnings(cs_crash_recovery_fixture)
 
 add_executable(cs_tests
     ${PROJECT_SOURCE_DIR}/src/app/TimelineEditService.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/android/AndroidMediaCodecSession.cpp
     core/ResultTest.cpp
     core/TimebaseTest.cpp
     core/UuidTest.cpp
@@ -59,6 +101,8 @@ add_executable(cs_tests
     sync/SyncPipelineAcceptanceTest.cpp
     capture/PortContractTest.cpp
     capture/CaptureTimestampMapperTest.cpp
+    capture/AndroidProjectionSessionTest.cpp
+    capture/AndroidDeviceSessionTest.cpp
     capture/ScreenCapturePortsTest.cpp
     capture/LatestVideoFrameMailboxTest.cpp
     capture/CaptureFanoutSinksTest.cpp
@@ -104,6 +148,7 @@ add_executable(cs_tests
     recorder/AsyncTrackRecorderTest.cpp
     project_store/ManifestSchemaValidatorTest.cpp
     project_store/JsonProjectStoreTest.cpp
+    project_store/DurableFileTest.cpp
     project_store/SqliteConnectionTest.cpp
     project_store/MigrationRunnerTest.cpp
     project_store/SqliteProjectDatabaseTest.cpp
@@ -117,6 +162,7 @@ add_executable(cs_tests
     project_store/ProjectPackageStoreTest.cpp
     project_store/CrashRecoveryIntegrationTest.cpp
     app/TimelineEditServiceTest.cpp
+    app/AndroidMediaCodecSessionTest.cpp
     fakes/FakeCaptureSourceTest.cpp
     fakes/ManualPushCaptureSourceTest.cpp
     fakes/FakeRecorderTest.cpp
@@ -287,6 +333,7 @@ add_executable(cs_app_tests
     app/RecordingTimelineReconcilerTest.cpp
     app/EditorModelsTest.cpp
     app/ShortcutSettingsControllerTest.cpp
+    app/CommercialControlsControllerTest.cpp
     app/StudioWorkflowControllerTest.cpp
     app/EditorControllerTest.cpp
     app/ExportControllerTest.cpp
@@ -294,6 +341,7 @@ add_executable(cs_app_tests
     app/GeneratedOverlayCacheTest.cpp
     app/StudioControllerTest.cpp
     app/LiveRecordingControllerTest.cpp
+    app/CursorRecordingBindingTest.cpp
     app/StudioRecordingBindingTest.cpp
     app/ProjectControllerTest.cpp
     app/ScreenCaptureControllerTest.cpp
@@ -304,6 +352,8 @@ add_executable(cs_app_tests
     app/MultiTrackRecordingServiceTest.cpp
     app/AvatarFrameTrackingCoordinatorTest.cpp
     app/TranscriptionProviderFactoryTest.cpp
+    app/CreatorIntelligenceControllerTest.cpp
+    app/AndroidTimelineExportPlanTest.cpp
     app/QmlSmokeTest.cpp
 )
 
@@ -318,6 +368,9 @@ target_link_libraries(cs_app_tests
         Qt6::Test
         GTest::gtest
 )
+if(CS_ENABLE_WHISPER)
+    target_compile_definitions(cs_app_tests PRIVATE CS_APP_ENABLE_WHISPER=1)
+endif()
 
 target_include_directories(cs_app_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 
@@ -487,6 +540,7 @@ target_link_libraries(cs_r2_creator_intelligence_acceptance_tests
         cs_cursor
         cs_autozoom
         cs_cursor_emphasis
+        cs_cut_suggest
         cs_fakes
         nlohmann_json::nlohmann_json
         nlohmann_json_schema_validator::validator
@@ -496,6 +550,7 @@ target_compile_definitions(cs_r2_creator_intelligence_acceptance_tests PRIVATE
     CS_TRANSCRIPT_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/transcript.schema.json"
     CS_ZOOM_CANDIDATE_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/zoom_candidate.schema.json"
     CS_EMPHASIS_PLAN_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/emphasis_plan.schema.json"
+    CS_CUT_SUGGESTION_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/cut_suggestion.schema.json"
 )
 set_target_properties(cs_r2_creator_intelligence_acceptance_tests PROPERTIES
     AUTOMOC OFF
@@ -575,6 +630,78 @@ if(CS_ENABLE_WHISPER)
 endif()
 
 if(WIN32)
+    add_test(
+        NAME AndroidProjectionBridgePolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidProjectionBridgePolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME AndroidProjectionFramePolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidProjectionFramePolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME AndroidProjectionAcceptance
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidProjectionAcceptance.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME AndroidDeviceCapturePolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidDeviceCapturePolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME AndroidScopedStoragePolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidScopedStoragePolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME MobileAdaptiveLayoutPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/MobileAdaptiveLayoutPolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME AndroidPerformanceBudgetPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidPerformanceBudgetPolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME AndroidMediaCodecPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidMediaCodecPolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME AndroidTimelineExportPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidTimelineExportPolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME AndroidManifestPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AndroidManifestPolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME ReleaseManifestScript
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/ReleaseManifestScriptTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME ReleaseArtifactPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/ReleaseArtifactPolicyTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+    )
     add_test(
         NAME MltBootstrapPolicy
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
@@ -677,6 +804,57 @@ if(CS_ENABLE_FFMPEG)
                 ENVIRONMENT_MODIFICATION
                     "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
         )
+
+        if(CS_ENABLE_RNNOISE AND CS_ENABLE_WHISPER)
+            add_executable(cs_r2_07_physical_acceptance_tests
+                acceptance/R2FinalPhysicalAcceptanceTest.cpp
+            )
+            target_link_libraries(cs_r2_07_physical_acceptance_tests PRIVATE
+                cs_app
+                cs_audio_dsp
+                cs_ffmpeg_adapter
+                cs_mlt_adapter
+                cs_project_store
+                cs_rnnoise_adapter
+                Qt6::Quick
+                Qt6::Test
+                GTest::gtest
+                delayimp
+                psapi
+            )
+            target_compile_definitions(cs_r2_07_physical_acceptance_tests PRIVATE
+                CS_TEST_STAGED_MLT_ROOT="$<TARGET_FILE_DIR:creator_studio>/mlt-runtime"
+                CS_TEST_RNNOISE_ROOT="${CS_RNNOISE_ROOT}"
+                CS_TEST_WHISPER_ROOT="${CS_WHISPER_ROOT}"
+            )
+            target_include_directories(cs_r2_07_physical_acceptance_tests SYSTEM PRIVATE
+                ${FFMPEG_INCLUDE_DIRS}
+            )
+            target_link_libraries(cs_r2_07_physical_acceptance_tests PRIVATE
+                ${FFMPEG_LIBRARIES}
+            )
+            target_link_options(cs_r2_07_physical_acceptance_tests PRIVATE
+                "/DELAYLOAD:mlt++-7.dll"
+                "/DELAYLOAD:mlt-7.dll"
+            )
+            add_dependencies(cs_r2_07_physical_acceptance_tests creator_studio)
+            cs_apply_warnings(cs_r2_07_physical_acceptance_tests)
+            set_property(TARGET cs_r2_07_physical_acceptance_tests PROPERTY
+                TEST_LAUNCHER
+                "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;--modify;PATH=path_list_prepend:${CS_WHISPER_ROOT}/bin;--modify;PATH=path_list_prepend:${CS_RNNOISE_ROOT}/bin;--"
+            )
+            gtest_discover_tests(cs_r2_07_physical_acceptance_tests
+                DISCOVERY_MODE PRE_TEST
+                PROPERTIES
+                    TIMEOUT 7200
+                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+                    LABELS "physical;r2-07"
+                    ENVIRONMENT_MODIFICATION
+                        "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+                        "PATH=path_list_prepend:${CS_WHISPER_ROOT}/bin"
+                        "PATH=path_list_prepend:${CS_RNNOISE_ROOT}/bin"
+            )
+        endif()
 
         add_executable(cs_r1_replay_stress_tests
             acceptance/R1ReplayStressTest.cpp
@@ -783,12 +961,12 @@ if(CS_ENABLE_MLT)
     )
     cs_apply_warnings(cs_mlt_tests)
     set_property(TARGET cs_mlt_tests PROPERTY TEST_LAUNCHER
-        "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:${CS_MLT_ROOT}/bin;--"
+        "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;--modify;PATH=path_list_prepend:${CS_MLT_ROOT}/bin;--"
     )
     gtest_discover_tests(cs_mlt_tests
         DISCOVERY_MODE PRE_TEST
         PROPERTIES ENVIRONMENT_MODIFICATION
-            "PATH=path_list_prepend:${CS_MLT_ROOT}/bin"
+            "PATH=path_list_prepend:${CS_MLT_ROOT}/bin;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 
     add_executable(cs_r1_mlt_acceptance_tests

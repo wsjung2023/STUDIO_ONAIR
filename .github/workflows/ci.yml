@@ -73,6 +73,72 @@ jobs:
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
 
+      # This is deliberately unsigned and non-publishable evidence, not a
+      # release upload. It proves the binary CI just built has a deterministic
+      # manifest and SHA-256. R4-04 validates this explicit evidence-only mode;
+      # signing, notarization, and store publication remain separate manual gates.
+      - name: Generate release manifest
+        shell: pwsh
+        run: |
+          $artifact = if ($env:RUNNER_OS -eq 'Windows') {
+            'creator_studio.exe'
+          } else {
+            'creator_studio.app/Contents/MacOS/creator_studio'
+          }
+          & scripts/write_release_manifest.ps1 `
+            -ArtifactRoot "build/${{ matrix.preset }}" `
+            -OutputPath "build/${{ matrix.preset }}/release-manifest.json" `
+            -ProductVersion '0.1.0' `
+            -SourceRevision '${{ github.sha }}' `
+            -Target '${{ matrix.preset }}' `
+            -Artifact $artifact
+
+      - name: Prepare non-publishable distribution evidence
+        shell: pwsh
+        run: |
+          $artifact = if ($env:RUNNER_OS -eq 'Windows') {
+            'creator_studio.exe'
+          } else {
+            'creator_studio.app/Contents/MacOS/creator_studio'
+          }
+          $artifactPath = "build/${{ matrix.preset }}/$artifact"
+          $evidenceRoot = "build/${{ matrix.preset }}/distribution-evidence"
+          New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
+          Copy-Item legal/OSS_BOM.csv, legal/THIRD_PARTY_NOTICES.txt -Destination $evidenceRoot
+          [ordered]@{
+            schemaVersion = 1
+            artifactSha256 = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            publishable = $false
+            reason = 'ci-unsigned-evidence-only'
+          } | ConvertTo-Json | Set-Content -LiteralPath "$evidenceRoot/distribution-mode.json" -Encoding utf8
+
+      - name: Validate non-publishable distribution evidence
+        shell: pwsh
+        run: |
+          $platform = if ($env:RUNNER_OS -eq 'Windows') { 'Windows' } else { 'macOS' }
+          $artifact = if ($env:RUNNER_OS -eq 'Windows') {
+            'creator_studio.exe'
+          } else {
+            'creator_studio.app/Contents/MacOS/creator_studio'
+          }
+          & scripts/verify_release_artifacts.ps1 `
+            -Platform $platform `
+            -Artifact "build/${{ matrix.preset }}/$artifact" `
+            -Manifest "build/${{ matrix.preset }}/release-manifest.json" `
+            -EvidenceRoot "build/${{ matrix.preset }}/distribution-evidence" `
+            -NonPublishable
+
+      - name: Upload unsigned release evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-release-evidence-${{ matrix.preset }}
+          path: |
+            build/${{ matrix.preset }}/release-manifest.json
+            build/${{ matrix.preset }}/distribution-evidence/
+            build/${{ matrix.preset }}/creator_studio.exe
+            build/${{ matrix.preset }}/creator_studio.app
+          if-no-files-found: error
+
       - name: Upload test logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

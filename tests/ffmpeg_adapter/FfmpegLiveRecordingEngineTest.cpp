@@ -182,6 +182,72 @@ TEST(FfmpegLiveRecordingEngineTest,
     fs::remove_all(root, ignored);
 }
 
+TEST(FfmpegLiveRecordingEngineTest,
+     ConsecutiveSessionsForTheSameSourcePublishDistinctSegmentPaths) {
+    const auto root = fs::temp_directory_path() / "cs_ffmpeg_live_engine_resume";
+    const auto packagePath = root / "live.cstudio";
+    std::error_code ignored;
+    fs::remove_all(root, ignored);
+    fs::create_directories(root);
+    auto store = std::make_shared<ProjectPackageStore>();
+    ASSERT_TRUE(store->create(packagePath, "Live engine resume").hasValue());
+    auto bindings = std::make_shared<CaptureBindingsFake>();
+    bindings->sources = {
+        {SourceId::create("microphone-1").value(), TrackRole::Microphone}};
+    FfmpegLiveRecordingEngine engine{bindings, store};
+    ASSERT_TRUE(engine.available()) << engine.unavailableReason();
+
+    const auto recordSession = [&](std::string id, std::int64_t startSeconds) {
+        const auto sessionId = SessionId::create(std::move(id)).value();
+        const auto startedAt = creator::core::TimestampNs{
+            std::chrono::seconds{startSeconds}};
+        EXPECT_TRUE(store->beginRecording(packagePath, sessionId, startedAt,
+                                          utc("2026-07-16T11:00:00Z"))
+                        .hasValue());
+        auto promise =
+            std::make_shared<std::promise<Result<LiveRecordingCompletion>>>();
+        auto future = promise->get_future();
+        EXPECT_TRUE(engine
+                        .start(LiveRecordingStart{.sessionId = sessionId,
+                                                  .packagePath = packagePath,
+                                                  .startedAt = startedAt,
+                                                  .sources = bindings->sources},
+                               [promise](auto result) {
+                                   promise->set_value(std::move(result));
+                               })
+                        .hasValue());
+        EXPECT_TRUE(bindings->audio);
+        for (std::uint32_t block = 0; block < 25; ++block) {
+            auto audio = audioBlock(block);
+            audio.timestamp += startedAt.time_since_epoch();
+            bindings->audio->onAudioBlock(std::move(audio));
+        }
+        engine.stopAsync(startedAt + std::chrono::milliseconds{250});
+        auto completed = future.get();
+        EXPECT_TRUE(completed.hasValue())
+            << (completed.hasValue() ? "" : completed.error().message());
+        if (!completed.hasValue()) return std::vector<std::string>{};
+        EXPECT_TRUE(store->completeRecording(packagePath, completed.value().session,
+                                             utc("2026-07-16T11:00:01Z"))
+                        .hasValue());
+        std::vector<std::string> paths;
+        for (const auto& segment : completed.value().session.segments()) {
+            paths.push_back(segment.relativePath);
+        }
+        return paths;
+    };
+
+    const auto first = recordSession("session-before-pause", 0);
+    const auto second = recordSession("session-after-resume", 1);
+
+    ASSERT_FALSE(first.empty());
+    ASSERT_FALSE(second.empty());
+    EXPECT_NE(first.front(), second.front());
+    EXPECT_TRUE(fs::is_regular_file(packagePath / first.front()));
+    EXPECT_TRUE(fs::is_regular_file(packagePath / second.front()));
+    fs::remove_all(root, ignored);
+}
+
 TEST(FfmpegLiveRecordingEngineTest, RejectsStartWithoutAnActiveCaptureSource) {
     auto bindings = std::make_shared<CaptureBindingsFake>();
     auto store = std::make_shared<ProjectPackageStore>();

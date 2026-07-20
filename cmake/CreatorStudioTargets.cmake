@@ -7,12 +7,26 @@ function(cs_apply_warnings target)
         # so a non-ASCII comment (e.g. Korean text) without a byte-order mark trips
         # C4819, which /WX below escalates to a hard error. GCC and Clang already
         # default to UTF-8, so this option only needs to be set for MSVC.
-        target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8)
+        # CMake's Ninja+MSVC toolchain does not guarantee /EHsc. Without it,
+        # standard-library headers emit C4530, which becomes a hard failure
+        # under the repository's /WX CI gate. Every C++ target may use RAII
+        # around recoverable Result/I/O failures, so exception unwinding must
+        # be configured by the project rather than inherited from one IDE.
+        target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /EHsc)
         if(CS_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE /WX)
         endif()
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+        # The workflow command layer intentionally uses C++20 designated
+        # initializers to select a request's payload while every omitted
+        # field keeps its explicit in-class default. Clang diagnoses that
+        # standards-defined pattern as a warning, whereas MSVC does not.
+        # Keep every other warning fatal; only this non-actionable diagnostic
+        # is disabled so Android builds have the same semantics as Windows.
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(${target} PRIVATE -Wno-missing-field-initializers)
+        endif()
         if(CS_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE -Werror)
         endif()

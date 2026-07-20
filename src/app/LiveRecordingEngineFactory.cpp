@@ -1,7 +1,7 @@
 #include "app/LiveRecordingEngineFactory.h"
 
 #include "app/ControllerLiveCaptureBindings.h"
-#if defined(CS_APP_ENABLE_FFMPEG)
+#if defined(CS_APP_ENABLE_LIVE_RECORDING)
 #include "app/FfmpegLiveRecordingEngine.h"
 #endif
 
@@ -10,7 +10,7 @@
 namespace creator::app {
 namespace {
 
-#if !defined(CS_APP_ENABLE_FFMPEG)
+#if !defined(CS_APP_ENABLE_LIVE_RECORDING)
 class UnavailableLiveRecordingEngine final : public ILiveRecordingEngine {
 public:
     [[nodiscard]] bool available() const noexcept override { return false; }
@@ -39,7 +39,7 @@ public:
 std::unique_ptr<ILiveRecordingEngine> makeLiveRecordingEngine(
     ScreenCaptureController* screen, DeviceCaptureController* devices,
     std::shared_ptr<project_store::IProjectPackageStore> store) {
-#if defined(CS_APP_ENABLE_FFMPEG)
+#if defined(CS_APP_ENABLE_LIVE_RECORDING)
     return std::make_unique<FfmpegLiveRecordingEngine>(
         std::make_shared<ControllerLiveCaptureBindings>(screen, devices),
         std::move(store));

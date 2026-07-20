@@ -55,10 +55,14 @@ Pane {
                     enabled: !root.controller.busy
                     textRole: "label"
                     valueRole: "value"
-                    model: [
-                        { label: qsTr("1080p · 30 fps"), value: "h264-1080p30" },
-                        { label: qsTr("4K · 30 fps"), value: "h264-2160p30" }
-                    ]
+                    model: root.controller.maximumExportHeight >= 2160
+                           ? [
+                               { label: qsTr("1080p · 30 fps"), value: "h264-1080p30" },
+                               { label: qsTr("4K · 30 fps"), value: "h264-2160p30" }
+                             ]
+                           : [
+                               { label: qsTr("1080p · 30 fps"), value: "h264-1080p30" }
+                             ]
                     Layout.fillWidth: true
                     Accessible.name: qsTr("Export preset")
                 }
@@ -93,6 +97,23 @@ Pane {
         }
 
         Label {
+            objectName: "exportResourceConstraint"
+            visible: root.controller.maximumExportHeight < 2160
+                     || !root.controller.exportAllowed
+                     || (root.controller.foregroundExportRequired
+                         && !root.controller.applicationActive)
+            text: !root.controller.exportAllowed
+                  ? qsTr("Export is paused until the device cools down.")
+                  : root.controller.foregroundExportRequired
+                    && !root.controller.applicationActive
+                    ? qsTr("Keep Creator Studio in the foreground while exporting.")
+                    : qsTr("This device uses the 1080p mobile export budget.")
+            wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
+            Layout.fillWidth: true
+        }
+
+        Label {
             visible: root.controller.busy && !root.controller.canCancel
             text: qsTr("Publishing the validated file. Cancellation is disabled at this atomic boundary.")
             wrapMode: Text.WordWrap
@@ -106,8 +127,12 @@ Pane {
 
             Button {
                 objectName: "exportStartButton"
-                text: root.controller.busy ? qsTr("Exporting…") : qsTr("Choose file and export")
+                text: root.controller.busy
+                      ? qsTr("Exporting…") : qsTr("Choose file and export")
                 enabled: root.controller.ready && !root.controller.busy
+                         && root.controller.exportAllowed
+                         && (!root.controller.foregroundExportRequired
+                             || root.controller.applicationActive)
                 highlighted: enabled
                 onClicked: destinationDialog.open()
                 Accessible.name: qsTr("Choose output file and start export")

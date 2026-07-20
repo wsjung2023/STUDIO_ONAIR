@@ -12,9 +12,16 @@ namespace creator::app {
 
 ExportController::ExportController(
     std::unique_ptr<edit_engine::IEditEngine> engine, QObject* parent)
+    : ExportController(std::move(engine),
+                       std::make_unique<LocalExportDestinationResolver>(), parent) {}
+
+ExportController::ExportController(
+    std::unique_ptr<edit_engine::IEditEngine> engine,
+    std::unique_ptr<IExportDestinationResolver> destinations, QObject* parent)
     : QObject(parent),
       cancellationRequested_(std::make_shared<std::atomic_bool>(false)),
-      worker_(new ExportWorker{std::move(engine), cancellationRequested_}) {
+      worker_(new ExportWorker{std::move(engine), cancellationRequested_}),
+      destinations_(std::move(destinations)) {
     worker_->moveToThread(&workerThread_);
     connect(&workerThread_, &QThread::finished, worker_, &QObject::deleteLater);
     connect(worker_, &ExportWorker::progressChanged, this,
@@ -30,10 +37,13 @@ ExportController::ExportController(
                 busy_ = false;
                 emit progressChanged();
                 emit busyChanged();
-                setStatus(message.isEmpty()
-                              ? (success ? tr("Export completed")
-                                         : tr("Export stopped"))
-                              : message);
+                const bool constrained = std::exchange(constraintCancellation_, false);
+                setStatus(constrained
+                              ? tr("Export stopped because the app left the foreground")
+                              : message.isEmpty()
+                                    ? (success ? tr("Export completed")
+                                               : tr("Export stopped"))
+                                    : message);
                 emit exportFinished(success);
             });
     workerThread_.start();
@@ -47,7 +57,10 @@ ExportController::~ExportController() {
 }
 
 void ExportController::setRequest(edit_engine::RenderRequest request) {
-    if (!busy_) request_ = std::move(request);
+    if (!busy_) {
+        request_ = std::move(request);
+        publishAction_ = {};
+    }
 }
 
 void ExportController::setSource(domain::ProjectId projectId,
@@ -60,7 +73,33 @@ void ExportController::clearSource() {
     if (!source_.has_value()) return;
     source_.reset();
     request_.reset();
+    publishAction_ = {};
     emit sourceChanged();
+}
+
+void ExportController::setResourceConstraints(
+    std::uint32_t maximumExportHeight, bool foregroundExportRequired,
+    bool exportAllowed) {
+    maximumExportHeight_ = maximumExportHeight;
+    foregroundExportRequired_ = foregroundExportRequired;
+    exportAllowed_ = exportAllowed;
+    emit constraintsChanged();
+    if (busy_ && !exportAllowed_ && canCancel()) {
+        constraintCancellation_ = true;
+        cancellationRequested_->store(true, std::memory_order_release);
+        setStatus(tr("Stopping export because the device is thermally constrained"));
+    }
+}
+
+void ExportController::setApplicationActive(bool active) {
+    if (applicationActive_ == active) return;
+    applicationActive_ = active;
+    emit constraintsChanged();
+    if (!applicationActive_ && foregroundExportRequired_ && canCancel()) {
+        constraintCancellation_ = true;
+        cancellationRequested_->store(true, std::memory_order_release);
+        setStatus(tr("Stopping export before the app enters the background"));
+    }
 }
 
 bool ExportController::canCancel() const noexcept {
@@ -73,6 +112,7 @@ void ExportController::startExport() {
         if (!request_.has_value()) setStatus(tr("No export request is ready"));
         return;
     }
+    if (!constraintsPermitStart()) return;
     busy_ = true;
     progress_ = 0.0;
     state_ = static_cast<int>(edit_engine::RenderJobState::Pending);
@@ -81,8 +121,10 @@ void ExportController::startExport() {
     emit progressChanged();
     setStatus(tr("Preparing export"));
     const auto request = *request_;
-    QMetaObject::invokeMethod(worker_, [worker = worker_, request]() mutable {
-        worker->start(std::move(request));
+    auto publish = std::move(publishAction_);
+    QMetaObject::invokeMethod(worker_, [worker = worker_, request,
+                                        publish = std::move(publish)]() mutable {
+        worker->start(std::move(request), std::move(publish));
     }, Qt::QueuedConnection);
 }
 
@@ -94,8 +136,14 @@ void ExportController::exportTo(const QUrl& destination,
         setStatus(tr("No editable timeline is ready"));
         return;
     }
-    if (!destination.isLocalFile()) {
-        setStatus(tr("Export destination must be a local MP4 file"));
+    if (!constraintsPermitStart()) return;
+    if (!destinations_) {
+        setStatus(tr("Export destination service is unavailable"));
+        return;
+    }
+    auto resolved = destinations_->resolve(destination, replaceExisting);
+    if (!resolved.hasValue()) {
+        setStatus(QString::fromStdString(resolved.error().message()));
         return;
     }
     core::Result<edit_engine::RenderPreset> preset =
@@ -109,9 +157,13 @@ void ExportController::exportTo(const QUrl& destination,
         setStatus(QString::fromStdString(preset.error().message()));
         return;
     }
+    if (preset.value().height() > maximumExportHeight_) {
+        setStatus(tr("This export preset exceeds the current device budget"));
+        return;
+    }
     auto request = edit_engine::RenderRequest::create(
         source_->projectId, source_->snapshot,
-        pathFromQString(destination.toLocalFile()),
+        resolved.value().renderPath,
         std::move(preset).value(),
         replaceExisting
             ? edit_engine::RenderOverwritePolicy::ReplaceExisting
@@ -120,7 +172,8 @@ void ExportController::exportTo(const QUrl& destination,
         setStatus(QString::fromStdString(request.error().message()));
         return;
     }
-    setRequest(std::move(request).value());
+    request_ = std::move(request).value();
+    publishAction_ = std::move(resolved).value().publish;
     startExport();
 }
 
@@ -134,6 +187,18 @@ void ExportController::setStatus(QString message) {
     if (statusMessage_ == message) return;
     statusMessage_ = std::move(message);
     emit statusMessageChanged();
+}
+
+bool ExportController::constraintsPermitStart() {
+    if (!exportAllowed_) {
+        setStatus(tr("Export is unavailable while the device is thermally constrained"));
+        return false;
+    }
+    if (foregroundExportRequired_ && !applicationActive_) {
+        setStatus(tr("Bring Creator Studio to the foreground before exporting"));
+        return false;
+    }
+    return true;
 }
 
 }  // namespace creator::app

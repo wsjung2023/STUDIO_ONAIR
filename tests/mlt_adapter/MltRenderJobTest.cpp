@@ -144,6 +144,29 @@ TEST_F(RenderJobFixture, FailureBecomesTerminalWithoutFalseCompletion) {
     EXPECT_EQ(job.value()->diagnostic(), "injected encode failure");
 }
 
+TEST_F(RenderJobFixture, ReportsRejectedProgressTransitionDiagnostic) {
+    auto job = MltRenderJob::start(
+        request(), [](const RenderRequest&, std::stop_token,
+                      const MltRenderJob::ProgressReporter& report) {
+            EXPECT_TRUE(report(RenderJobState::Running, 0.5,
+                               TimestampNs{DurationNs{500'000'000}}));
+            EXPECT_FALSE(report(RenderJobState::Running, 0.4,
+                                TimestampNs{DurationNs{400'000'000}}));
+            return creator::core::Result<void>{creator::core::AppError{
+                creator::core::ErrorCode::InvalidState,
+                "export progress was rejected"}};
+        });
+
+    ASSERT_TRUE(job.hasValue());
+    EXPECT_EQ(waitForTerminal(*job.value()), RenderJobState::Failed);
+    EXPECT_NE(job.value()->diagnostic().find("render progress must not regress"),
+              std::string::npos);
+    EXPECT_NE(job.value()->diagnostic().find("previous_fraction=0.500000"),
+              std::string::npos);
+    EXPECT_NE(job.value()->diagnostic().find("next_fraction=0.400000"),
+              std::string::npos);
+}
+
 TEST_F(RenderJobFixture, CancellationIsIdempotentlyJoinedOnDestruction) {
     std::atomic<bool> entered{};
     std::atomic<bool> exited{};
@@ -168,6 +191,25 @@ TEST_F(RenderJobFixture, CancellationIsIdempotentlyJoinedOnDestruction) {
         EXPECT_FALSE(job.value()->cancel().hasValue());
     }
     EXPECT_TRUE(exited);
+}
+
+TEST_F(RenderJobFixture, ImmediateCancellationStillRunsCooperativeFinalizer) {
+    std::atomic<bool> operationRan{};
+    auto job = MltRenderJob::start(
+        request(), [&](const RenderRequest&, std::stop_token token,
+                       const MltRenderJob::ProgressReporter&) {
+            operationRan = true;
+            EXPECT_TRUE(token.stop_requested());
+            return creator::core::Result<void>{creator::core::AppError{
+                creator::core::ErrorCode::InvalidState,
+                "cooperative cancellation finalized"}};
+        });
+
+    ASSERT_TRUE(job.hasValue());
+    ASSERT_TRUE(job.value()->cancel().hasValue());
+    EXPECT_EQ(waitForTerminal(*job.value()), RenderJobState::Cancelled);
+    EXPECT_TRUE(operationRan.load());
+    EXPECT_EQ(job.value()->diagnostic(), "cooperative cancellation finalized");
 }
 
 TEST_F(RenderJobFixture, RejectsCancellationAfterPublicationBoundary) {

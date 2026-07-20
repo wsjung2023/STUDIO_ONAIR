@@ -186,6 +186,7 @@ add_subdirectory(src/media)
 add_subdirectory(src/edit_engine)
 add_subdirectory(src/sync)
 add_subdirectory(src/capture)
+add_subdirectory(src/platform_release)
 add_subdirectory(src/cursor)
 add_subdirectory(src/cursor_emphasis)
 add_subdirectory(src/autozoom)
@@ -233,8 +234,15 @@ qt_add_qml_module(creator_studio
         qml/StudioPage.qml
         qml/EditorPage.qml
         qml/ExportPage.qml
+        qml/SettingsPage.qml
         qml/TestPattern.qml
 )
+
+if(ANDROID)
+    set_property(TARGET creator_studio PROPERTY
+        QT_ANDROID_PACKAGE_SOURCE_DIR "${PROJECT_SOURCE_DIR}/android"
+    )
+endif()
 
 target_link_libraries(creator_studio
     PRIVATE
@@ -264,7 +272,10 @@ endif()
 
 if(CS_ENABLE_WHISPER)
     target_link_libraries(creator_studio PRIVATE cs_whisper_adapter)
-    target_compile_definitions(creator_studio PRIVATE CS_APP_ENABLE_WHISPER=1)
+    target_compile_definitions(creator_studio PRIVATE
+        CS_APP_ENABLE_WHISPER=1
+        CS_APP_WHISPER_ROOT="${CS_WHISPER_ROOT}"
+    )
     if(WIN32)
         file(GLOB CS_APP_WHISPER_RUNTIME_DLLS CONFIGURE_DEPENDS
             "${CS_WHISPER_ROOT}/bin/*.dll")
@@ -328,9 +339,28 @@ endif()
 
 cs_apply_warnings(creator_studio)
 
+if(WIN32 OR APPLE)
+    find_program(CS_POWERSHELL_EXECUTABLE NAMES pwsh powershell REQUIRED)
+    add_custom_target(release-metadata
+        COMMAND "${CS_POWERSHELL_EXECUTABLE}"
+            -NoProfile
+            -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/scripts/write_release_manifest.ps1"
+            -ArtifactRoot "$<TARGET_FILE_DIR:creator_studio>"
+            -OutputPath "${CMAKE_BINARY_DIR}/release-manifest.json"
+            -ProductVersion "${PROJECT_VERSION}"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+            -Target "${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}-${CMAKE_BUILD_TYPE}"
+            -Artifact "$<TARGET_FILE_NAME:creator_studio>"
+        DEPENDS creator_studio
+        VERBATIM
+    )
+endif()
+
 install(TARGETS creator_studio
     BUNDLE DESTINATION .
     RUNTIME DESTINATION bin
+    LIBRARY DESTINATION lib
 )
 
 if(CS_ENABLE_MLT)

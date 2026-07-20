@@ -4,10 +4,14 @@
 #include "app/ProjectSegmentLifecycleSink.h"
 #include "core/AppError.h"
 #include "domain/RecordingSession.h"
+#if defined(ANDROID)
+#include "app/android/AndroidMediaCodecSegmentEncoder.h"
+#else
 #include "ffmpeg_adapter/BgraFrameMappers.h"
 #include "ffmpeg_adapter/FfmpegAudioSegmentEncoder.h"
 #include "ffmpeg_adapter/FfmpegCapabilityProbe.h"
 #include "ffmpeg_adapter/FfmpegVideoSegmentEncoder.h"
+#endif
 #include "recorder/AsyncTrackRecorder.h"
 #include "recorder/DiskSpaceMonitor.h"
 #include "recorder/DurableSegmentPublisher.h"
@@ -72,6 +76,7 @@ private:
     std::optional<core::TimestampNs> lastBlockEnd_;
 };
 
+#if !defined(ANDROID)
 std::unique_ptr<recorder::IVideoFrameMapper> makeVideoMapper() {
 #if defined(__APPLE__)
     return std::make_unique<ffmpeg_adapter::MacCvPixelBufferFrameMapper>();
@@ -79,12 +84,17 @@ std::unique_ptr<recorder::IVideoFrameMapper> makeVideoMapper() {
     return std::make_unique<ffmpeg_adapter::CpuBgraFrameMapper>();
 #endif
 }
+#endif
 
 core::Result<std::unique_ptr<AsyncTrackRecorder>> makeTrackRecorder(
     RecordingTrack track, const LiveRecordingStart& start,
     std::shared_ptr<ProjectSegmentLifecycleContext> context,
-    bool concurrentVideoSources) {
+    [[maybe_unused]] bool concurrentVideoSources) {
     std::unique_ptr<recorder::ITrackSegmentEncoder> encoder;
+#if defined(ANDROID)
+    encoder = std::make_unique<android::AndroidMediaCodecSegmentEncoder>(
+        track.mediaKind());
+#else
     if (track.mediaKind() == TrackMediaKind::Video) {
         ffmpeg_adapter::VideoEncoderOptions options;
         if (concurrentVideoSources && track.role() == TrackRole::Camera) {
@@ -100,9 +110,13 @@ core::Result<std::unique_ptr<AsyncTrackRecorder>> makeTrackRecorder(
         encoder =
             std::make_unique<ffmpeg_adapter::FfmpegAudioSegmentEncoder>();
     }
+#endif
+    auto sessionPath = recorder::safeSessionPathComponent(start.sessionId);
+    if (!sessionPath.hasValue()) return sessionPath.error();
     auto publisher = std::make_unique<DurableSegmentPublisher>(
         start.packagePath, recorder::makeSegmentFileOperations(start.packagePath),
-        std::make_unique<ProjectSegmentLifecycleSink>(std::move(context)));
+        std::make_unique<ProjectSegmentLifecycleSink>(std::move(context)),
+        std::move(sessionPath).value());
     AsyncTrackRecorderConfig config{
         .track = std::move(track),
         .packageRoot = start.packagePath,
@@ -340,6 +354,9 @@ FfmpegLiveRecordingEngine::FfmpegLiveRecordingEngine(
             "Live recording engine dependencies are incomplete"};
         return;
     }
+#if defined(ANDROID)
+    capabilityStatus_ = android::probeAndroidMediaCodec();
+#else
     auto capabilities = ffmpeg_adapter::probeFfmpegCapabilities();
     if (!capabilities.hasValue()) {
         capabilityStatus_ = capabilities.error();
@@ -359,6 +376,7 @@ FfmpegLiveRecordingEngine::FfmpegLiveRecordingEngine(
             core::ErrorCode::UnsupportedVersion,
             "Audited FFmpeg runtime lacks the required software video or AAC encoder"};
     }
+#endif
 }
 
 FfmpegLiveRecordingEngine::~FfmpegLiveRecordingEngine() {

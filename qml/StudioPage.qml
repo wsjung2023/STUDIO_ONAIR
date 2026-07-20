@@ -10,6 +10,11 @@ import CreatorStudio.Native 1.0
 // object, a capture source or a recorder directly.
 Item {
     id: root
+    readonly property bool compact: width < 700
+    property string compactSection: "preview"
+    readonly property var cursorTelemetry:
+        typeof cursorRecordingController !== "undefined"
+        ? cursorRecordingController : null
 
     readonly property bool workflowEditable: !studioController.recording
                                              && !studioWorkflowController.recording
@@ -215,14 +220,39 @@ Item {
         anchors.fill: parent
         spacing: 1
 
+        TabBar {
+            objectName: "studioCompactTabs"
+            visible: root.compact
+            Layout.fillWidth: true
+            Layout.preferredHeight: visible ? implicitHeight : 0
+            TabButton {
+                text: qsTr("Capture")
+                checked: root.compactSection === "capture"
+                onClicked: root.compactSection = "capture"
+            }
+            TabButton {
+                text: qsTr("Preview")
+                checked: root.compactSection === "preview"
+                onClicked: root.compactSection = "preview"
+            }
+            TabButton {
+                text: qsTr("Inspector")
+                checked: root.compactSection === "inspector"
+                onClicked: root.compactSection = "inspector"
+            }
+        }
+
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 1
 
             Pane {
-                Layout.preferredWidth: 250
+                visible: !root.compact || root.compactSection === "capture"
+                Layout.preferredWidth: root.compact ? parent.width : 250
+                Layout.fillWidth: root.compact
                 Layout.fillHeight: true
+                Layout.minimumHeight: 0
 
                 ScrollView {
                     id: studioLeftScroll
@@ -571,6 +601,7 @@ Item {
             }
 
             ColumnLayout {
+                visible: !root.compact || root.compactSection === "preview"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 spacing: 6
@@ -782,7 +813,9 @@ Item {
             }
 
             Pane {
-                Layout.preferredWidth: 340
+                visible: !root.compact || root.compactSection === "inspector"
+                Layout.preferredWidth: root.compact ? parent.width : 340
+                Layout.fillWidth: root.compact
                 Layout.fillHeight: true
 
                 ScrollView {
@@ -1014,6 +1047,29 @@ Item {
                                 .arg(studioController.maximumDriftMilliseconds.toFixed(1))
                                 .arg(studioController.audioCorrectionPpm.toFixed(1))
                           : qsTr("Sync: Not active")
+                }
+                Label {
+                    objectName: "cursorTelemetryStatusLabel"
+                    visible: root.cursorTelemetry !== null
+                    text: root.cursorTelemetry !== null
+                          ? root.cursorTelemetry.statusMessage
+                          : qsTr("Cursor data: Unavailable")
+                    color: root.cursorTelemetry !== null
+                           && root.cursorTelemetry.statusMessage.indexOf(
+                               "failed") >= 0
+                           ? "#ff6b6b" : palette.text
+                    Accessible.name: qsTr("Cursor telemetry status")
+                }
+                Label {
+                    objectName: "cursorTelemetryCountLabel"
+                    visible: root.cursorTelemetry !== null
+                             && (root.cursorTelemetry.active
+                                 || root.cursorTelemetry.eventCount > 0)
+                    text: root.cursorTelemetry !== null
+                          ? qsTr("Cursor events: %1").arg(
+                                root.cursorTelemetry.eventCount)
+                          : ""
+                    Accessible.name: qsTr("Recorded cursor event count")
                 }
 
                 ColumnLayout {

@@ -310,6 +310,20 @@ Result<std::map<std::string, media::MediaProbeResult>> indexedProbes(
     return result;
 }
 
+DurationNs concatDurationTolerance(const media::MediaProbeResult& probe) {
+    if (probe.video.has_value()) {
+        return core::frameToTimestamp(1, probe.video->frameRate)
+            .time_since_epoch();
+    }
+    if (probe.audio.has_value() && probe.audio->sampleRate > 0) {
+        constexpr std::int64_t nanosecondsPerSecond = 1'000'000'000LL;
+        return DurationNs{
+            (nanosecondsPerSecond + probe.audio->sampleRate - 1LL) /
+            probe.audio->sampleRate};
+    }
+    return DurationNs::zero();
+}
+
 Result<domain::MediaAsset> makeAsset(
     const RecordingImportRequest& request, const domain::SegmentInfo& segment,
     StudioSourceRole role, const media::MediaProbeResult& probe) {
@@ -319,7 +333,12 @@ Result<domain::MediaAsset> makeAsset(
     }
     auto end = segmentEnd(segment);
     if (!end.hasValue()) return end.error();
-    if (probe.duration < segment.duration) {
+    const bool concat = segment.relativePath.ends_with(".ffconcat");
+    const auto shortfall = segment.duration > probe.duration
+                               ? segment.duration - probe.duration
+                               : DurationNs::zero();
+    if (shortfall > (concat ? concatDurationTolerance(probe)
+                            : DurationNs::zero())) {
         return invalid("media probe duration is shorter than its segment: " +
                        segment.relativePath + " reports " +
                        std::to_string(probe.duration.count()) + " ns for " +
@@ -337,7 +356,8 @@ Result<domain::MediaAsset> makeAsset(
     return domain::MediaAsset::create(
         assetId.value(), videoRole(role) ? domain::MediaKind::Video
                                         : domain::MediaKind::Audio,
-        segment.relativePath, probe.duration, probe.video, probe.audio,
+        segment.relativePath, std::max(segment.duration, probe.duration),
+        probe.video, probe.audio,
         probe.byteSize, probe.sha256, domain::AssetAvailability::Available);
 }
 
@@ -591,16 +611,27 @@ Result<RecordingImportPlan> planRecordingImport(
             if (parts.empty()) return invalid("recording concat source is empty");
             auto merged = *parts.front();
             merged.relativePath = source.relativePath;
-            merged.duration = DurationNs::zero();
             for (std::size_t index = 0; index < parts.size(); ++index) {
                 if (parts[index]->sourceId != merged.sourceId ||
-                    (index > 0 &&
-                     parts[index]->startTime !=
-                         parts[index - 1]->startTime + parts[index - 1]->duration)) {
-                    return invalid("recording concat source contains a time gap");
+                    source.entries[index].offset !=
+                        parts[index]->startTime - merged.startTime) {
+                    return invalid(
+                        "recording concat source order or offset is invalid");
                 }
-                merged.duration += parts[index]->duration;
+                if (index > 0) {
+                    const auto gap = parts[index]->startTime -
+                                     (parts[index - 1]->startTime +
+                                      parts[index - 1]->duration);
+                    if (gap < -kMaximumRecordingConcatGap ||
+                        gap > kMaximumRecordingConcatGap) {
+                        return invalid(
+                            "recording concat source contains an unsupported time gap");
+                    }
+                }
             }
+            auto mergedEnd = segmentEnd(*parts.back());
+            if (!mergedEnd.hasValue()) return mergedEnd.error();
+            merged.duration = mergedEnd.value() - merged.startTime;
             if (auto imported = importUnit(std::move(merged), role->second,
                                            source.media);
                 !imported.hasValue()) {

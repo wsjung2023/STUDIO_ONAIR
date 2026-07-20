@@ -1006,8 +1006,13 @@ bool EditorController::loadTranscript(QUrl transcriptUrl) {
         setStatus(QStringLiteral("Transcript must be a local JSON artifact"));
         return false;
     }
+#if defined(_WIN32)
+    const auto path = std::filesystem::path{
+        transcriptUrl.toLocalFile().toStdWString()};
+#else
     const auto path = std::filesystem::path{
         transcriptUrl.toLocalFile().toUtf8().toStdString()};
+#endif
     transcription::TranscriptStore store(path.parent_path());
     auto loaded = store.read(path);
     if (!loaded.hasValue()) {
@@ -1015,9 +1020,55 @@ bool EditorController::loadTranscript(QUrl transcriptUrl) {
                   QString::fromStdString(loaded.error().message()));
         return false;
     }
+    publishTranscript(
+        loaded.value(),
+        QStringLiteral("Transcript loaded: %1 segment(s)")
+            .arg(loaded.value().segments().size()));
+    return true;
+}
+
+core::Result<void> EditorController::approveTranscriptProposal(
+    const transcription::Transcript& transcript,
+    std::int64_t expectedRevision) {
+    if (!snapshot_.has_value() || timelineRevision() != expectedRevision) {
+        return core::AppError{
+            core::ErrorCode::InvalidState,
+            "timeline changed after the transcript proposal was generated"};
+    }
+    transcription::TranscriptStore store{snapshot_->mediaRoot / "transcripts"};
+    auto written = store.write("local-ai", transcript);
+    if (!written.hasValue()) return written.error();
+    publishTranscript(
+        transcript,
+        QStringLiteral("Local AI transcript approved: %1 segment(s)")
+            .arg(transcript.segments().size()));
+    return core::ok();
+}
+
+core::Result<void> EditorController::approveCutProposal(
+    const domain::TimeRange& range, std::int64_t expectedRevision,
+    bool ripple) {
+    if (!snapshot_.has_value() || timelineRevision() != expectedRevision) {
+        return core::AppError{
+            core::ErrorCode::InvalidState,
+            "timeline changed after the cut proposal was generated"};
+    }
+    if (!durableSessionReady_ || sessionBusy_ || busy()) {
+        return core::AppError{
+            core::ErrorCode::InvalidState,
+            "editor is not ready to apply the cut proposal"};
+    }
+    queueSessionEdit(EditorEditRequest{.kind = EditorEditKind::DeleteRange,
+                                       .range = range,
+                                       .ripple = ripple});
+    return core::ok();
+}
+
+void EditorController::publishTranscript(
+    const transcription::Transcript& transcript, QString status) {
     QVariantList segments;
-    segments.reserve(static_cast<qsizetype>(loaded.value().segments().size()));
-    for (const auto& segment : loaded.value().segments()) {
+    segments.reserve(static_cast<qsizetype>(transcript.segments().size()));
+    for (const auto& segment : transcript.segments()) {
         QVariantMap item{
             {QStringLiteral("startNs"),
              QVariant::fromValue<qint64>(segment.range().start()
@@ -1034,9 +1085,7 @@ bool EditorController::loadTranscript(QUrl transcriptUrl) {
     }
     transcriptSegments_ = std::move(segments);
     emit transcriptChanged();
-    setStatus(QStringLiteral("Transcript loaded: %1 segment(s)")
-                  .arg(transcriptSegments_.size()));
-    return true;
+    setStatus(std::move(status));
 }
 
 void EditorController::addTranscriptSegment(int index) {

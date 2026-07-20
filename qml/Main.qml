@@ -11,23 +11,39 @@ ApplicationWindow {
     title: projectController.hasOpenProject
            ? qsTr("Creator Studio — %1").arg(projectController.projectName)
            : qsTr("Creator Studio")
+    readonly property bool compact: width < 720
 
-    readonly property var navigationPages: ["Home", "Studio", "Editor", "Export"]
-    readonly property var stackPages: ["Home", "Studio", "Editor", "Export", "Recovery"]
+    readonly property var navigationPages: ["Home", "Studio", "Editor", "Export", "Settings"]
+    readonly property var stackPages: ["Home", "Studio", "Editor", "Export", "Settings", "Recovery"]
     property string currentPage: "Home"
 
     Action {
         id: studioRecordAction
         objectName: "studioRecordAction"
-        text: studioController.recording ? qsTr("Stop") : qsTr("Record")
+        text: studioController.recording || studioController.paused
+              ? qsTr("Stop") : qsTr("Record")
         enabled: window.currentPage === "Studio"
                  && projectController.hasOpenProject
                  && !studioController.busy
                  && (studioController.recordingAvailable
-                     || studioController.recording)
-        onTriggered: studioController.recording
+                     || studioController.recording
+                     || studioController.paused)
+        onTriggered: studioController.recording || studioController.paused
                      ? studioController.stopRecording()
                      : studioController.startRecording()
+    }
+
+    Action {
+        id: studioPauseAction
+        objectName: "studioPauseAction"
+        text: studioController.paused ? qsTr("Resume") : qsTr("Pause")
+        enabled: window.currentPage === "Studio"
+                 && projectController.hasOpenProject
+                 && !studioController.busy
+                 && (studioController.recording || studioController.paused)
+        onTriggered: studioController.paused
+                     ? studioController.resumeRecording()
+                     : studioController.pauseRecording()
     }
 
     Shortcut {
@@ -54,9 +70,10 @@ ApplicationWindow {
     header: ToolBar {
         RowLayout {
             anchors.fill: parent
-            spacing: 12
+            spacing: window.compact ? 2 : 12
 
             Label {
+                visible: !window.compact
                 text: qsTr("Creator Studio")
                 font.pixelSize: 20
                 font.bold: true
@@ -68,8 +85,11 @@ ApplicationWindow {
                 ToolButton {
                     required property string modelData
                     text: modelData
+                    Layout.minimumWidth: window.compact ? 56 : implicitWidth
+                    Layout.minimumHeight: 44
                     checked: window.currentPage === modelData
                     enabled: !studioController.recording
+                             && !studioController.paused
                              && !studioController.busy
                              && (modelData !== "Studio" || projectController.hasOpenProject)
                              && (modelData !== "Editor" || projectController.hasOpenProject)
@@ -81,14 +101,14 @@ ApplicationWindow {
             Item { Layout.fillWidth: true }
 
             Label {
-                visible: projectController.hasOpenProject
+                visible: projectController.hasOpenProject && !window.compact
                 text: projectController.projectName
                 elide: Text.ElideMiddle
                 Layout.maximumWidth: 280
             }
 
             Label {
-                visible: window.currentPage === "Studio"
+                visible: window.currentPage === "Studio" && !window.compact
                 text: studioController.takeDuration
                 font.family: "monospace"
                 font.pixelSize: 16
@@ -98,7 +118,16 @@ ApplicationWindow {
                 objectName: "studioRecordButton"
                 action: studioRecordAction
                 visible: window.currentPage === "Studio"
-                highlighted: studioController.recording
+                Layout.minimumHeight: 44
+                highlighted: studioController.recording || studioController.paused
+            }
+
+            Button {
+                objectName: "studioPauseButton"
+                action: studioPauseAction
+                visible: window.currentPage === "Studio"
+                         && (studioController.recording || studioController.paused)
+                Layout.minimumHeight: 44
             }
         }
     }
@@ -109,8 +138,13 @@ ApplicationWindow {
 
         HomePage {}
         StudioPage {}
-        EditorPage { controller: editorController }
+        EditorPage {
+            controller: editorController
+            intelligenceController: typeof intelligenceController !== "undefined"
+                                    ? intelligenceController : null
+        }
         ExportPage { controller: exportController }
+        SettingsPage { controller: commercialControlsController }
         RecoveryPage {}
     }
 }

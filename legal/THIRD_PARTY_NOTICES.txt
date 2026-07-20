@@ -1,0 +1,31 @@
+Creator Studio Third-Party Notices
+==================================
+
+Creator Studio includes or dynamically uses third-party software under the
+licenses listed below. The shipped component set and exact build boundaries are
+recorded in OSS_BOM.csv; entries marked test-only, deferred, reference-only, or
+prohibited are not part of release artifacts.
+
+Qt 6 — LGPL-3.0 or a commercial Qt license
+Source and license information: https://www.qt.io/licensing/open-source-lgpl-obligations
+
+FFmpeg — LGPL-2.1-or-later, built without GPL and nonfree components
+Source and license information: https://ffmpeg.org/legal.html
+
+MLT Framework core and approved plugins — LGPL-2.1 and audited plugin licenses
+Source and license information: https://www.mltframework.org/docs/copyrightpolicy/
+
+SQLite — Public Domain
+Source and dedication: https://www.sqlite.org/copyright.html
+
+nlohmann/json — MIT
+Source and license information: https://github.com/nlohmann/json
+
+pboettch/json-schema-validator — MIT
+Source and license information: https://github.com/pboettch/json-schema-validator
+
+Optional builds may also include whisper.cpp (MIT), the ggml Whisper model
+(MIT), and RNNoise (BSD-3-Clause). Their exact pins and source archive hashes
+are recorded in OSS_BOM.csv. Distributors must ship the corresponding license
+texts and any LGPL relinking/source-offer materials required by their chosen Qt,
+FFmpeg, and MLT distribution model.

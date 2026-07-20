@@ -9,6 +9,8 @@ $FfmpegBootstrapPath = Join-Path $RepositoryRoot "scripts/bootstrap_ffmpeg.ps1"
 $BootstrapPath = Join-Path $RepositoryRoot "scripts/bootstrap_mlt.ps1"
 $VerifierPath = Join-Path $RepositoryRoot "scripts/verify_mlt_runtime.ps1"
 $StagePath = Join-Path $RepositoryRoot "scripts/stage_mlt_runtime.ps1"
+$PthreadsPatchPath = Join-Path $RepositoryRoot `
+    "scripts/patches/pthreads4w-lazy-mutex-events.patch"
 
 if (-not (Test-Path -LiteralPath $FfmpegBootstrapPath)) {
     throw "Missing FFmpeg bootstrap: $FfmpegBootstrapPath"
@@ -21,6 +23,9 @@ if (-not (Test-Path -LiteralPath $VerifierPath)) {
 }
 if (-not (Test-Path -LiteralPath $StagePath)) {
     throw "Missing MLT runtime staging script: $StagePath"
+}
+if (-not (Test-Path -LiteralPath $PthreadsPatchPath)) {
+    throw "Missing audited PThreads4W patch: $PthreadsPatchPath"
 }
 
 $FfmpegBootstrap = Get-Content -LiteralPath $FfmpegBootstrapPath -Raw -Encoding utf8
@@ -54,11 +59,40 @@ $RequiredPatterns = @(
     'MOD_XML=OFF',
     'mlt-runtime-manifest\.json',
     'Get-FileHash',
-    'creator-studio-mlt-build\.txt'
+    'creator-studio-mlt-build\.txt',
+    'creator-studio-pthreads4w-v3\.0\.0-lazy-mutex-events-v1',
+    'pthreads4w-lazy-mutex-events\.patch',
+    'creator-studio-lazy-mutex-events\.patch',
+    'PatchedPthreadsPortVersion\s*=\s*15',
+    '"port-version": 14',
+    'Patched PThreads4W overlay was not installed',
+    'remove "pthreads:\$Triplet" --recurse',
+    'Could not replace the unpatched PThreads4W dependency',
+    'vcpkg-overlay-ports',
+    '--overlay-ports',
+    '--recurse',
+    'windows_mutex_patch'
 )
 foreach ($Pattern in $RequiredPatterns) {
     if ($Bootstrap -notmatch $Pattern) {
         throw "MLT bootstrap is missing required policy evidence: $Pattern"
+    }
+}
+
+$PthreadsPatch = Get-Content -LiteralPath $PthreadsPatchPath -Raw -Encoding utf8
+foreach ($Pattern in @(
+    'diff --git a/implement\.h b/implement\.h',
+    'diff --git a/pthread_mutex_init\.c b/pthread_mutex_init\.c',
+    'diff --git a/pthread_mutex_destroy\.c b/pthread_mutex_destroy\.c',
+    '__ptw32_mutex_get_event',
+    'InterlockedCompareExchangePointer',
+    '(?m)^\+\s+mx->event = NULL;',
+    '(?m)^\+\s+if \(mx->event != NULL && !CloseHandle \(mx->event\)\)',
+    'WaitForSingleObject \(__ptw32_mutex_get_event \(mx\), INFINITE\)',
+    'SetEvent \(__ptw32_mutex_get_event \(mx\)\)'
+)) {
+    if ($PthreadsPatch -notmatch $Pattern) {
+        throw "PThreads4W patch is missing lazy-event policy evidence: $Pattern"
     }
 }
 
@@ -76,7 +110,7 @@ foreach ($Pattern in $ForbiddenPackagingPatterns) {
 }
 
 $Verifier = Get-Content -LiteralPath $VerifierPath -Raw -Encoding utf8
-foreach ($Pattern in @('SHA256', 'unexpected', 'forbidden', 'source_commit', '7\.40\.0', 'zlib', 'Zlib')) {
+foreach ($Pattern in @('SHA256', 'unexpected', 'forbidden', 'source_commit', 'windows_mutex_patch', '7\.40\.0', 'zlib', 'Zlib')) {
     if ($Verifier -notmatch $Pattern) {
         throw "MLT verifier is missing fail-closed check: $Pattern"
     }
@@ -95,6 +129,7 @@ foreach ($Pattern in @(
     'development',
     'verify_mlt_runtime\.ps1',
     'mlt-runtime-manifest\.json',
+    'windows_mutex_patch',
     'ConvertTo-Json'
 )) {
     if ($Stage -notmatch $Pattern) {

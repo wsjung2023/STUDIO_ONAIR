@@ -22,8 +22,12 @@ add_library(cs_app STATIC
     LiveRecordingEngineFactory.cpp
     TranscriptionProviderFactory.h
     TranscriptionProviderFactory.cpp
+    CreatorIntelligenceController.h
+    CreatorIntelligenceController.cpp
     LiveRecordingController.h
     LiveRecordingController.cpp
+    CursorRecordingBinding.h
+    CursorRecordingBinding.cpp
     StudioRecordingBinding.h
     StudioRecordingBinding.cpp
     StudioController.h
@@ -68,6 +72,8 @@ add_library(cs_app STATIC
     StudioWorkflowController.cpp
     ShortcutSettingsController.h
     ShortcutSettingsController.cpp
+    CommercialControlsController.h
+    CommercialControlsController.cpp
     TimelineTrackModel.h
     TimelineTrackModel.cpp
     EditorEngineWorker.h
@@ -78,17 +84,25 @@ add_library(cs_app STATIC
     EditorPreviewItem.cpp
     ExportWorker.h
     ExportWorker.cpp
+    IExportDestinationResolver.h
+    IExportDestinationResolver.cpp
     ExportController.h
     ExportController.cpp
     AvatarFrameTrackingCoordinator.h
     AvatarFrameTrackingCoordinator.cpp
+    android/AndroidTimelineExportPlan.h
+    android/AndroidTimelineExportPlan.cpp
 )
 
-if(CS_ENABLE_FFMPEG)
+if(CS_ENABLE_FFMPEG OR ANDROID)
     target_sources(cs_app PRIVATE
         FfmpegLiveRecordingEngine.h
         FfmpegLiveRecordingEngine.cpp
     )
+    target_compile_definitions(cs_app PRIVATE CS_APP_ENABLE_LIVE_RECORDING=1)
+endif()
+
+if(CS_ENABLE_FFMPEG)
     target_compile_definitions(cs_app PRIVATE CS_APP_ENABLE_FFMPEG=1)
 endif()
 
@@ -96,6 +110,8 @@ if(CS_ENABLE_MLT)
     target_sources(cs_app PRIVATE
         ProjectExportEngine.h
         ProjectExportEngine.cpp
+        MltCreatorIntelligenceAudioLoader.h
+        MltCreatorIntelligenceAudioLoader.cpp
     )
     target_link_libraries(cs_app PRIVATE cs_mlt_adapter)
 endif()
@@ -116,6 +132,25 @@ if(APPLE)
 else()
     target_sources(cs_app PRIVATE VideoPreviewItem_stub.cpp)
 endif()
+
+if(ANDROID)
+    target_sources(cs_app PRIVATE
+        android/AndroidDeviceCaptureBackend.h
+        android/AndroidDeviceCaptureBackend.cpp
+        android/AndroidScreenCaptureBackend.h
+        android/AndroidScreenCaptureBackend.cpp
+        android/AndroidExportDestinationResolver.h
+        android/AndroidExportDestinationResolver.cpp
+        android/AndroidDeviceProfile.h
+        android/AndroidDeviceProfile.cpp
+        android/AndroidMediaCodecSession.h
+        android/AndroidMediaCodecSession.cpp
+        android/AndroidMediaCodecSegmentEncoder.h
+        android/AndroidMediaCodecSegmentEncoder.cpp
+        android/AndroidMediaCodecEditEngine.h
+        android/AndroidMediaCodecEditEngine.cpp
+    )
+endif()
 add_library(CreatorStudio::cs_app ALIAS cs_app)
 
 target_include_directories(cs_app PUBLIC ${PROJECT_SOURCE_DIR}/src)
@@ -131,12 +166,19 @@ target_link_libraries(cs_app
         cs_domain
         cs_edit_engine
         cs_transcription
+        cs_cut_suggest
+        cs_cursor
+        cs_platform_release
     PRIVATE
         cs_project_store
 )
 
 if(CS_ENABLE_FFMPEG)
-    target_link_libraries(cs_app PRIVATE cs_ffmpeg_adapter cs_sync)
+    target_link_libraries(cs_app PRIVATE cs_ffmpeg_adapter)
+endif()
+
+if(CS_ENABLE_FFMPEG OR ANDROID)
+    target_link_libraries(cs_app PRIVATE cs_sync)
 endif()
 
 if(CS_ENABLE_WHISPER)

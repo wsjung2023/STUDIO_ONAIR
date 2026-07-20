@@ -244,7 +244,7 @@ core::Result<void> AsyncTrackRecorder::process(const media::VideoFrame& frame) {
     if (auto accepted = encoder_->accept(frame); !accepted.hasValue()) {
         return accepted.error();
     }
-    lastMediaEndTime_ = std::max(lastMediaEndTime_, frame.timestamp + core::Nanoseconds{1});
+    lastMediaEndTime_ = std::max(lastMediaEndTime_, frame.timestamp + core::DurationNs{1});
     {
         std::lock_guard lock{mutex_};
         ++summary_.videoFramesAccepted;
@@ -320,7 +320,8 @@ core::Result<void> AsyncTrackRecorder::openSegment(core::TimestampNs startTime) 
         std::lock_guard lock{mutex_};
         diskSpaceSnapshot_ = space.value();
     }
-    auto paths = publisher_->begin(config_.track, nextSegmentIndex_, startTime);
+    auto paths = publisher_->begin(config_.track, nextSegmentIndex_, startTime,
+                                   encoder_->container());
     if (!paths.hasValue()) return paths.error();
 
     SegmentEncodeConfig encodeConfig{

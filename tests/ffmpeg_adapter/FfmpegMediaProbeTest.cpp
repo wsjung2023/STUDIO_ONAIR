@@ -1,6 +1,7 @@
 #include "ffmpeg_adapter/FfmpegMediaProbe.h"
 
 #include "ffmpeg_adapter/FfmpegAudioSegmentEncoder.h"
+#include "ffmpeg_adapter/FfmpegConcatRemuxer.h"
 #include "ffmpeg_adapter/FfmpegVideoSegmentEncoder.h"
 #include "recorder/RecordingTrack.h"
 
@@ -11,13 +12,17 @@ extern "C" {
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <iomanip>
+#include <iostream>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -320,6 +325,104 @@ TEST_F(FfmpegMediaProbeTest, ProbesUnicodePackageRelativePath) {
     EXPECT_EQ(result.value().sha256, independentSha256(root_ / relative));
 }
 
+TEST_F(FfmpegMediaProbeTest,
+       ProbesValidatedConcatWhosePackageEntriesUseEncodedSourceIds) {
+    const fs::path directory{"media/windows%2Fdisplay%3A65620"};
+    std::error_code error;
+    fs::create_directories(root_ / directory, error);
+    ASSERT_FALSE(error) << error.message();
+    const auto first = encodeVideo(
+        "windows%2Fdisplay%3A65620/segment_000000.mkv");
+    const auto second = root_ / directory / "segment_000001.mkv";
+    fs::copy_file(first, second, error);
+    ASSERT_FALSE(error) << error.message();
+    const fs::path manifest{"derived-concat-physical.ffconcat"};
+    {
+        std::ofstream output{root_ / manifest, std::ios::binary};
+        output << "ffconcat version 1.0\n"
+               << "file 'media/windows%2Fdisplay%3A65620/segment_000000.mkv'\n"
+               << "duration 0.100000000\n"
+               << "file 'media/windows%2Fdisplay%3A65620/segment_000001.mkv'\n"
+               << "duration 0.100000000\n";
+    }
+    FfmpegMediaProbe probe;
+
+    const auto result = probe.probe(root_, manifest);
+
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    ASSERT_TRUE(result.value().video.has_value());
+    EXPECT_GE(result.value().duration, std::chrono::milliseconds{190});
+
+    const auto entries =
+        creator::ffmpeg_adapter::readValidatedFfmpegConcat(root_ / manifest);
+    ASSERT_TRUE(entries.hasValue()) << entries.error().message();
+    ASSERT_EQ(entries.value().size(), 2U);
+    EXPECT_EQ(entries.value()[0].duration, std::chrono::milliseconds{100});
+    EXPECT_EQ(entries.value()[1].path, fs::weakly_canonical(second));
+
+    const auto materialized =
+        creator::ffmpeg_adapter::materializeFfmpegConcatForEditing(
+            root_ / manifest);
+    ASSERT_TRUE(materialized.hasValue()) << materialized.error().message();
+    ASSERT_TRUE(fs::is_regular_file(materialized.value()));
+    const auto cached = probe.probe(root_,
+                                    materialized.value().filename());
+    ASSERT_TRUE(cached.hasValue()) << cached.error().message();
+    ASSERT_TRUE(cached.value().video.has_value());
+    EXPECT_GE(cached.value().duration, std::chrono::milliseconds{190});
+    const auto reused =
+        creator::ffmpeg_adapter::materializeFfmpegConcatForEditing(
+            root_ / manifest);
+    ASSERT_TRUE(reused.hasValue()) << reused.error().message();
+    EXPECT_EQ(reused.value(), materialized.value());
+}
+
+TEST_F(FfmpegMediaProbeTest,
+       MaterializesRepeatedAudioSegmentsWithOverlappingPacketTimestamps) {
+    const auto audio = encodeAudio();
+    const fs::path manifest{"derived-concat-audio-overlap.ffconcat"};
+    constexpr int segmentCount = 20;
+    {
+        std::ofstream output{root_ / manifest, std::ios::binary};
+        output << "ffconcat version 1.0\n";
+        for (int index = 0; index < segmentCount; ++index) {
+            output << "file 'media/audio.mka'\n"
+                   << "duration 0.022000000\n";
+        }
+    }
+
+    const auto materialized =
+        creator::ffmpeg_adapter::materializeFfmpegConcatForEditing(
+            root_ / manifest);
+
+    ASSERT_TRUE(materialized.hasValue()) << materialized.error().message();
+    FfmpegMediaProbe probe;
+    const auto cached =
+        probe.probe(root_, materialized.value().filename());
+    ASSERT_TRUE(cached.hasValue()) << cached.error().message();
+    EXPECT_FALSE(cached.value().video.has_value());
+    ASSERT_TRUE(cached.value().audio.has_value());
+    EXPECT_LE(std::chrono::abs(cached.value().duration -
+                               std::chrono::milliseconds{segmentCount * 22}),
+              std::chrono::milliseconds{100});
+}
+
+TEST_F(FfmpegMediaProbeTest, RejectsConcatEntryOutsidePackageRoot) {
+    const fs::path manifest{"derived-concat-escape.ffconcat"};
+    {
+        std::ofstream output{root_ / manifest, std::ios::binary};
+        output << "ffconcat version 1.0\n"
+               << "file '../outside.mkv'\n"
+               << "duration 1.000000000\n";
+    }
+    FfmpegMediaProbe probe;
+
+    const auto result = probe.probe(root_, manifest);
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+}
+
 TEST_F(FfmpegMediaProbeTest, RejectsMissingDirectoryTraversalAndTruncatedInput) {
     FfmpegMediaProbe probe;
     const auto missing = probe.probe(root_, "media/missing.mkv");
@@ -456,6 +559,82 @@ TEST_F(FfmpegMediaProbeTest, RejectsRedirectedMediaPath) {
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
     ASSERT_TRUE(fs::remove(link, error));
+}
+
+TEST(FfmpegConcatRemuxerStressTest,
+     MaterializesRetainedConcatPackageWhenExplicitlyRequested) {
+#ifdef _WIN32
+    const DWORD required =
+        GetEnvironmentVariableW(L"CS_R1_REPLAY_PACKAGE", nullptr, 0);
+    if (required == 0) {
+#else
+    const auto* configured = std::getenv("CS_R1_REPLAY_PACKAGE");
+    if (configured == nullptr || *configured == '\0') {
+#endif
+        GTEST_SKIP() << "Set CS_R1_REPLAY_PACKAGE to a retained .cstudio package";
+    }
+#ifdef _WIN32
+    std::wstring configured(required, L'\0');
+    const DWORD copied = GetEnvironmentVariableW(
+        L"CS_R1_REPLAY_PACKAGE", configured.data(), required);
+    ASSERT_GT(copied, 0U);
+    ASSERT_LT(copied, required);
+    configured.resize(copied);
+#endif
+    const fs::path packageRoot{configured};
+    ASSERT_TRUE(fs::is_directory(packageRoot));
+    std::vector<fs::path> manifests;
+    for (const auto& entry : fs::directory_iterator(packageRoot)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".ffconcat") {
+            manifests.push_back(entry.path());
+        }
+    }
+    std::sort(manifests.begin(), manifests.end());
+    ASSERT_FALSE(manifests.empty());
+
+#ifdef _WIN32
+    DWORD initialHandles = 0;
+    ASSERT_NE(GetProcessHandleCount(GetCurrentProcess(), &initialHandles),
+              FALSE);
+    std::atomic<DWORD> maximumHandles{initialHandles};
+    std::jthread sampler([&](std::stop_token stop) {
+        while (!stop.stop_requested()) {
+            DWORD current = 0;
+            if (GetProcessHandleCount(GetCurrentProcess(), &current) != FALSE) {
+                auto maximum = maximumHandles.load(std::memory_order_relaxed);
+                while (current > maximum &&
+                       !maximumHandles.compare_exchange_weak(
+                           maximum, current, std::memory_order_relaxed)) {
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{2});
+        }
+    });
+#endif
+
+    for (const auto& manifest : manifests) {
+        const auto started = std::chrono::steady_clock::now();
+        std::cout << "[R1-CONCAT] starting " << manifest.filename().string()
+                  << std::endl;
+        const auto materialized =
+            creator::ffmpeg_adapter::materializeFfmpegConcatForEditing(
+                manifest);
+        ASSERT_TRUE(materialized.hasValue()) << materialized.error().message();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started);
+        std::cout << "[R1-CONCAT] completed " << manifest.filename().string()
+                  << " milliseconds=" << elapsed.count() << " bytes="
+                  << fs::file_size(materialized.value()) << std::endl;
+    }
+#ifdef _WIN32
+    sampler.request_stop();
+    sampler.join();
+    const auto maximum = maximumHandles.load(std::memory_order_relaxed);
+    std::cout << "[R1-CONCAT] handles_initial=" << initialHandles
+              << " handles_maximum=" << maximum
+              << " handles_growth=" << maximum - initialHandles << std::endl;
+    EXPECT_LE(maximum, initialHandles + 1'000U);
+#endif
 }
 
 }  // namespace

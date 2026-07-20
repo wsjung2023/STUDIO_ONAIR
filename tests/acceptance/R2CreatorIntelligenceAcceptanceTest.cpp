@@ -1,12 +1,14 @@
 // R2-07 automated acceptance test for the "creator intelligence" surface.
 //
 // This exercises the R2 intelligence features end to end using only the FAKE
-// providers and the DEFAULT (all gates OFF) build — no real MLT, whisper.cpp, or
-// RNNoise is required — and asserts the cross-cutting contract:
+// providers and the DEFAULT (all gates OFF) build. The enabled build separately
+// exercises real MLT, whisper.cpp, and RNNoise adapters.
 //   * transcription: FakeTranscriptionProvider -> Transcript -> TranscriptStore
 //     round-trips and the serialized document validates against its schema;
 //   * cursor: FakeCursorSource -> CursorNormalizer -> events -> AutoZoomAnalyzer
 //     yields candidates and EmphasisPlanner yields a plan, both schema-valid;
+//   * cut suggestions: shared-timebase audio + transcript yield ordered silence
+//     and filler proposals which validate against the shipped schema;
 //   * audio: the denoise-omitted cleanup chain (compressor -> true-peak limiter)
 //     runs a synthetic program, and ExportLoudnessAnalyzer's decision, when
 //     applied (LoudnessNormalizer), drives the program to target LUFS;
@@ -14,16 +16,9 @@
 //     loudness decision reaches target within tolerance, and every serialized
 //     artifact validates against its committed schema.
 //
-// OUT OF SCOPE (documented, not silently skipped):
-//   * The physical R2-07 gate — a real 30-min capture -> edit -> export whose
-//     rendered file is checked for A/V sync + integrated loudness on target — can
-//     only run in an ENABLED preset (CS_ENABLE_MLT/FFMPEG/WHISPER/RNNOISE) on a
-//     real machine. MLT export atomicity / cancel / retry likewise need the real
-//     engine. Those are the enabled-preset + real-machine step, asserted by the
-//     R1*/enabled acceptance suites, and are deliberately not reachable here.
-//   * cut-suggest (CutSuggestionAnalyzer) is not present in this worktree's tree,
-//     so it is not linked or asserted here; when it lands it should be added to
-//     this suite over the synthetic audio + transcript built below.
+// The real-machine R2-07 evidence is produced by the enabled preset and recorded
+// in the R2-07 closure report; this default-build suite does not pretend fakes
+// are physical verification.
 
 #include "audio_dsp/AudioBuffer.h"
 #include "audio_dsp/AudioCleanupChain.h"
@@ -46,6 +41,10 @@
 #include "cursor_emphasis/EmphasisPlanParameters.h"
 #include "cursor_emphasis/EmphasisPlanSerializer.h"
 #include "cursor_emphasis/EmphasisPlanner.h"
+#include "cut_suggest/CutReason.h"
+#include "cut_suggest/CutSuggestParameters.h"
+#include "cut_suggest/CutSuggestionAnalyzer.h"
+#include "cut_suggest/CutSuggestionSerializer.h"
 #include "domain/Identifiers.h"
 #include "fakes/FakeCursorSource.h"
 #include "transcription/AudioInput.h"
@@ -53,12 +52,15 @@
 #include "transcription/Transcript.h"
 #include "transcription/TranscriptSerializer.h"
 #include "transcription/TranscriptStore.h"
+#include "transcription/TranscriptSegment.h"
+#include "transcription/TranscriptWord.h"
 
 #include <nlohmann/json-schema.hpp>
 #include <nlohmann/json.hpp>
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -294,6 +296,46 @@ TEST(R2CreatorIntelligenceAcceptance, CursorDrivesAutoZoomAndEmphasis) {
     EXPECT_TRUE(validatesAgainstSchema(CS_EMPHASIS_PLAN_SCHEMA_PATH,
                                        planJson.value(), &why))
         << why;
+}
+
+// =============================================================================
+// Suggestions: shared audio/transcript timebase -> reviewable cut proposals.
+// =============================================================================
+TEST(R2CreatorIntelligenceAcceptance,
+     SilenceAndFillerBecomeOrderedSchemaValidProposals) {
+    const auto format = audio_dsp::AudioFormat::create(48'000, 1).value();
+    std::vector<float> mono(48'000 * 2, 0.2F);
+    std::fill(mono.begin() + 48'000 / 5,
+              mono.begin() + 48'000 * 4 / 5, 0.0F);
+    audio_dsp::AudioBuffer audio{mono.data(), mono.size(), format};
+
+    const auto fillerRange = domain::TimeRange::create(
+        at(1'200'000'000), DurationNs{100'000'000}).value();
+    auto filler = transcription::TranscriptWord::create(
+        "um", fillerRange, 0.95).value();
+    auto segment = transcription::TranscriptSegment::create(
+        "um", fillerRange, {filler}).value();
+    auto transcript = transcription::Transcript::create(
+        {segment}, "en", screenSource()).value();
+
+    cut_suggest::CutSuggestionAnalyzer analyzer{
+        cut_suggest::CutSuggestParameters::create().value()};
+    auto proposed = analyzer.analyze(audio, transcript);
+    ASSERT_TRUE(proposed.hasValue()) << proposed.error().message();
+    ASSERT_EQ(proposed.value().size(), 2U);
+    EXPECT_EQ(proposed.value()[0].reason(), cut_suggest::CutReason::Silence);
+    EXPECT_EQ(proposed.value()[1].reason(), cut_suggest::CutReason::Filler);
+    EXPECT_LE(proposed.value()[0].span().start(),
+              proposed.value()[1].span().start());
+
+    for (const auto& suggestion : proposed.value()) {
+        auto document = cut_suggest::CutSuggestionSerializer::toJson(suggestion);
+        ASSERT_TRUE(document.hasValue());
+        std::string why;
+        EXPECT_TRUE(validatesAgainstSchema(CS_CUT_SUGGESTION_SCHEMA_PATH,
+                                           document.value(), &why))
+            << why;
+    }
 }
 
 // =============================================================================

@@ -26,7 +26,14 @@ $RequiredPatterns = @(
     'verify_rnnoise_runtime\.ps1',
     'rnnoise-runtime-manifest\.json',
     'creator-studio-rnnoise-build\.txt',
-    'BSD-3-Clause'
+    'BSD-3-Clause',
+    'creator-studio-rnnoise-v0\.1\.1-msvc-vla-bounds-v1',
+    'Invoke-VerifiedSourceReplacement',
+    'opus_val16 x_lp4\[240\]',
+    'opus_val16 y_lp4\[387\]',
+    'opus_val32 xcorr\[294\]',
+    'opus_val32 yy_lookup\[385\]',
+    'opus_val16 xx\[864\]'
 )
 foreach ($Pattern in $RequiredPatterns) {
     if ($Bootstrap -notmatch $Pattern) {
