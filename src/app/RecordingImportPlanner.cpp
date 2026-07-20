@@ -3,6 +3,7 @@
 #include "core/AppError.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -319,7 +320,20 @@ Result<domain::MediaAsset> makeAsset(
     }
     auto end = segmentEnd(segment);
     if (!end.hasValue()) return end.error();
-    if (probe.duration < segment.duration) {
+    // A finalized/concatenated container quantizes its reported duration to
+    // codec frame boundaries, so an intact asset can measure a sub-frame shorter
+    // than the summed segment metadata even though no media is missing. Tolerate
+    // less than one audio frame (with a small container-rounding floor); a
+    // truncated or replaced file is short by whole frames/seconds and is still
+    // rejected here (and its media identity lease fails independently).
+    core::DurationNs shortfallTolerance =
+        std::chrono::duration_cast<core::DurationNs>(std::chrono::milliseconds{1});
+    if (probe.audio.has_value() && probe.audio->sampleRate > 0) {
+        const core::DurationNs audioFrame{1'000'000'000LL * 1024LL /
+                                          probe.audio->sampleRate};
+        shortfallTolerance = std::max(shortfallTolerance, audioFrame);
+    }
+    if (probe.duration + shortfallTolerance < segment.duration) {
         return invalid("media probe duration is shorter than its segment: " +
                        segment.relativePath + " reports " +
                        std::to_string(probe.duration.count()) + " ns for " +
@@ -514,6 +528,11 @@ Result<RecordingImportPlan> planRecordingImport(
         -> Result<void> {
         auto asset = makeAsset(request, unit, role, probe);
         if (!asset.hasValue()) return asset.error();
+        // The asset can be a codec-frame shorter than the summed segment
+        // metadata (see makeAsset's shortfall tolerance). Clamp the unit's usable
+        // span to what the media actually contains so no clip source range runs
+        // past the asset (Timeline rejects "clip range exceeds its asset").
+        unit.duration = std::min(unit.duration, asset.value().duration());
         auto boundaries = splitBoundaries(request, events.value(), unit, role);
         if (!boundaries.hasValue()) return boundaries.error();
         for (std::size_t index = 0; index + 1 < boundaries.value().size(); ++index) {

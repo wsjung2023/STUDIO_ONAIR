@@ -635,6 +635,61 @@ if(CS_ENABLE_FFMPEG AND CS_ENABLE_MLT)
     )
 endif()
 
+# One-tool end-to-end acceptance: record -> whisper captions -> cut -> MP4 export.
+# Only buildable when every audited engine gate is on together.
+if(CS_ENABLE_FFMPEG AND CS_ENABLE_MLT AND CS_ENABLE_WHISPER)
+    add_executable(cs_onetool_e2e_acceptance_tests
+        acceptance/OneToolEndToEndAcceptanceTest.cpp
+    )
+    target_link_libraries(cs_onetool_e2e_acceptance_tests PRIVATE
+        cs_app
+        cs_ffmpeg_adapter
+        cs_mlt_adapter
+        cs_whisper_adapter
+        cs_transcription
+        Qt6::Quick
+        Qt6::Test
+        GTest::gtest
+    )
+    target_compile_definitions(cs_onetool_e2e_acceptance_tests PRIVATE
+        CS_TEST_MLT_ROOT="${CS_MLT_ROOT}"
+        CS_TEST_WHISPER_ROOT="${CS_WHISPER_ROOT}"
+        CS_TEST_WHISPER_SAMPLE="${CS_WHISPER_ROOT}/share/whisper-samples/jfk.wav"
+    )
+    target_include_directories(cs_onetool_e2e_acceptance_tests SYSTEM PRIVATE
+        ${FFMPEG_INCLUDE_DIRS}
+    )
+    if(WIN32 AND MSVC)
+        target_link_libraries(cs_onetool_e2e_acceptance_tests PRIVATE psapi)
+    endif()
+    cs_apply_warnings(cs_onetool_e2e_acceptance_tests)
+    if(WIN32)
+        # Direct libav calls (record + probe) resolve to app-local FFmpeg DLLs;
+        # MLT export and whisper inference resolve from their audited prefixes.
+        file(GLOB CS_ONETOOL_FFMPEG_DLLS CONFIGURE_DEPENDS "${CS_FFMPEG_ROOT}/bin/*.dll")
+        add_custom_command(TARGET cs_onetool_e2e_acceptance_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CS_ONETOOL_FFMPEG_DLLS}
+                $<TARGET_FILE_DIR:cs_onetool_e2e_acceptance_tests>
+            COMMAND_EXPAND_LISTS
+        )
+        set_property(TARGET cs_onetool_e2e_acceptance_tests PROPERTY TEST_LAUNCHER
+            "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:${CS_MLT_ROOT}/bin;--modify;PATH=path_list_prepend:${CS_WHISPER_ROOT}/bin;--modify;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;--"
+        )
+        gtest_discover_tests(cs_onetool_e2e_acceptance_tests
+            DISCOVERY_MODE PRE_TEST
+            PROPERTIES
+                TIMEOUT 300
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+                ENVIRONMENT_MODIFICATION
+                    "PATH=path_list_prepend:${CS_MLT_ROOT}/bin;PATH=path_list_prepend:${CS_WHISPER_ROOT}/bin;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+        )
+    else()
+        gtest_discover_tests(cs_onetool_e2e_acceptance_tests
+            PROPERTIES TIMEOUT 300 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    endif()
+endif()
+
 if(CS_ENABLE_FFMPEG)
     if(WIN32 AND CS_ENABLE_MLT)
         add_executable(cs_r1_07_physical_acceptance_tests

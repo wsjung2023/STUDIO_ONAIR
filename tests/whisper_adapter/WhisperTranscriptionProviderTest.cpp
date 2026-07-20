@@ -13,6 +13,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <optional>
 #include <string>
@@ -91,6 +92,22 @@ TEST(WhisperTranscriptionProviderTest, TranscribesKnownSampleWithSaneTimestamps)
 
     ASSERT_FALSE(transcript.segments().empty());
     EXPECT_FALSE(transcript.fullText().empty());
+
+    // Emit the real transcription as a proof artifact (text + a few timestamps).
+    std::cout << "[ WHISPER PROOF ] text: \"" << transcript.fullText() << "\"\n";
+    std::size_t shown = 0;
+    for (const auto& segment : transcript.segments()) {
+        std::cout << "[ WHISPER PROOF ] segment ["
+                  << segment.range().start().time_since_epoch().count() << "ns.."
+                  << segment.range().end().time_since_epoch().count() << "ns] \""
+                  << segment.text() << "\"\n";
+        for (const auto& word : segment.words()) {
+            if (shown++ >= 8) break;
+            std::cout << "[ WHISPER PROOF ]   word @"
+                      << word.range().start().time_since_epoch().count()
+                      << "ns \"" << word.text() << "\"\n";
+        }
+    }
 
     const std::int64_t audioNs = audio.duration().count();
     std::int64_t previousEnd = 0;
