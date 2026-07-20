@@ -46,8 +46,15 @@
 #endif
 
 #include <QGuiApplication>
+#include <QFont>
+#include <QFontDatabase>
+#include <QLocale>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQuickStyle>
+#include <QString>
+#include <QStringList>
+#include <QTranslator>
 #include <qqml.h>
 #include <QDir>
 #include <QElapsedTimer>
@@ -94,6 +101,39 @@ int main(int argc, char* argv[]) {
     QGuiApplication app(argc, argv);
     QGuiApplication::setOrganizationName(QStringLiteral("CreatorStudio"));
     QGuiApplication::setApplicationName(QStringLiteral("Creator Studio"));
+
+    // Bundle Pretendard (OFL) and make it the application default so the entire
+    // Korean UI renders in one consistent, premium typeface instead of the host
+    // system font. Failure to load any weight is logged but non-fatal.
+    const QStringList fontResources{
+        QStringLiteral(":/fonts/Pretendard-Regular.otf"),
+        QStringLiteral(":/fonts/Pretendard-Medium.otf"),
+        QStringLiteral(":/fonts/Pretendard-SemiBold.otf"),
+        QStringLiteral(":/fonts/Pretendard-Bold.otf")};
+    for (const QString& resource : fontResources) {
+        if (QFontDatabase::addApplicationFont(resource) < 0) {
+            qWarning("Failed to load bundled font %s", qUtf8Printable(resource));
+        }
+    }
+    QFont appFont(QStringLiteral("Pretendard"));
+    appFont.setPixelSize(14);
+    appFont.setStyleStrategy(QFont::PreferAntialias);
+    QGuiApplication::setFont(appFont);
+
+    // Load the Korean UI translation. The whole product ships in Korean, so the
+    // translator is installed regardless of the host locale.
+    auto* translator = new QTranslator(&app);
+    if (translator->load(QStringLiteral(":/i18n/creator_studio_ko.qm"))) {
+        QCoreApplication::installTranslator(translator);
+    } else {
+        qWarning("Failed to load Korean translation resource");
+    }
+
+    // The Material style gives Qt Quick Controls a modern, dark, elevation-aware
+    // look out of the box; Theme (qml/Theme.qml) layers the product palette,
+    // typography and spacing on top. Set before any QML loads.
+    QQuickStyle::setStyle(QStringLiteral("Material"));
+
     qmlRegisterType<creator::app::ScreenPreviewItem>("CreatorStudio.Native", 1, 0,
                                                       "ScreenPreviewItem");
     qmlRegisterType<creator::app::CameraPreviewItem>("CreatorStudio.Native", 1, 0,

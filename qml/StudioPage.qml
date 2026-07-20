@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Material
 import QtQuick.Layouts
 import CreatorStudio.Native 1.0
 
@@ -10,6 +11,9 @@ import CreatorStudio.Native 1.0
 // object, a capture source or a recorder directly.
 Item {
     id: root
+
+    // Design tokens for this page (see qml/Theme.qml).
+    Theme { id: theme }
 
     readonly property bool workflowEditable: !studioController.recording
                                              && !studioWorkflowController.recording
@@ -203,12 +207,17 @@ Item {
                 Label {
                     Layout.fillWidth: true
                     text: shortcutSettingsController.statusMessage
-                    color: "#ffcc66"
+                    color: theme.warning
                     wrapMode: Text.WordWrap
                     Accessible.name: qsTr("Shortcut settings status")
                 }
             }
         }
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        color: theme.bg
     }
 
     ColumnLayout {
@@ -221,8 +230,10 @@ Item {
             spacing: 1
 
             Pane {
-                Layout.preferredWidth: 250
+                Layout.preferredWidth: 296
                 Layout.fillHeight: true
+                padding: theme.spaceLg
+                background: Rectangle { color: theme.surface }
 
                 ScrollView {
                     id: studioLeftScroll
@@ -237,11 +248,11 @@ Item {
                     id: leftColumn
                     objectName: "studioLeftColumn"
                     width: studioLeftScroll.availableWidth
-                    // Prevent ScrollView from compressing the complete device
-                    // workflow into the viewport. Smaller/high-DPI windows scroll.
-                    height: 900
+                    // Fixed, generous height so the ScrollView scrolls rather than
+                    // compressing rows; sized for the taller Material metrics.
+                    height: 1320
 
-                    Label { text: qsTr("Scenes"); font.bold: true }
+                    Label { text: qsTr("Scenes"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -301,9 +312,8 @@ Item {
                             onDoubleClicked: studioWorkflowController.switchScene(
                                                  sceneId,
                                                  studioController.recordingPositionNs)
+                        }
                     }
-                }
-            }
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -390,7 +400,7 @@ Item {
                         }
                     }
 
-                    Label { text: qsTr("Sources"); font.bold: true }
+                    Label { text: qsTr("Sources"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
 
                     ListView {
                         id: sourceList
@@ -445,7 +455,7 @@ Item {
                         }
                     }
 
-                    Label { text: qsTr("Camera"); font.bold: true }
+                    Label { text: qsTr("Camera"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
 
                     ComboBox {
                         id: cameraDeviceSelector
@@ -497,7 +507,7 @@ Item {
                         font.pixelSize: 11
                     }
 
-                    Label { text: qsTr("Microphone"); font.bold: true }
+                    Label { text: qsTr("Microphone"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
 
                     ComboBox {
                         id: microphoneDeviceSelector
@@ -567,16 +577,19 @@ Item {
                         wrapMode: Text.WordWrap
                         font.pixelSize: 11
                     }
+                    }
                 }
             }
 
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: 6
+                Layout.margins: theme.spaceLg
+                spacing: theme.spaceMd
 
                 RowLayout {
                     Layout.fillWidth: true
+                    spacing: theme.spaceSm
 
                     ComboBox {
                         id: captureTargetSelector
@@ -630,8 +643,9 @@ Item {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: "#1f2228"
-                    border.color: studioController.recording ? "#ff6b6b" : "#3a3f49"
+                    radius: theme.radiusMd
+                    color: theme.bgDeep
+                    border.color: studioController.recording ? theme.danger : theme.border
                     border.width: studioController.recording ? 2 : 1
 
                     TestPattern {
@@ -751,7 +765,7 @@ Item {
                         anchors.margins: 12
                         visible: !screenCaptureController.previewing
                         text: qsTr("Development test pattern — R0-03 native capture targets macOS")
-                        color: "#dddddd"
+                        color: theme.textSecondary
                         font.pixelSize: 12
                     }
                 }
@@ -761,8 +775,10 @@ Item {
                     objectName: "captureStatusLabel"
                     Layout.fillWidth: true
                     text: screenCaptureController.statusMessage
-                    color: screenCaptureController.permissionRequired ? "#ffcc66" : palette.text
+                    color: screenCaptureController.permissionRequired ? theme.warning : theme.textSecondary
                     elide: Text.ElideRight
+                    font.family: theme.fontFamily
+                    font.pixelSize: theme.sizeLabel
                 }
 
                 Label {
@@ -776,14 +792,17 @@ Item {
                           .arg(screenCaptureController.ignoredFrames)
                           .arg(screenCaptureController.invalidFrames)
                           .arg(screenCaptureController.replacedPreviewFrames)
-                    font.family: "monospace"
-                    font.pixelSize: 12
+                    color: theme.textMuted
+                    font.family: theme.monoFamily
+                    font.pixelSize: theme.sizeCaption
                 }
             }
 
             Pane {
                 Layout.preferredWidth: 340
                 Layout.fillHeight: true
+                padding: theme.spaceLg
+                background: Rectangle { color: theme.surface }
 
                 ScrollView {
                     id: inspectorScroll
@@ -795,11 +814,11 @@ Item {
                     ColumnLayout {
                         id: inspectorColumn
                         width: inspectorScroll.availableWidth
-                        // Windows native controls have larger minimum heights.
-                        // Keep inspector rows uncompressed and scroll the pane.
-                        height: 1000
+                        // Fixed, generous height so inspector rows stay uncompressed
+                        // and the pane scrolls under the taller Material metrics.
+                        height: 1180
 
-                        Label { text: qsTr("Source inspector"); font.bold: true }
+                        Label { text: qsTr("Source inspector"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
                         Label {
                             Layout.fillWidth: true
                             text: studioWorkflowController.selectedSourceId.length > 0
@@ -812,7 +831,7 @@ Item {
                             Layout.fillWidth: true
                             visible: studioController.recording
                             text: qsTr("Transforms are read-only while recording")
-                            color: "#ffcc66"
+                            color: theme.warning
                             wrapMode: Text.WordWrap
                         }
 
@@ -879,7 +898,7 @@ Item {
                             }
                         }
 
-                        Label { text: qsTr("PIP presets"); font.bold: true }
+                        Label { text: qsTr("PIP presets"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
                         GridLayout {
                             Layout.fillWidth: true
                             columns: 2
@@ -913,6 +932,11 @@ Item {
         Pane {
             Layout.fillWidth: true
             Layout.preferredHeight: 160
+            padding: theme.spaceLg
+            background: Rectangle {
+                color: theme.surface
+                Rectangle { width: parent.width; height: 1; color: theme.border }
+            }
 
             ScrollView {
                 anchors.fill: parent
@@ -1069,7 +1093,7 @@ Item {
                     text: studioController.statusMessage.length > 0
                           ? studioController.statusMessage
                           : studioWorkflowController.statusMessage
-                    color: studioController.recording ? "#ff6b6b" : palette.text
+                    color: studioController.recording ? theme.danger : theme.textSecondary
                 }
                 }
             }

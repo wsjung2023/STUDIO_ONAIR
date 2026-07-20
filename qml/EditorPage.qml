@@ -1,10 +1,14 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Material
 import QtQuick.Layouts
 import CreatorStudio.Native 1.0
 
 Item {
     id: root
+
+    // Design tokens for this page (see qml/Theme.qml).
+    Theme { id: theme }
 
     required property var controller
     readonly property real nanosecondsPerPixel: 10000000
@@ -245,12 +249,21 @@ Item {
         return parts.length > 0 ? parts[parts.length - 1] : normalized
     }
 
+    Rectangle {
+        anchors.fill: parent
+        color: theme.bg
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 1
 
         ToolBar {
             Layout.fillWidth: true
+            background: Rectangle {
+                color: theme.surface
+                Rectangle { width: parent.width; height: 1; anchors.bottom: parent.bottom; color: theme.border }
+            }
 
             RowLayout {
                 anchors.fill: parent
@@ -267,7 +280,7 @@ Item {
                 Label {
                     text: qsTr("Playhead %1 s")
                           .arg((root.controller.playheadNs / 1000000000).toFixed(2))
-                    font.family: "monospace"
+                    font.family: theme.monoFamily
                 }
                 Slider {
                     id: seekSlider
@@ -291,13 +304,17 @@ Item {
                 }
                 Label {
                     text: qsTr("Revision %1").arg(root.controller.timelineRevision)
-                    color: "#aeb7c5"
+                    color: theme.textMuted
                 }
             }
         }
 
         ToolBar {
             Layout.fillWidth: true
+            background: Rectangle {
+                color: theme.surface
+                Rectangle { width: parent.width; height: 1; anchors.bottom: parent.bottom; color: theme.border }
+            }
 
             RowLayout {
                 anchors.fill: parent
@@ -377,6 +394,8 @@ Item {
             Pane {
                 Layout.preferredWidth: 280
                 Layout.fillHeight: true
+                padding: theme.spaceLg
+                background: Rectangle { color: theme.surface }
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -406,8 +425,8 @@ Item {
                             width: mediaList.width
                             height: 58
                             radius: 4
-                            color: available ? "#2b3038" : "#3a2e2e"
-                            border.color: available ? "#424a56" : "#a45a5a"
+                            color: available ? theme.surfaceElevated : "#3A1F24"
+                            border.color: available ? theme.border : theme.danger
 
                             Label {
                                 objectName: "mediaAsset-" + assetId
@@ -425,7 +444,7 @@ Item {
                                 anchors.margins: 8
                                 visible: !available
                                 text: qsTr("Offline — relink required")
-                                color: "#ff9b9b"
+                                color: theme.danger
                                 font.pixelSize: 11
                             }
                         }
@@ -436,12 +455,17 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                color: "#171a1f"
+                Layout.margins: theme.spaceLg
+                radius: theme.radiusMd
+                color: theme.bgDeep
+                border.color: theme.border
+                border.width: 1
 
                 EditorPreviewItem {
                     id: previewSurface
                     objectName: "editorPreviewSurface"
                     anchors.fill: parent
+                    anchors.margins: 1
                     frame: root.controller.previewImage
                     stale: root.controller.previewStale
                     statusText: root.controller.timelineRevision < 0
@@ -465,7 +489,7 @@ Item {
                              : qsTr("Editor preview ready"))
                     color: root.controller.previewStale ||
                            root.controller.timelineRevision < 0
-                           ? "#ffbe66" : "#ffffff"
+                           ? theme.warning : theme.textPrimary
                     font.pixelSize: 20
                 }
             }
@@ -473,6 +497,8 @@ Item {
             Pane {
                 Layout.preferredWidth: 340
                 Layout.fillHeight: true
+                padding: theme.spaceLg
+                background: Rectangle { color: theme.surface }
 
                 ScrollView {
                     id: inspectorScroll
@@ -863,7 +889,7 @@ Item {
                                 Layout.fillWidth: true
                                 text: qsTr("Transcript cues stay non-destructive: edit text here, then use the marked range controls to lift or ripple-delete picture and audio.")
                                 wrapMode: Text.Wrap
-                                color: "#aeb7c4"
+                                color: theme.textMuted
                             }
                             RowLayout {
                                 Layout.fillWidth: true
@@ -987,7 +1013,7 @@ Item {
                                 Layout.fillWidth: true
                                 visible: text.length > 0
                                 text: root.controller.statusMessage
-                                color: "#ff9b9b"
+                                color: theme.danger
                                 wrapMode: Text.Wrap
                             }
                         }
@@ -1000,6 +1026,10 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: 270
             padding: 6
+            background: Rectangle {
+                color: theme.bgDeep
+                Rectangle { width: parent.width; height: 1; anchors.top: parent.top; color: theme.border }
+            }
 
             Flickable {
                 id: timelineFlick
@@ -1027,7 +1057,7 @@ Item {
 
                             width: timelineContent.width
                             height: 56
-                            color: "#242931"
+                            color: theme.surfaceElevated
 
                             Label {
                                 objectName: "timelineTrack-" + trackId
@@ -1036,7 +1066,7 @@ Item {
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: 150
                                 text: name
-                                color: enabled ? "#ffffff" : "#7d8490"
+                                color: enabled ? theme.textPrimary : theme.textMuted
                                 elide: Text.ElideRight
                             }
                             Label {
@@ -1045,7 +1075,7 @@ Item {
                                 anchors.bottom: parent.bottom
                                 anchors.bottomMargin: 4
                                 text: kind + (locked ? " · locked" : "")
-                                color: "#929aa7"
+                                color: theme.textMuted
                                 font.pixelSize: 10
                             }
 
@@ -1077,13 +1107,13 @@ Item {
                                                         root.nanosecondsPerPixel)
                                         height: clipLane.height - 14
                                         radius: 3
-                                        color: modelData.enabled ? "#4c86d9" : "#4d5664"
+                                        color: modelData.enabled ? theme.accent : theme.surfaceHigh
                                         border.width: root.controller.selectedTrackId
                                                       === trackRow.trackId
                                                       && root.controller.selectedClipId
                                                       === modelData.id ? 3 : 1
                                         border.color: border.width > 1
-                                                      ? "#ffffff" : "#8bb8f6"
+                                                      ? theme.textPrimary : theme.accentBright
 
                                         TapHandler {
                                             onTapped: clipDelegate.activateSelection()
