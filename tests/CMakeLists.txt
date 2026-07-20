@@ -761,6 +761,76 @@ if(CS_ENABLE_FFMPEG)
         PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:${CS_FFMPEG_ROOT}/bin"
     )
+
+    # Standalone GUI-free harness: drives the real gdigrab screen source through
+    # the production FFmpeg segment encoder and remuxes to a finalized H.264 MP4.
+    # Windows-only (the gdigrab source lives in the Windows capture backend).
+    if(WIN32)
+        add_executable(cs_screen_record_to_mp4_harness
+            integration/ScreenRecordToMp4Harness.cpp
+        )
+        target_link_libraries(cs_screen_record_to_mp4_harness PRIVATE
+            cs_ffmpeg_adapter
+            ${FFMPEG_LIBRARIES}
+            winmm
+        )
+        target_include_directories(cs_screen_record_to_mp4_harness SYSTEM PRIVATE
+            ${FFMPEG_INCLUDE_DIRS}
+        )
+        set_target_properties(cs_screen_record_to_mp4_harness PROPERTIES
+            AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+        cs_apply_warnings(cs_screen_record_to_mp4_harness)
+        file(GLOB CS_HARNESS_FFMPEG_DLLS CONFIGURE_DEPENDS "${CS_FFMPEG_ROOT}/bin/*.dll")
+        add_custom_command(TARGET cs_screen_record_to_mp4_harness POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CS_HARNESS_FFMPEG_DLLS}
+                $<TARGET_FILE_DIR:cs_screen_record_to_mp4_harness>
+            COMMAND_EXPAND_LISTS
+        )
+
+        # Standalone GUI-free harness: drives the real gdigrab screen source AND
+        # the real Windows audio backend (WASAPI loopback + dshow microphone)
+        # through the production segment encoders, then muxes an H.264 + AAC
+        # screen_with_audio.mp4 with a non-silent audio stream.
+        add_executable(cs_screen_audio_record_to_mp4_harness
+            integration/ScreenAudioRecordToMp4Harness.cpp
+        )
+        target_link_libraries(cs_screen_audio_record_to_mp4_harness PRIVATE
+            cs_ffmpeg_adapter
+            ${FFMPEG_LIBRARIES}
+            winmm
+        )
+        target_include_directories(cs_screen_audio_record_to_mp4_harness SYSTEM PRIVATE
+            ${FFMPEG_INCLUDE_DIRS}
+        )
+        set_target_properties(cs_screen_audio_record_to_mp4_harness PROPERTIES
+            AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+        cs_apply_warnings(cs_screen_audio_record_to_mp4_harness)
+        add_custom_command(TARGET cs_screen_audio_record_to_mp4_harness POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CS_HARNESS_FFMPEG_DLLS}
+                $<TARGET_FILE_DIR:cs_screen_audio_record_to_mp4_harness>
+            COMMAND_EXPAND_LISTS
+        )
+
+        # Verification tool: decode the produced MP4, dump BMP frames, and
+        # compute mean/stddev/unique-colour proving non-flat real content.
+        add_executable(cs_mp4_frame_stats_tool
+            integration/Mp4FrameStatsTool.cpp
+        )
+        target_link_libraries(cs_mp4_frame_stats_tool PRIVATE ${FFMPEG_LIBRARIES})
+        target_include_directories(cs_mp4_frame_stats_tool SYSTEM PRIVATE
+            ${FFMPEG_INCLUDE_DIRS})
+        set_target_properties(cs_mp4_frame_stats_tool PROPERTIES
+            AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+        cs_apply_warnings(cs_mp4_frame_stats_tool)
+        add_custom_command(TARGET cs_mp4_frame_stats_tool POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CS_HARNESS_FFMPEG_DLLS}
+                $<TARGET_FILE_DIR:cs_mp4_frame_stats_tool>
+            COMMAND_EXPAND_LISTS
+        )
+    endif()
 endif()
 
 if(CS_ENABLE_MLT)

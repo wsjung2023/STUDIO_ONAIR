@@ -22,6 +22,9 @@
 #include "capture/macos/MacScreenCaptureBackend.h"
 #include "capture/macos/MacDeviceCaptureBackend.h"
 #endif
+#if defined(_WIN32)
+#include "capture/windows/WindowsScreenCaptureBackend.h"
+#endif
 #include "project_store/ProjectPackageStore.h"
 #include "project_store/SqliteStudioStore.h"
 #if defined(CS_APP_ENABLE_FFMPEG)
@@ -46,6 +49,12 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <qqml.h>
+#include <QDir>
+#include <QElapsedTimer>
+#include <QImage>
+#include <QQuickWindow>
+#include <QTimer>
+#include <QUrl>
 
 #include <filesystem>
 #include <memory>
@@ -102,6 +111,9 @@ int main(int argc, char* argv[]) {
         std::move(screenCaptureBackend.permission), std::move(screenCaptureBackend.discovery),
         std::move(screenCaptureBackend.sourceFactory), &app};
 #elif defined(_WIN32) && defined(CS_APP_ENABLE_FFMPEG)
+    // Audited-FFmpeg Windows build: the gdigrab screen source feeds the FFmpeg
+    // recording engine, whose CpuBgraFrameMapper depends on that path's frame
+    // handle type, so screen capture stays on gdigrab here.
     auto windowsCaptureBackend =
         creator::ffmpeg_adapter::windows::makeWindowsCaptureBackend();
     creator::app::DeviceCaptureController deviceCaptureController{
@@ -110,6 +122,17 @@ int main(int argc, char* argv[]) {
         std::move(windowsCaptureBackend.screenPermission),
         std::move(windowsCaptureBackend.screenDiscovery),
         std::move(windowsCaptureBackend.screenSourceFactory), &app};
+#elif defined(_WIN32)
+    // Default Windows build: real desktop capture via Windows.Graphics.Capture +
+    // Direct3D11. Replaces the "native screen capture is unavailable" fallback.
+    creator::app::DeviceCaptureController deviceCaptureController{
+        std::make_unique<creator::capture::UnsupportedDeviceCaptureBackend>(), &app};
+    auto screenCaptureBackend =
+        creator::capture::windows::makeWindowsScreenCaptureBackend();
+    creator::app::ScreenCaptureController screenCaptureController{
+        std::move(screenCaptureBackend.permission),
+        std::move(screenCaptureBackend.discovery),
+        std::move(screenCaptureBackend.sourceFactory), &app};
 #else
     creator::app::DeviceCaptureController deviceCaptureController{
         std::make_unique<creator::capture::UnsupportedDeviceCaptureBackend>(), &app};
@@ -266,5 +289,184 @@ int main(int argc, char* argv[]) {
         Qt::QueuedConnection);
 
     engine.loadFromModule("CreatorStudio", "Main");
+
+    // Optional non-interactive drive for verification. When CS_AUTODRIVE_DIR is
+    // set the app creates a project, starts the primary-display screen preview
+    // and system-audio capture, screenshots the live preview, records ~5s and
+    // stops -- exercising the exact application services the QML buttons call.
+    // Absent the variable, the app behaves normally.
+    if (qEnvironmentVariableIsSet("CS_AUTODRIVE_DIR") &&
+        !qEnvironmentVariable("CS_AUTODRIVE_DIR").isEmpty()) {
+        const QString autoDriveDir = qEnvironmentVariable("CS_AUTODRIVE_DIR");
+        QDir().mkpath(autoDriveDir);
+
+        struct AutoDriveState {
+            int phase = 0;
+            int phaseTicks = 0;
+            bool systemAudioRequested = false;
+            bool workflowOpenRequested = false;
+            bool recordRequested = false;
+            int recordAttempts = 0;
+            QElapsedTimer recordTimer;
+            int totalTicks = 0;
+        };
+        auto state = std::make_shared<AutoDriveState>();
+
+        auto* driver = new QTimer(&app);
+        driver->setInterval(150);
+        const auto advance = [state](int next) {
+            state->phase = next;
+            state->phaseTicks = 0;
+        };
+        QObject::connect(driver, &QTimer::timeout, &app,
+            [&engine, &projectController, &screenCaptureController,
+             &deviceCaptureController, &studioController, &studioWorkflowController,
+             autoDriveDir, driver, state, advance]() mutable {
+            ++state->phaseTicks;
+            if (++state->totalTicks > 800) {  // ~2 min hard cap
+                qInfo("[autodrive] timeout, quitting");
+                QCoreApplication::exit(2);
+                return;
+            }
+            switch (state->phase) {
+            case 0: {  // create project
+                const QString packagePath =
+                    autoDriveDir + QStringLiteral("/autodrive.cstudio");
+                qInfo("[autodrive] creating project at %s",
+                      qUtf8Printable(packagePath));
+                projectController.createProject(
+                    QUrl::fromLocalFile(packagePath),
+                    QStringLiteral("AutoDrive"));
+                advance(1);
+                break;
+            }
+            case 1: {  // wait for project open, then start capture sources
+                if (!projectController.hasOpenProject()) return;
+                if (!state->workflowOpenRequested) {
+                    // The app's own projectOpened -> Studio-open binding is
+                    // responsible for opening the Studio workflow. Observe its
+                    // result here; do NOT re-drive openProject, so this path
+                    // proves a plain Record works off the real binding alone.
+                    qInfo("[autodrive] app-binding workflow busy=%d status=\"%s\"",
+                          static_cast<int>(studioWorkflowController.busy()),
+                          qUtf8Printable(studioWorkflowController.statusMessage()));
+                    const QUrl url = projectController.projectUrl();
+                    qInfo("[autodrive] project url=\"%s\" (local=%d)",
+                          qUtf8Printable(url.toString()),
+                          static_cast<int>(url.isLocalFile()));
+                    state->workflowOpenRequested = true;
+                }
+                if (screenCaptureController.state() ==
+                        creator::app::ScreenCaptureState::Ready &&
+                    !screenCaptureController.previewing() &&
+                    !screenCaptureController.selectedTargetId().isEmpty()) {
+                    qInfo("[autodrive] starting screen preview for target %s",
+                          qUtf8Printable(screenCaptureController.selectedTargetId()));
+                    screenCaptureController.startPreview();
+                }
+                if (!state->systemAudioRequested) {
+                    qInfo("[autodrive] starting system audio");
+                    deviceCaptureController.setSystemAudioEnabled(true);
+                    state->systemAudioRequested = true;
+                }
+                const bool audioReady =
+                    deviceCaptureController.systemAudioCapturing();
+                if (screenCaptureController.receivedFrames() > 0 &&
+                    (audioReady || state->phaseTicks > 40)) {
+                    qInfo("[autodrive] screen frames=%llu, systemAudio capturing=%d"
+                          " status=\"%s\"",
+                          static_cast<unsigned long long>(
+                              screenCaptureController.receivedFrames()),
+                          static_cast<int>(audioReady),
+                          qUtf8Printable(deviceCaptureController.systemAudioStatus()));
+                    advance(2);
+                }
+                break;
+            }
+            case 2: {  // let a few frames render, then screenshot the preview
+                if (state->phaseTicks < 12) return;  // ~1.8s of live frames
+                auto* window = engine.rootObjects().isEmpty()
+                    ? nullptr
+                    : qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst());
+                if (window != nullptr) {
+                    const QImage shot = window->grabWindow();
+                    const QString shotPath =
+                        autoDriveDir + QStringLiteral("/preview.png");
+                    if (!shot.isNull() && shot.save(shotPath)) {
+                        qInfo("[autodrive] saved preview screenshot: %s (%dx%d)",
+                              qUtf8Printable(shotPath), shot.width(),
+                              shot.height());
+                    } else {
+                        qWarning("[autodrive] failed to save preview screenshot");
+                    }
+                }
+                advance(3);
+                break;
+            }
+            case 3: {  // start recording (the Studio DB opens async after the
+                       // project does, so retry until the take actually starts)
+                if (!studioController.recordingAvailable()) {
+                    qWarning("[autodrive] recording unavailable: %s",
+                             qUtf8Printable(studioController.statusMessage()));
+                    if (state->phaseTicks > 20) advance(6);
+                    return;
+                }
+                if (studioController.isBusy()) return;
+                if (studioWorkflowController.busy()) return;  // wait for DB open
+                ++state->recordAttempts;
+                qInfo("[autodrive] starting recording (attempt %d); workflow="
+                      "\"%s\"",
+                      state->recordAttempts,
+                      qUtf8Printable(studioWorkflowController.statusMessage()));
+                studioController.startRecording();
+                state->recordRequested = true;
+                advance(4);
+                break;
+            }
+            case 4: {  // wait until recording is live, else retry from phase 3
+                if (studioController.isRecording()) {
+                    qInfo("[autodrive] recording is live");
+                    state->recordTimer.start();
+                    advance(5);
+                    return;
+                }
+                if (!studioController.isBusy() && state->phaseTicks > 6) {
+                    if (state->recordAttempts < 20) {
+                        advance(3);  // start failed and settled; retry
+                    } else {
+                        qWarning("[autodrive] recording did not start: %s",
+                                 qUtf8Printable(studioController.statusMessage()));
+                        advance(6);
+                    }
+                }
+                break;
+            }
+            case 5: {  // record ~5s then stop
+                if (state->recordTimer.elapsed() >= 5000) {
+                    qInfo("[autodrive] stopping recording after %lld ms",
+                          static_cast<long long>(state->recordTimer.elapsed()));
+                    studioController.stopRecording();
+                    advance(6);
+                }
+                break;
+            }
+            case 6: {  // wait for finalize, then quit
+                if (!studioController.isRecording() &&
+                    !studioController.isBusy()) {
+                    if (state->phaseTicks < 8) return;  // grace for finalize
+                    qInfo("[autodrive] done: %s",
+                          qUtf8Printable(studioController.statusMessage()));
+                    driver->stop();
+                    QCoreApplication::quit();
+                }
+                break;
+            }
+            default:
+                break;
+            }
+        });
+        driver->start();
+    }
+
     return app.exec();
 }

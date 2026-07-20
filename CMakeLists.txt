@@ -315,6 +315,10 @@ if(CS_ENABLE_MLT)
     endif()
 endif()
 
+if(WIN32)
+    target_link_libraries(creator_studio PRIVATE cs_capture_windows)
+endif()
+
 if(APPLE)
     target_link_libraries(creator_studio PRIVATE cs_capture_macos)
     set_target_properties(creator_studio PROPERTIES

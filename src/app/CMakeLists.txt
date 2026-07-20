@@ -113,6 +113,11 @@ if(APPLE)
         ${CS_APP_IOSURFACE_FRAMEWORK}
         ${CS_APP_METAL_FRAMEWORK}
     )
+elseif(WIN32)
+    # Real Qt Quick preview surface: uploads the latest captured BGRA frame as a
+    # QSGImageNode texture (portable across the D3D11/Vulkan/OpenGL RHI backend
+    # Qt Quick selects on Windows). Replaces the do-nothing stub.
+    target_sources(cs_app PRIVATE VideoPreviewItem_windows.cpp)
 else()
     target_sources(cs_app PRIVATE VideoPreviewItem_stub.cpp)
 endif()
