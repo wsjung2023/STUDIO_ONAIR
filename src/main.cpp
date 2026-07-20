@@ -344,6 +344,9 @@ int main(int argc, char* argv[]) {
             int phase = 0;
             int phaseTicks = 0;
             bool systemAudioRequested = false;
+            bool cameraRequested = false;
+            bool presentationShotSaved = false;
+            bool cameraSceneSwitched = false;
             bool workflowOpenRequested = false;
             bool recordRequested = false;
             int recordAttempts = 0;
@@ -426,38 +429,93 @@ int main(int argc, char* argv[]) {
                     deviceCaptureController.setSystemAudioEnabled(true);
                     state->systemAudioRequested = true;
                 }
+                if (!state->cameraRequested &&
+                    deviceCaptureController.cameraState() ==
+                        creator::app::DeviceCaptureState::Ready &&
+                    !deviceCaptureController.selectedCameraId().isEmpty()) {
+                    qInfo("[autodrive] starting camera %s (\"%s\")",
+                          qUtf8Printable(deviceCaptureController.selectedCameraId()),
+                          qUtf8Printable(deviceCaptureController.cameraStatus()));
+                    deviceCaptureController.setCameraEnabled(true);
+                    state->cameraRequested = true;
+                }
                 const bool audioReady =
                     deviceCaptureController.systemAudioCapturing();
+                const bool cameraReady =
+                    deviceCaptureController.cameraCapturing() &&
+                    deviceCaptureController.cameraWidth() > 0;
                 if (screenCaptureController.receivedFrames() > 0 &&
-                    (audioReady || state->phaseTicks > 40)) {
-                    qInfo("[autodrive] screen frames=%llu, systemAudio capturing=%d"
-                          " status=\"%s\"",
+                    (audioReady || state->phaseTicks > 40) &&
+                    (cameraReady || state->phaseTicks > 60)) {
+                    qInfo("[autodrive] screen frames=%llu, systemAudio capturing=%d,"
+                          " camera capturing=%d %ux%u fps=%.1f status=\"%s\"",
                           static_cast<unsigned long long>(
                               screenCaptureController.receivedFrames()),
                           static_cast<int>(audioReady),
-                          qUtf8Printable(deviceCaptureController.systemAudioStatus()));
+                          static_cast<int>(deviceCaptureController.cameraCapturing()),
+                          deviceCaptureController.cameraWidth(),
+                          deviceCaptureController.cameraHeight(),
+                          deviceCaptureController.cameraFps(),
+                          qUtf8Printable(deviceCaptureController.cameraStatus()));
                     advance(2);
                 }
                 break;
             }
-            case 2: {  // let a few frames render, then screenshot the preview
-                if (state->phaseTicks < 12) return;  // ~1.8s of live frames
-                auto* window = engine.rootObjects().isEmpty()
-                    ? nullptr
-                    : qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst());
-                if (window != nullptr) {
+            case 2: {  // screenshot the live preview, then a full-frame camera shot
+                const auto grabTo = [&](const QString& fileName) {
+                    auto* window = engine.rootObjects().isEmpty()
+                        ? nullptr
+                        : qobject_cast<QQuickWindow*>(
+                              engine.rootObjects().constFirst());
+                    if (window == nullptr) {
+                        qWarning("[autodrive] no window to screenshot %s",
+                                 qUtf8Printable(fileName));
+                        return;
+                    }
                     const QImage shot = window->grabWindow();
                     const QString shotPath =
-                        autoDriveDir + QStringLiteral("/preview.png");
+                        autoDriveDir + QStringLiteral("/") + fileName;
                     if (!shot.isNull() && shot.save(shotPath)) {
-                        qInfo("[autodrive] saved preview screenshot: %s (%dx%d)",
-                              qUtf8Printable(shotPath), shot.width(),
-                              shot.height());
+                        qInfo("[autodrive] saved screenshot: %s (%dx%d)",
+                              qUtf8Printable(shotPath), shot.width(), shot.height());
                     } else {
-                        qWarning("[autodrive] failed to save preview screenshot");
+                        qWarning("[autodrive] failed to save screenshot %s",
+                                 qUtf8Printable(fileName));
                     }
+                };
+                // First: the default 'presentation' scene shows the screen with the
+                // live camera as a picture-in-picture overlay.
+                if (!state->presentationShotSaved && state->phaseTicks >= 12) {
+                    grabTo(QStringLiteral("preview.png"));
+                    state->presentationShotSaved = true;
+                    // Switch to the full-frame 'camera' scene so the webcam fills the
+                    // composition for an unmistakable camera-preview screenshot.
+                    if (deviceCaptureController.cameraCapturing() &&
+                        !state->cameraSceneSwitched) {
+                        qInfo("[autodrive] switching to full-frame camera scene "
+                              "(camera %ux%u fps=%.1f)",
+                              deviceCaptureController.cameraWidth(),
+                              deviceCaptureController.cameraHeight(),
+                              deviceCaptureController.cameraFps());
+                        studioWorkflowController.switchScene(
+                            QStringLiteral("camera"));
+                        state->cameraSceneSwitched = true;
+                    }
+                    return;
                 }
-                advance(3);
+                // Then: grab the full-frame camera preview once the scene switch and a
+                // few more live camera frames have rendered.
+                if (state->presentationShotSaved && state->phaseTicks >= 24) {
+                    grabTo(QStringLiteral("camera_preview.png"));
+                    // Restore the presentation scene so the recorded take composites
+                    // screen + camera as usual (recording keeps a separate track per
+                    // active source regardless of the active scene).
+                    if (state->cameraSceneSwitched) {
+                        studioWorkflowController.switchScene(
+                            QStringLiteral("presentation"));
+                    }
+                    advance(3);
+                }
                 break;
             }
             case 3: {  // start recording (the Studio DB opens async after the
