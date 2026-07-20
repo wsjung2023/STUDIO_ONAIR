@@ -369,7 +369,24 @@ int main(int argc, char* argv[]) {
                 return;
             }
             switch (state->phase) {
-            case 0: {  // create project
+            case 0: {  // screenshot the Home page, then create project
+                if (state->phaseTicks < 10) return;  // let Home render
+                auto* homeWindow = engine.rootObjects().isEmpty()
+                    ? nullptr
+                    : qobject_cast<QQuickWindow*>(
+                          engine.rootObjects().constFirst());
+                if (homeWindow != nullptr) {
+                    const QImage homeShot = homeWindow->grabWindow();
+                    const QString homePath =
+                        autoDriveDir + QStringLiteral("/home.png");
+                    if (!homeShot.isNull() && homeShot.save(homePath)) {
+                        qInfo("[autodrive] saved home screenshot: %s (%dx%d)",
+                              qUtf8Printable(homePath), homeShot.width(),
+                              homeShot.height());
+                    } else {
+                        qWarning("[autodrive] failed to save home screenshot");
+                    }
+                }
                 const QString packagePath =
                     autoDriveDir + QStringLiteral("/autodrive.cstudio");
                 qInfo("[autodrive] creating project at %s",
