@@ -341,6 +341,7 @@ add_executable(cs_app_tests
     app/GeneratedOverlayCacheTest.cpp
     app/StudioControllerTest.cpp
     app/LiveRecordingControllerTest.cpp
+    app/CursorRecordingBindingTest.cpp
     app/StudioRecordingBindingTest.cpp
     app/ProjectControllerTest.cpp
     app/ScreenCaptureControllerTest.cpp
@@ -351,6 +352,7 @@ add_executable(cs_app_tests
     app/MultiTrackRecordingServiceTest.cpp
     app/AvatarFrameTrackingCoordinatorTest.cpp
     app/TranscriptionProviderFactoryTest.cpp
+    app/CreatorIntelligenceControllerTest.cpp
     app/AndroidTimelineExportPlanTest.cpp
     app/QmlSmokeTest.cpp
 )
@@ -366,6 +368,9 @@ target_link_libraries(cs_app_tests
         Qt6::Test
         GTest::gtest
 )
+if(CS_ENABLE_WHISPER)
+    target_compile_definitions(cs_app_tests PRIVATE CS_APP_ENABLE_WHISPER=1)
+endif()
 
 target_include_directories(cs_app_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 
@@ -535,6 +540,7 @@ target_link_libraries(cs_r2_creator_intelligence_acceptance_tests
         cs_cursor
         cs_autozoom
         cs_cursor_emphasis
+        cs_cut_suggest
         cs_fakes
         nlohmann_json::nlohmann_json
         nlohmann_json_schema_validator::validator
@@ -544,6 +550,7 @@ target_compile_definitions(cs_r2_creator_intelligence_acceptance_tests PRIVATE
     CS_TRANSCRIPT_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/transcript.schema.json"
     CS_ZOOM_CANDIDATE_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/zoom_candidate.schema.json"
     CS_EMPHASIS_PLAN_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/emphasis_plan.schema.json"
+    CS_CUT_SUGGESTION_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/cut_suggestion.schema.json"
 )
 set_target_properties(cs_r2_creator_intelligence_acceptance_tests PROPERTIES
     AUTOMOC OFF
@@ -798,6 +805,57 @@ if(CS_ENABLE_FFMPEG)
                     "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
         )
 
+        if(CS_ENABLE_RNNOISE AND CS_ENABLE_WHISPER)
+            add_executable(cs_r2_07_physical_acceptance_tests
+                acceptance/R2FinalPhysicalAcceptanceTest.cpp
+            )
+            target_link_libraries(cs_r2_07_physical_acceptance_tests PRIVATE
+                cs_app
+                cs_audio_dsp
+                cs_ffmpeg_adapter
+                cs_mlt_adapter
+                cs_project_store
+                cs_rnnoise_adapter
+                Qt6::Quick
+                Qt6::Test
+                GTest::gtest
+                delayimp
+                psapi
+            )
+            target_compile_definitions(cs_r2_07_physical_acceptance_tests PRIVATE
+                CS_TEST_STAGED_MLT_ROOT="$<TARGET_FILE_DIR:creator_studio>/mlt-runtime"
+                CS_TEST_RNNOISE_ROOT="${CS_RNNOISE_ROOT}"
+                CS_TEST_WHISPER_ROOT="${CS_WHISPER_ROOT}"
+            )
+            target_include_directories(cs_r2_07_physical_acceptance_tests SYSTEM PRIVATE
+                ${FFMPEG_INCLUDE_DIRS}
+            )
+            target_link_libraries(cs_r2_07_physical_acceptance_tests PRIVATE
+                ${FFMPEG_LIBRARIES}
+            )
+            target_link_options(cs_r2_07_physical_acceptance_tests PRIVATE
+                "/DELAYLOAD:mlt++-7.dll"
+                "/DELAYLOAD:mlt-7.dll"
+            )
+            add_dependencies(cs_r2_07_physical_acceptance_tests creator_studio)
+            cs_apply_warnings(cs_r2_07_physical_acceptance_tests)
+            set_property(TARGET cs_r2_07_physical_acceptance_tests PROPERTY
+                TEST_LAUNCHER
+                "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;--modify;PATH=path_list_prepend:${CS_WHISPER_ROOT}/bin;--modify;PATH=path_list_prepend:${CS_RNNOISE_ROOT}/bin;--"
+            )
+            gtest_discover_tests(cs_r2_07_physical_acceptance_tests
+                DISCOVERY_MODE PRE_TEST
+                PROPERTIES
+                    TIMEOUT 7200
+                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+                    LABELS "physical;r2-07"
+                    ENVIRONMENT_MODIFICATION
+                        "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+                        "PATH=path_list_prepend:${CS_WHISPER_ROOT}/bin"
+                        "PATH=path_list_prepend:${CS_RNNOISE_ROOT}/bin"
+            )
+        endif()
+
         add_executable(cs_r1_replay_stress_tests
             acceptance/R1ReplayStressTest.cpp
         )
@@ -903,12 +961,12 @@ if(CS_ENABLE_MLT)
     )
     cs_apply_warnings(cs_mlt_tests)
     set_property(TARGET cs_mlt_tests PROPERTY TEST_LAUNCHER
-        "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:${CS_MLT_ROOT}/bin;--"
+        "${CMAKE_COMMAND};-E;env;--modify;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;--modify;PATH=path_list_prepend:${CS_MLT_ROOT}/bin;--"
     )
     gtest_discover_tests(cs_mlt_tests
         DISCOVERY_MODE PRE_TEST
         PROPERTIES ENVIRONMENT_MODIFICATION
-            "PATH=path_list_prepend:${CS_MLT_ROOT}/bin"
+            "PATH=path_list_prepend:${CS_MLT_ROOT}/bin;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 
     add_executable(cs_r1_mlt_acceptance_tests

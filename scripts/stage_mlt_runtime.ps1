@@ -65,6 +65,7 @@ try {
         component = $SourceManifest.component
         version = $SourceManifest.version
         source_commit = $SourceManifest.source_commit
+        windows_mutex_patch = $SourceManifest.windows_mutex_patch
         linking = $SourceManifest.linking
         allowed_modules = @($SourceManifest.allowed_modules)
         dependencies = @($SourceManifest.dependencies)

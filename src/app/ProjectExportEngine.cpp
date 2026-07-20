@@ -21,8 +21,13 @@ core::AppError unsupported() {
 
 }  // namespace
 
-ProjectExportEngine::ProjectExportEngine(std::filesystem::path mltRuntimeRoot)
-    : mltRuntimeRoot_(std::move(mltRuntimeRoot)) {}
+ProjectExportEngine::ProjectExportEngine(
+    std::filesystem::path mltRuntimeRoot,
+    AudioProcessorFactory audioProcessingFactory,
+    audio_dsp::ExportLoudnessAnalyzer::Parameters loudness)
+    : mltRuntimeRoot_(std::move(mltRuntimeRoot)),
+      audioProcessingFactory_(std::move(audioProcessingFactory)),
+      loudness_(loudness) {}
 
 core::Result<void> ProjectExportEngine::load(
     const edit_engine::TimelineSnapshot&) {
@@ -70,7 +75,11 @@ ProjectExportEngine::render(const edit_engine::RenderRequest& request) {
     mlt_adapter::MltEditEngine engine{{.runtimeRoot = mltRuntimeRoot_,
                                       .previewWidth = request.preset().width(),
                                       .previewHeight = request.preset().height(),
-                                      .renderLifecycle = lifecycle}};
+                                      .renderLifecycle = lifecycle,
+                                      .audioProcessingFactory =
+                                          audioProcessingFactory_,
+                                      .exportLoudnessNormalization =
+                                          loudness_}};
     return engine.render(request);
 }
 

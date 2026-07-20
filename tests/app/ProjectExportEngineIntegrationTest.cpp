@@ -1,5 +1,7 @@
 #include "app/ProjectExportEngine.h"
 
+#include "audio_dsp/AudioBuffer.h"
+#include "audio_dsp/IAudioProcessor.h"
 #include "core/Uuid.h"
 #include "domain/Timeline.h"
 #include "ffmpeg_adapter/FfmpegMediaProbe.h"
@@ -10,6 +12,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -22,6 +25,18 @@ namespace {
 
 using namespace creator;
 namespace fs = std::filesystem;
+
+class CountingAudioProcessor final : public audio_dsp::IAudioProcessor {
+public:
+    explicit CountingAudioProcessor(std::atomic_int& calls) : calls_(calls) {}
+    core::Result<void> process(audio_dsp::AudioBuffer&) override {
+        calls_.fetch_add(1, std::memory_order_relaxed);
+        return core::ok();
+    }
+
+private:
+    std::atomic_int& calls_;
+};
 
 void writePpm(const fs::path& path, std::uint8_t red, std::uint8_t green,
               std::uint8_t blue) {
@@ -253,7 +268,16 @@ TEST(ProjectExportEngineIntegrationTest,
                     .value(),
                 "Creator Sans")
                 .value()}};
-    app::ProjectExportEngine engine{fs::path{CS_TEST_MLT_ROOT}};
+    std::atomic_int factoryCalls{};
+    std::atomic_int processCalls{};
+    app::ProjectExportEngine engine{
+        fs::path{CS_TEST_MLT_ROOT},
+        [&]() -> core::Result<
+                    std::unique_ptr<audio_dsp::IAudioProcessor>> {
+            factoryCalls.fetch_add(1, std::memory_order_relaxed);
+            return std::unique_ptr<audio_dsp::IAudioProcessor>{
+                new CountingAudioProcessor{processCalls}};
+        }};
     ffmpeg_adapter::FfmpegMediaProbe probe;
     struct ProductCase final {
         edit_engine::RenderPreset preset;
@@ -319,10 +343,57 @@ TEST(ProjectExportEngineIntegrationTest,
         EXPECT_EQ(media.value().audio->sampleRate, 48'000);
         EXPECT_EQ(media.value().audio->channels, 2);
     }
+
+    auto cancelledRequest = edit_engine::RenderRequest::create(
+        projectId, snapshot, root / "cancelled.mp4",
+        edit_engine::RenderPreset::h2641080p30().value(),
+        edit_engine::RenderOverwritePolicy::FailIfExists);
+    ASSERT_TRUE(cancelledRequest.hasValue())
+        << cancelledRequest.error().message();
+    const auto cancelledJobId = cancelledRequest.value().jobId();
+    auto cancelledJob = engine.render(cancelledRequest.value());
+    ASSERT_TRUE(cancelledJob.hasValue()) << cancelledJob.error().message();
+    ASSERT_TRUE(cancelledJob.value()->cancel().hasValue());
+    const auto cancellationDeadline = std::chrono::steady_clock::now() +
+                                      std::chrono::seconds{10};
+    edit_engine::RenderJobState cancelledState =
+        edit_engine::RenderJobState::Pending;
+    while (std::chrono::steady_clock::now() < cancellationDeadline) {
+        auto progress = cancelledJob.value()->progress();
+        ASSERT_TRUE(progress.hasValue()) << progress.error().message();
+        cancelledState = progress.value().state();
+        if (cancelledState == edit_engine::RenderJobState::Cancelled ||
+            cancelledState == edit_engine::RenderJobState::Failed) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    ASSERT_EQ(cancelledState, edit_engine::RenderJobState::Cancelled);
+    auto cancelledPackage = packages.open(packageRoot);
+    ASSERT_TRUE(cancelledPackage.hasValue())
+        << cancelledPackage.error().message();
+    const auto cancelledLease =
+        cancelledPackage.value().databaseIdentityLease;
+    ASSERT_TRUE(cancelledLease);
+    auto cancelledJobs = project_store::SqliteRenderJobStore::open(
+        cancelledPackage.value().databasePath, projectId,
+        [cancelledLease] { return cancelledLease->verifyCurrentIdentity(); });
+    ASSERT_TRUE(cancelledJobs.hasValue())
+        << cancelledJobs.error().message();
+    auto cancelledRecord = cancelledJobs.value().load(cancelledJobId);
+    ASSERT_TRUE(cancelledRecord.hasValue())
+        << cancelledRecord.error().message();
+    ASSERT_TRUE(cancelledRecord.value().has_value());
+    EXPECT_EQ(cancelledRecord.value()->progress.state(),
+              edit_engine::RenderJobState::Cancelled);
+    EXPECT_FALSE(fs::exists(cancelledRequest.value().destination()));
+
     for (const auto& entry : fs::directory_iterator(root)) {
         EXPECT_EQ(entry.path().filename().string().find(".partial.mp4"),
                   std::string::npos);
     }
+    EXPECT_EQ(factoryCalls.load(std::memory_order_relaxed), 4);
+    EXPECT_GT(processCalls.load(std::memory_order_relaxed), 0);
 }
 
 }  // namespace

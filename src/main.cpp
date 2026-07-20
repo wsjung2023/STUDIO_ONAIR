@@ -5,6 +5,7 @@
 #include "app/EditorPreviewItem.h"
 #include "app/DeviceCaptureController.h"
 #include "app/LiveRecordingController.h"
+#include "app/CursorRecordingBinding.h"
 #include "app/LiveRecordingEngineFactory.h"
 #include "app/ScreenCaptureController.h"
 #include "app/ScreenPreviewItem.h"
@@ -14,6 +15,8 @@
 #include "app/StudioRecordingBinding.h"
 #include "app/StudioWorkflowController.h"
 #include "app/RecordingTimelineReconciler.h"
+#include "app/CreatorIntelligenceController.h"
+#include "app/TranscriptionProviderFactory.h"
 #include "core/AppError.h"
 #include "core/Uuid.h"
 #include "core/Utc.h"
@@ -38,14 +41,20 @@
 #include "ffmpeg_adapter/windows/WindowsCaptureBackend.h"
 #endif
 #endif
+#if defined(_WIN32)
+#include "cursor/windows/WindowsRawInputCursorSource.h"
+#endif
 #include "edit_engine/UnavailableEditEngine.h"
-#if defined(CS_APP_ENABLE_RNNOISE)
+#if defined(CS_APP_ENABLE_MLT)
 #include "audio_dsp/AudioCleanupChain.h"
 #include "audio_dsp/AudioFormat.h"
+#endif
+#if defined(CS_APP_ENABLE_RNNOISE)
 #include "rnnoise_adapter/RnnoiseDenoiseProcessor.h"
 #endif
 #if defined(CS_APP_ENABLE_MLT)
 #include "app/ProjectExportEngine.h"
+#include "app/MltCreatorIntelligenceAudioLoader.h"
 #include "mlt_adapter/MltEditEngine.h"
 #endif
 
@@ -142,6 +151,19 @@ int main(int argc, char* argv[]) {
         std::move(recordingEngine), &projectController,
         [&projectController] { return projectController.recordingPackagePath(); },
         [] { return creator::core::ProjectClock::now(); }, &app};
+    creator::app::CursorRecordingBinding::SourceFactory cursorSourceFactory;
+#if defined(_WIN32)
+    cursorSourceFactory = [](const creator::app::LiveRecordingStart&)
+        -> creator::core::Result<std::unique_ptr<
+            creator::cursor::ICursorSource>> {
+        auto created = creator::cursor::windows::WindowsRawInputCursorSource::create();
+        if (!created.hasValue()) return created.error();
+        return std::unique_ptr<creator::cursor::ICursorSource>{
+            std::move(created).value()};
+    };
+#endif
+    creator::app::CursorRecordingBinding cursorRecordingController{
+        studioController, std::move(cursorSourceFactory), &app};
     auto studioPackageStore =
         std::make_shared<creator::project_store::ProjectPackageStore>();
 #if defined(CS_APP_ENABLE_FFMPEG)
@@ -187,39 +209,54 @@ int main(int argc, char* argv[]) {
          .communityBuild = true}};
     creator::app::CommercialControlsController commercialControlsController{
         entitlementPolicy.evaluate({}, {}), &app};
+    creator::app::CreatorIntelligenceController::AudioLoader
+        intelligenceAudioLoader;
 #if defined(CS_APP_ENABLE_MLT)
     const auto mltRuntimeRoot = stagedMltRuntimeRoot();
-    std::shared_ptr<creator::audio_dsp::IAudioProcessor> audioProcessingChain;
+    creator::mlt_adapter::MltEditEngineConfig::AudioProcessorFactory
+        audioProcessingFactory;
+    // Every graph gets a fresh cleanup chain. Export creates one for pass 1
+    // measurement and another for pass 2 encoding.
 #if defined(CS_APP_ENABLE_RNNOISE)
-    auto denoise = creator::rnnoise_adapter::createRnnoiseDenoiseProcessor(
-        std::filesystem::path{CS_APP_RNNOISE_ROOT});
-    if (denoise.hasValue()) {
-        // Cleanup chain: denoise -> compressor -> true-peak limiter, at the
-        // export/preview consumer's 48 kHz stereo format (MltEditEngine
-        // normalizes audio to 48 kHz; the export consumer is 2ch). Loudness
-        // standardization (음량 표준화) is applied separately, offline.
+    const auto rnnoiseRuntimeRoot =
+        std::filesystem::path{CS_APP_RNNOISE_ROOT};
+    audioProcessingFactory = [rnnoiseRuntimeRoot]()
+        -> creator::core::Result<std::unique_ptr<
+            creator::audio_dsp::IAudioProcessor>> {
+        auto denoise = creator::rnnoise_adapter::createRnnoiseDenoiseProcessor(
+            rnnoiseRuntimeRoot);
+        if (!denoise.hasValue()) return denoise.error();
         const auto cleanupFormat =
             creator::audio_dsp::AudioFormat::create(48'000, 2).value();
-        if (auto chain = creator::audio_dsp::makeAudioCleanupChain(
-                cleanupFormat, std::move(denoise).value());
-            chain.hasValue()) {
-            audioProcessingChain = std::move(chain).value();
-        } else {
-            qWarning().noquote() << "Audio cleanup chain unavailable:"
-                                 << QString::fromStdString(chain.error().message());
-        }
-    } else {
-        qWarning().noquote() << "RNNoise runtime unavailable:" << QString::fromStdString(
-            denoise.error().message());
-    }
+        auto chain = creator::audio_dsp::makeAudioCleanupChain(
+            cleanupFormat, std::move(denoise).value());
+        if (!chain.hasValue()) return chain.error();
+        return std::unique_ptr<creator::audio_dsp::IAudioProcessor>{
+            std::move(chain).value()};
+    };
+#else
+    audioProcessingFactory = []()
+        -> creator::core::Result<std::unique_ptr<
+            creator::audio_dsp::IAudioProcessor>> {
+        const auto cleanupFormat =
+            creator::audio_dsp::AudioFormat::create(48'000, 2).value();
+        auto chain = creator::audio_dsp::makeAudioCleanupChain(cleanupFormat);
+        if (!chain.hasValue()) return chain.error();
+        return std::unique_ptr<creator::audio_dsp::IAudioProcessor>{
+            std::move(chain).value()};
+    };
 #endif
+    intelligenceAudioLoader =
+        creator::app::makeMltCreatorIntelligenceAudioLoader(
+            mltRuntimeRoot, audioProcessingFactory);
     std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
         std::make_unique<creator::mlt_adapter::MltEditEngine>(
             creator::mlt_adapter::MltEditEngineConfig{
                 .runtimeRoot = mltRuntimeRoot,
-                .audioProcessingChain = std::move(audioProcessingChain)});
+                .audioProcessingFactory = audioProcessingFactory});
     std::unique_ptr<creator::edit_engine::IEditEngine> exportEngine =
-        std::make_unique<creator::app::ProjectExportEngine>(mltRuntimeRoot);
+        std::make_unique<creator::app::ProjectExportEngine>(
+            mltRuntimeRoot, audioProcessingFactory);
 #elif defined(ANDROID)
     std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
         std::make_unique<creator::edit_engine::UnavailableEditEngine>();
@@ -231,7 +268,36 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<creator::edit_engine::IEditEngine> exportEngine =
         std::make_unique<creator::edit_engine::UnavailableEditEngine>();
 #endif
+#if !defined(CS_APP_ENABLE_MLT)
+    intelligenceAudioLoader =
+        [](const creator::edit_engine::TimelineSnapshot&, std::stop_token)
+        -> creator::core::Result<std::vector<float>> {
+        return creator::core::AppError{
+            creator::core::ErrorCode::InvalidState,
+            "local AI audio loading requires the MLT desktop build"};
+    };
+#endif
     creator::app::EditorController editorController{std::move(editEngine), &app};
+    creator::app::TranscriptionProviderOptions transcriptionOptions;
+#if defined(CS_APP_ENABLE_WHISPER)
+    transcriptionOptions.whisperRuntimeRoot =
+        std::filesystem::path{CS_APP_WHISPER_ROOT};
+#endif
+    creator::app::CreatorIntelligenceController intelligenceController{
+        creator::app::makeTranscriptionProvider(transcriptionOptions),
+        std::move(intelligenceAudioLoader),
+        [&editorController] { return editorController.exportSnapshot(); },
+        [&editorController](const creator::transcription::Transcript& transcript,
+                            std::int64_t expectedRevision) {
+            return editorController.approveTranscriptProposal(
+                transcript, expectedRevision);
+        },
+        [&editorController](const creator::domain::TimeRange& range,
+                            std::int64_t expectedRevision) {
+            return editorController.approveCutProposal(
+                range, expectedRevision, true);
+        },
+        &app};
 #if defined(ANDROID)
     creator::app::ExportController exportController{
         std::move(exportEngine),
@@ -296,6 +362,9 @@ int main(int argc, char* argv[]) {
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
                                              &studioController);
     engine.rootContext()->setContextProperty(
+        QStringLiteral("cursorRecordingController"),
+        &cursorRecordingController);
+    engine.rootContext()->setContextProperty(
         QStringLiteral("studioWorkflowController"),
         &studioWorkflowController);
     engine.rootContext()->setContextProperty(
@@ -309,6 +378,8 @@ int main(int argc, char* argv[]) {
                                              &deviceCaptureController);
     engine.rootContext()->setContextProperty(QStringLiteral("editorController"),
                                              &editorController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("intelligenceController"), &intelligenceController);
     engine.rootContext()->setContextProperty(QStringLiteral("exportController"),
                                              &exportController);
     engine.rootContext()->setContextProperty(

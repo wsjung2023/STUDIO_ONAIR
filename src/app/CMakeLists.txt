@@ -22,8 +22,12 @@ add_library(cs_app STATIC
     LiveRecordingEngineFactory.cpp
     TranscriptionProviderFactory.h
     TranscriptionProviderFactory.cpp
+    CreatorIntelligenceController.h
+    CreatorIntelligenceController.cpp
     LiveRecordingController.h
     LiveRecordingController.cpp
+    CursorRecordingBinding.h
+    CursorRecordingBinding.cpp
     StudioRecordingBinding.h
     StudioRecordingBinding.cpp
     StudioController.h
@@ -106,6 +110,8 @@ if(CS_ENABLE_MLT)
     target_sources(cs_app PRIVATE
         ProjectExportEngine.h
         ProjectExportEngine.cpp
+        MltCreatorIntelligenceAudioLoader.h
+        MltCreatorIntelligenceAudioLoader.cpp
     )
     target_link_libraries(cs_app PRIVATE cs_mlt_adapter)
 endif()
@@ -160,6 +166,8 @@ target_link_libraries(cs_app
         cs_domain
         cs_edit_engine
         cs_transcription
+        cs_cut_suggest
+        cs_cursor
         cs_platform_release
     PRIVATE
         cs_project_store

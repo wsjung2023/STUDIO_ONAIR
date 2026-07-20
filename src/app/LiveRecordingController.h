@@ -97,6 +97,9 @@ public:
     [[nodiscard]] qlonglong recordingStartedAtNs() const noexcept;
     [[nodiscard]] qlonglong recordingPositionNs() const noexcept;
     [[nodiscard]] QString statusMessage() const { return statusMessage_; }
+    [[nodiscard]] const LiveRecordingStart* activeRecordingStart() const noexcept {
+        return pendingStart_ ? &*pendingStart_ : nullptr;
+    }
 
     void setRecordingPreparation(RecordingPreparation preparation);
 

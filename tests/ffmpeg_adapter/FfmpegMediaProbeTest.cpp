@@ -14,6 +14,7 @@ extern "C" {
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstdint>
@@ -591,6 +592,26 @@ TEST(FfmpegConcatRemuxerStressTest,
     std::sort(manifests.begin(), manifests.end());
     ASSERT_FALSE(manifests.empty());
 
+#ifdef _WIN32
+    DWORD initialHandles = 0;
+    ASSERT_NE(GetProcessHandleCount(GetCurrentProcess(), &initialHandles),
+              FALSE);
+    std::atomic<DWORD> maximumHandles{initialHandles};
+    std::jthread sampler([&](std::stop_token stop) {
+        while (!stop.stop_requested()) {
+            DWORD current = 0;
+            if (GetProcessHandleCount(GetCurrentProcess(), &current) != FALSE) {
+                auto maximum = maximumHandles.load(std::memory_order_relaxed);
+                while (current > maximum &&
+                       !maximumHandles.compare_exchange_weak(
+                           maximum, current, std::memory_order_relaxed)) {
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{2});
+        }
+    });
+#endif
+
     for (const auto& manifest : manifests) {
         const auto started = std::chrono::steady_clock::now();
         std::cout << "[R1-CONCAT] starting " << manifest.filename().string()
@@ -605,6 +626,15 @@ TEST(FfmpegConcatRemuxerStressTest,
                   << " milliseconds=" << elapsed.count() << " bytes="
                   << fs::file_size(materialized.value()) << std::endl;
     }
+#ifdef _WIN32
+    sampler.request_stop();
+    sampler.join();
+    const auto maximum = maximumHandles.load(std::memory_order_relaxed);
+    std::cout << "[R1-CONCAT] handles_initial=" << initialHandles
+              << " handles_maximum=" << maximum
+              << " handles_growth=" << maximum - initialHandles << std::endl;
+    EXPECT_LE(maximum, initialHandles + 1'000U);
+#endif
 }
 
 }  // namespace

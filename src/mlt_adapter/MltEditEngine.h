@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio_dsp/ExportLoudnessAnalysis.h"
 #include "audio_dsp/IAudioProcessor.h"
 #include "edit_engine/IEditEngine.h"
 #include "edit_engine/IRenderJobLifecycle.h"
@@ -10,12 +11,16 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stop_token>
 #include <vector>
 
 namespace creator::mlt_adapter {
 
 struct MltEditEngineConfig final {
+    using AudioProcessorFactory = std::function<
+        core::Result<std::unique_ptr<audio_dsp::IAudioProcessor>>() >;
+
     std::filesystem::path runtimeRoot;
     std::uint32_t previewWidth{1280};
     std::uint32_t previewHeight{720};
@@ -26,6 +31,18 @@ struct MltEditEngineConfig final {
     /// Optional real-time DSP chain applied to mixed preview audio. Export
     /// uses the same graph hook when the runtime exposes a mixed-audio frame.
     std::shared_ptr<audio_dsp::IAudioProcessor> audioProcessingChain;
+    /// Preferred for export and graph reloads: each graph receives isolated
+    /// processor state, so denoisers and dynamics cannot leak history between
+    /// preview, measurement, retry, or render passes.
+    AudioProcessorFactory audioProcessingFactory;
+    /// Enables bounded-memory two-pass export normalization. Pass 1 measures
+    /// the cleaned mixed program; pass 2 applies one static gain and the
+    /// configured true-peak limiter while encoding.
+    std::optional<audio_dsp::ExportLoudnessAnalyzer::Parameters>
+        exportLoudnessNormalization;
+    /// Internal pass-2 decision. Callers leave this empty; renderFrozen sets it
+    /// only after a successful complete-program measurement.
+    std::optional<double> appliedExportGainDb;
 };
 
 struct MltEditEngineDiagnostics final {

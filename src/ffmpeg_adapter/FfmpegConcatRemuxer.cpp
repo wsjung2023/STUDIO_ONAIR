@@ -167,8 +167,13 @@ Result<void> remux(const std::filesystem::path& manifest,
         return parseFailure("validated concat media could not be opened");
     }
     std::unique_ptr<AVFormatContext, InputCloser> input{opened};
-    if (avformat_find_stream_info(input.get(), nullptr) < 0 ||
-        input->nb_streams != 1 || input->streams[0] == nullptr ||
+    // The concat demuxer's stream table is complete after read_header opens
+    // the first recorder segment. avformat_find_stream_info() is harmful here:
+    // for a long concat it scans every segment before remuxing and retains one
+    // nested demuxer/IO graph per file, producing tens of thousands of Windows
+    // handles. Packet copy below validates read failures while keeping only the
+    // currently consumed segment open.
+    if (input->nb_streams != 1 || input->streams[0] == nullptr ||
         input->streams[0]->codecpar == nullptr) {
         return parseFailure(
             "concat editing media must contain exactly one stream");

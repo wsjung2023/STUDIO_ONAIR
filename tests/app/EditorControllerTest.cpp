@@ -15,6 +15,8 @@
 #include "project_store/ProjectPackageStore.h"
 #include "project_store/SqliteTimelineStore.h"
 #include "project_store/internal/SqliteConnection.h"
+#include "transcription/AudioInput.h"
+#include "transcription/FakeTranscriptionProvider.h"
 
 #include <QAbstractItemModel>
 #include <QCoreApplication>
@@ -820,6 +822,54 @@ TEST(EditorControllerDurableTest,
     EXPECT_EQ(fake->calls().size(), callsBefore);
     EXPECT_TRUE(controller.statusMessage().contains(
         QStringLiteral("injected controller commit failure")));
+}
+
+TEST(EditorControllerDurableTest,
+     AiProposalApprovalPersistsTranscriptAndRevisionChecksRippleCut) {
+    DurableControllerPackage package;
+    auto engine = std::make_unique<FakeEditEngine>();
+    EditorController controller{std::move(engine)};
+    controller.openProject(package.url());
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy() &&
+               controller.timelineRevision() == 0;
+    }));
+    const std::vector<float> samples(5'000, 0.1F);
+    auto input = creator::transcription::AudioInput::create(samples, 1'000, 1)
+                     .value();
+    creator::transcription::FakeTranscriptionProvider provider;
+    auto transcript = provider.transcribe(
+        input, creator::transcription::TranscriptionOptions{
+                   creator::domain::SourceId::create("project-mix").value(),
+                   "en"});
+    ASSERT_TRUE(transcript.hasValue());
+
+    auto staleTranscript =
+        controller.approveTranscriptProposal(transcript.value(), 99);
+    ASSERT_FALSE(staleTranscript.hasValue());
+    EXPECT_TRUE(controller.transcriptSegments().empty());
+
+    auto approvedTranscript =
+        controller.approveTranscriptProposal(transcript.value(), 0);
+    ASSERT_TRUE(approvedTranscript.hasValue())
+        << approvedTranscript.error().message();
+    EXPECT_FALSE(controller.transcriptSegments().empty());
+    ASSERT_TRUE(controller.exportSnapshot().has_value());
+    EXPECT_TRUE(fs::is_regular_file(controller.exportSnapshot()->mediaRoot /
+                                    "transcripts" / "local-ai.json"));
+
+    const auto range =
+        TimeRange::create(TimestampNs{DurationNs{100}}, DurationNs{200}).value();
+    auto approvedCut = controller.approveCutProposal(range, 0, true);
+    ASSERT_TRUE(approvedCut.hasValue()) << approvedCut.error().message();
+    ASSERT_TRUE(waitUntil([&] {
+        return !controller.sessionBusy() && !controller.busy() &&
+               controller.timelineRevision() == 1;
+    }));
+
+    auto staleCut = controller.approveCutProposal(range, 0, true);
+    ASSERT_FALSE(staleCut.hasValue());
+    EXPECT_EQ(controller.timelineRevision(), 1);
 }
 
 TEST(EditorControllerDurableTest,

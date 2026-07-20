@@ -44,6 +44,23 @@ TEST(TranscriptionProviderFactoryTest, UnavailableWhenWhisperNotBuilt) {
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::UnsupportedVersion);
 }
+#else
+TEST(TranscriptionProviderFactoryTest,
+     SurfacesAuditedRuntimePreflightFailureWhenWhisperIsBuilt) {
+    TranscriptionProviderOptions options;
+    auto provider = makeTranscriptionProvider(options);
+    ASSERT_NE(provider, nullptr);
+
+    std::vector<float> samples(16000, 0.1f);
+    const auto audio = AudioInput::create(samples, 16000, 1).value();
+    const TranscriptionOptions request{SourceId::create("cam-1").value(), "en"};
+
+    const auto result = provider->transcribe(audio, request);
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidState);
+    EXPECT_EQ(result.error().message(),
+              "whisper runtime root is missing or redirected");
+}
 #endif
 
 }  // namespace

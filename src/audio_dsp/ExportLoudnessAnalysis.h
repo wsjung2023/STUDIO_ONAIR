@@ -7,6 +7,8 @@
 
 namespace creator::audio_dsp {
 
+class LoudnessMeter;
+
 /// The measure-and-decide outcome of the FIRST pass of an offline, two-pass
 /// export loudness normalization.
 ///
@@ -76,6 +78,11 @@ public:
     /// through the measurement). Does NOT modify `interleaved`.
     [[nodiscard]] core::Result<ExportLoudnessDecision> analyze(
         const std::vector<float>& interleaved, const AudioFormat& format) const;
+
+    /// Decide normalization from a meter that has already been populated in
+    /// streaming blocks. This is the bounded-memory first pass used by export.
+    [[nodiscard]] core::Result<ExportLoudnessDecision> decide(
+        const LoudnessMeter& meter) const;
 
 private:
     explicit ExportLoudnessAnalyzer(const Parameters& params) noexcept

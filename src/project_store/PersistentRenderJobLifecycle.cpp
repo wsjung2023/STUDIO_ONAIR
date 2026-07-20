@@ -125,6 +125,20 @@ core::Result<void> PersistentRenderJobLifecycle::finish(
     }
     auto& session = position->second;
     if (!diagnostic.empty()) session.diagnostics.diagnostic = std::move(diagnostic);
+    if (state == edit_engine::RenderJobState::Cancelled &&
+        (session.persistedProgress.state() ==
+             edit_engine::RenderJobState::Pending ||
+         session.persistedProgress.state() ==
+             edit_engine::RenderJobState::Running)) {
+        auto cancelling = edit_engine::RenderProgress::create(
+            edit_engine::RenderJobState::Cancelling,
+            session.persistedProgress.fraction(),
+            session.persistedProgress.renderedThrough(),
+            session.persistedProgress.totalDuration());
+        if (!cancelling.hasValue()) return cancelling.error();
+        auto persisted = persist(jobId, session, cancelling.value(), false);
+        if (!persisted.hasValue()) return persisted;
+    }
     const bool completed = state == edit_engine::RenderJobState::Completed;
     auto progress = edit_engine::RenderProgress::create(
         state, completed ? 1.0 : session.persistedProgress.fraction(),

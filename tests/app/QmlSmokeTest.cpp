@@ -297,6 +297,23 @@ private:
     int resumeCalls_{0};
 };
 
+class FakeCursorRecordingController final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(bool available READ available CONSTANT)
+    Q_PROPERTY(bool active READ active CONSTANT)
+    Q_PROPERTY(qulonglong eventCount READ eventCount CONSTANT)
+    Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
+
+public:
+    using QObject::QObject;
+    [[nodiscard]] bool available() const noexcept { return true; }
+    [[nodiscard]] bool active() const noexcept { return true; }
+    [[nodiscard]] qulonglong eventCount() const noexcept { return 42; }
+    [[nodiscard]] QString statusMessage() const {
+        return QStringLiteral("Cursor data: recording");
+    }
+};
+
 class FakeShortcutSettingsController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString recordShortcut READ recordShortcut CONSTANT)
@@ -1096,6 +1113,55 @@ private:
     int captionRemoveCalls_{0};
 };
 
+class FakeIntelligenceController final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(bool busy READ busy NOTIFY changed)
+    Q_PROPERTY(bool hasPendingProposal READ hasPendingProposal NOTIFY changed)
+    Q_PROPERTY(QVariantList transcriptProposal READ transcriptProposal NOTIFY changed)
+    Q_PROPERTY(QVariantList cutSuggestions READ cutSuggestions NOTIFY changed)
+    Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY changed)
+public:
+    bool busy() const noexcept { return false; }
+    bool hasPendingProposal() const noexcept { return true; }
+    QVariantList transcriptProposal() const {
+        return {QVariantMap{{QStringLiteral("text"),
+                             QStringLiteral("Local transcript proposal")}}};
+    }
+    QVariantList cutSuggestions() const {
+        return {QVariantMap{{QStringLiteral("reason"), QStringLiteral("silence")},
+                            {QStringLiteral("durationNs"), 600'000'000LL},
+                            {QStringLiteral("score"), 0.9}}};
+    }
+    QString statusMessage() const {
+        return QStringLiteral("Review before applying");
+    }
+    Q_INVOKABLE bool analyzeProject() {
+        ++analyzeCalls_;
+        return true;
+    }
+    Q_INVOKABLE void cancelAnalysis() { ++cancelCalls_; }
+    Q_INVOKABLE void rejectProposal() { ++rejectCalls_; }
+    Q_INVOKABLE bool approveTranscript() {
+        ++transcriptCalls_;
+        return true;
+    }
+    Q_INVOKABLE bool approveCut(int index) {
+        approvedCutIndex_ = index;
+        return true;
+    }
+    int analyzeCalls() const noexcept { return analyzeCalls_; }
+    int transcriptCalls() const noexcept { return transcriptCalls_; }
+    int approvedCutIndex() const noexcept { return approvedCutIndex_; }
+signals:
+    void changed();
+private:
+    int analyzeCalls_{};
+    int cancelCalls_{};
+    int rejectCalls_{};
+    int transcriptCalls_{};
+    int approvedCutIndex_{-1};
+};
+
 TEST(QmlSmokeTest, RecoveryPageLoadsWithProjectControllerContract) {
     QQmlEngine engine;
     FakeProjectController controller;
@@ -1541,6 +1607,47 @@ TEST(QmlSmokeTest, EditorPageProvidesDurableEditControls) {
         QStringLiteral("??")));
 }
 
+TEST(QmlSmokeTest, EditorPageProvidesExplicitLocalAiReviewControls) {
+    QQmlEngine engine;
+    FakeEditorController editor;
+    FakeIntelligenceController intelligence;
+    QQmlComponent component{
+        &engine,
+        QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/EditorPage.qml"))};
+    QVariantMap initialProperties{
+        {QStringLiteral("controller"),
+         QVariant::fromValue(static_cast<QObject*>(&editor))},
+        {QStringLiteral("intelligenceController"),
+         QVariant::fromValue(static_cast<QObject*>(&intelligence))},
+        {QStringLiteral("width"), 1200},
+        {QStringLiteral("height"), 720}};
+    std::unique_ptr<QObject> object{
+        component.createWithInitialProperties(initialProperties)};
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    QCoreApplication::processEvents();
+
+    auto* panel =
+        object->findChild<QObject*>(QStringLiteral("editorLocalAiPanel"));
+    auto* analyze = object->findChild<QObject*>(
+        QStringLiteral("editorLocalAiAnalyzeButton"));
+    auto* approveTranscript = object->findChild<QObject*>(
+        QStringLiteral("editorLocalAiApproveTranscriptButton"));
+    auto* approveCut = object->findChild<QObject*>(
+        QStringLiteral("editorLocalAiApproveFirstCutButton"));
+    ASSERT_NE(panel, nullptr);
+    ASSERT_NE(analyze, nullptr);
+    ASSERT_NE(approveTranscript, nullptr);
+    ASSERT_NE(approveCut, nullptr);
+    EXPECT_TRUE(panel->property("visible").toBool());
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(analyze, "clicked"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(approveTranscript, "clicked"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(approveCut, "clicked"));
+    EXPECT_EQ(intelligence.analyzeCalls(), 1);
+    EXPECT_EQ(intelligence.transcriptCalls(), 1);
+    EXPECT_EQ(intelligence.approvedCutIndex(), 0);
+}
+
 TEST(QmlSmokeTest, EditorPageProvidesCompleteAccessibleInspectorControls) {
     QQmlEngine engine;
     FakeEditorController controller;
@@ -1762,12 +1869,16 @@ TEST(QmlSmokeTest, EditorPageProvidesCompleteAccessibleInspectorControls) {
 TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     QQmlEngine engine;
     FakeStudioController studioController;
+    FakeCursorRecordingController cursorRecordingController;
     FakeScreenCaptureController screenCaptureController;
     FakeDeviceCaptureController deviceCaptureController;
     FakeStudioWorkflowController studioWorkflowController;
     FakeShortcutSettingsController shortcutSettingsController;
     engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
                                              &studioController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("cursorRecordingController"),
+        &cursorRecordingController);
     engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),
                                              &screenCaptureController);
     engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
@@ -1794,6 +1905,10 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     auto* encoder = object->findChild<QObject*>(QStringLiteral("recordingEncoderLabel"));
     auto* queue = object->findChild<QObject*>(QStringLiteral("recordingQueueLabel"));
     auto* sync = object->findChild<QObject*>(QStringLiteral("recordingSyncLabel"));
+    auto* cursorStatus = object->findChild<QObject*>(
+        QStringLiteral("cursorTelemetryStatusLabel"));
+    auto* cursorCount = object->findChild<QObject*>(
+        QStringLiteral("cursorTelemetryCountLabel"));
     ASSERT_NE(selector, nullptr);
     ASSERT_NE(status, nullptr);
     ASSERT_NE(preview, nullptr);
@@ -1804,11 +1919,17 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     ASSERT_NE(encoder, nullptr);
     ASSERT_NE(queue, nullptr);
     ASSERT_NE(sync, nullptr);
+    ASSERT_NE(cursorStatus, nullptr);
+    ASSERT_NE(cursorCount, nullptr);
     EXPECT_TRUE(disk->property("text").toString().contains(QStringLiteral("8.0 GiB")));
     EXPECT_TRUE(encoder->property("text").toString().contains(QStringLiteral("mpeg4, aac")));
     EXPECT_TRUE(queue->property("text").toString().contains(QStringLiteral("Queue: 3")));
     EXPECT_TRUE(sync->property("text").toString().contains(QStringLiteral("duplicate 4")));
     EXPECT_TRUE(sync->property("text").toString().contains(QStringLiteral("8.5 ms")));
+    EXPECT_EQ(cursorStatus->property("text").toString(),
+              QStringLiteral("Cursor data: recording"));
+    EXPECT_TRUE(cursorCount->property("text").toString().contains(
+        QStringLiteral("42")));
     EXPECT_EQ(selector->property("count").toInt(), 1);
     EXPECT_EQ(status->property("text").toString(),
               QStringLiteral("captured window closed"));

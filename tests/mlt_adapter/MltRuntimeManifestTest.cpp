@@ -92,7 +92,10 @@ public:
         writeManifest();
     }
 
-    void writeManifest(std::string version = "7.40.0") {
+    void writeManifest(
+        std::string version = "7.40.0",
+        std::string windowsMutexPatch =
+            "creator-studio-pthreads4w-v3.0.0-lazy-mutex-events-v1") {
         std::ofstream output(root_ / "mlt-runtime-manifest.json",
                              std::ios::binary | std::ios::trunc);
         output << "{\n\"abi\":1,\"component\":\"MLT Framework\","
@@ -100,13 +103,16 @@ public:
                << version
                << "\",\"source_commit\":"
                   "\"bef9d89c0c279e558d9625dac3399c2aa3d961bc\","
+                  "\"windows_mutex_patch\":\""
+               << windowsMutexPatch
+               << "\","
                   "\"linking\":\"dynamic\","
                   "\"allowed_modules\":[\"core\",\"avformat\"],"
                   "\"dependencies\":["
                   "{\"component\":\"FFmpeg\",\"version\":\"8.1.2\","
                   "\"source_identity\":\"sha256:464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c\",\"license\":\"LGPL-2.1-or-later\"},"
                   "{\"component\":\"zlib\",\"version\":\"1.3.2\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"Zlib\"},"
-                  "{\"component\":\"PThreads4W\",\"version\":\"3.0.0\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"Apache-2.0\"},"
+                  "{\"component\":\"PThreads4W\",\"version\":\"3.0.0\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e;patch:creator-studio-pthreads4w-v3.0.0-lazy-mutex-events-v1\",\"license\":\"Apache-2.0\"},"
                   "{\"component\":\"GNU libiconv\",\"version\":\"1.19\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"LGPL-2.1-or-later\"},"
                   "{\"component\":\"dlfcn-win32\",\"version\":\"1.4.2\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"MIT\"}],\"files\":[";
         for (std::size_t index = 0; index < entries_.size(); ++index) {
@@ -209,6 +215,16 @@ TEST(MltRuntimeManifestTest, RejectsWrongVersionDuplicateAndTraversal) {
     traversal.writeManifest();
     EXPECT_FALSE(creator::mlt_adapter::verifyMltRuntimeManifest(traversal.root())
                      .hasValue());
+}
+
+TEST(MltRuntimeManifestTest, RejectsUnapprovedWindowsMutexPatch) {
+    RuntimeFixture fixture;
+    fixture.writeManifest("7.40.0", "unapproved-local-patch");
+
+    const auto result =
+        creator::mlt_adapter::verifyMltRuntimeManifest(fixture.root());
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), creator::core::ErrorCode::UnsupportedVersion);
 }
 
 TEST(MltRuntimeManifestTest, RejectsExecutableAndForbiddenModuleNames) {

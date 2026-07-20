@@ -272,7 +272,10 @@ endif()
 
 if(CS_ENABLE_WHISPER)
     target_link_libraries(creator_studio PRIVATE cs_whisper_adapter)
-    target_compile_definitions(creator_studio PRIVATE CS_APP_ENABLE_WHISPER=1)
+    target_compile_definitions(creator_studio PRIVATE
+        CS_APP_ENABLE_WHISPER=1
+        CS_APP_WHISPER_ROOT="${CS_WHISPER_ROOT}"
+    )
     if(WIN32)
         file(GLOB CS_APP_WHISPER_RUNTIME_DLLS CONFIGURE_DEPENDS
             "${CS_WHISPER_ROOT}/bin/*.dll")

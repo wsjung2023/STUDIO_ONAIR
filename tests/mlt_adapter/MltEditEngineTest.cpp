@@ -1,5 +1,10 @@
 #include "mlt_adapter/MltEditEngine.h"
 
+#include "app/MltCreatorIntelligenceAudioLoader.h"
+#include "audio_dsp/AudioBuffer.h"
+#include "audio_dsp/AudioFormat.h"
+#include "audio_dsp/ExportLoudnessAnalysis.h"
+#include "audio_dsp/LoudnessMeter.h"
 #include "core/Timebase.h"
 #include "domain/Identifiers.h"
 #include "domain/MediaAsset.h"
@@ -13,6 +18,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -21,6 +27,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -74,6 +81,20 @@ public:
     std::atomic_bool completedAfterRename{};
 };
 
+class CountingAudioProcessor final : public audio_dsp::IAudioProcessor {
+public:
+    explicit CountingAudioProcessor(std::atomic_int& processCalls)
+        : processCalls_(processCalls) {}
+
+    core::Result<void> process(audio_dsp::AudioBuffer&) override {
+        processCalls_.fetch_add(1, std::memory_order_relaxed);
+        return core::ok();
+    }
+
+private:
+    std::atomic_int& processCalls_;
+};
+
 void writeMonoWave(const fs::path& path, std::int16_t sampleValue,
                    std::uint32_t sampleCount = 48'000) {
     constexpr std::uint32_t kSampleRate = 48'000;
@@ -104,6 +125,44 @@ void writeMonoWave(const fs::path& path, std::int16_t sampleValue,
     for (std::uint32_t sample = 0; sample < sampleCount; ++sample) {
         write16(static_cast<std::uint16_t>(sampleValue));
     }
+}
+
+void writeMonoSineWave(const fs::path& path, double amplitude,
+                       std::uint32_t seconds) {
+    constexpr std::uint32_t kSampleRate = 48'000;
+    const auto sampleCount = kSampleRate * seconds;
+    constexpr double kPi = 3.14159265358979323846;
+    std::vector<std::int16_t> samples(sampleCount);
+    for (std::uint32_t index = 0; index < sampleCount; ++index) {
+        samples[index] = static_cast<std::int16_t>(
+            std::sin(2.0 * kPi * 440.0 * static_cast<double>(index) /
+                     static_cast<double>(kSampleRate)) *
+            amplitude * 32767.0);
+    }
+
+    const std::uint32_t dataBytes = sampleCount * sizeof(std::int16_t);
+    std::ofstream output(path, std::ios::binary);
+    const auto write16 = [&](std::uint16_t value) {
+        output.put(static_cast<char>(value & 0xffU));
+        output.put(static_cast<char>((value >> 8U) & 0xffU));
+    };
+    const auto write32 = [&](std::uint32_t value) {
+        write16(static_cast<std::uint16_t>(value & 0xffffU));
+        write16(static_cast<std::uint16_t>((value >> 16U) & 0xffffU));
+    };
+    output.write("RIFF", 4);
+    write32(36U + dataBytes);
+    output.write("WAVEfmt ", 8);
+    write32(16);
+    write16(1);
+    write16(1);
+    write32(kSampleRate);
+    write32(kSampleRate * sizeof(std::int16_t));
+    write16(sizeof(std::int16_t));
+    write16(16);
+    output.write("data", 4);
+    write32(dataBytes);
+    output.write(reinterpret_cast<const char*>(samples.data()), dataBytes);
 }
 
 void writeNonFiniteFloatWave(const fs::path& path) {
@@ -223,6 +282,7 @@ public:
         writeMonoWave(root_ / "media/microphone.wav", 1000);
         writeMonoWave(root_ / "media/system.wav", 2000);
         writeMonoWave(root_ / "media/fractional.wav", 1000, 48'048);
+        writeMonoSineWave(root_ / "media/quiet-sine.wav", 0.02, 3);
         writeNonFiniteFloatWave(root_ / "media/nonfinite.wav");
     }
     ~MltFixture() { fs::remove_all(root_); }
@@ -274,6 +334,98 @@ edit_engine::TimelineSnapshot imageSnapshot(const fs::path& root,
 edit_engine::TimelineSnapshot snapshot(const fs::path& root,
                                        std::int64_t revision = 1) {
     return imageSnapshot(root, "red", "media/red.ppm", revision);
+}
+
+edit_engine::TimelineSnapshot repeatedAssetSnapshot(const fs::path& root,
+                                                     int clipCount,
+                                                     bool transformed = false) {
+    const auto rate = core::FrameRate::create(30, 1).value();
+    const auto second = core::DurationNs{1'000'000'000};
+    auto asset = domain::MediaAsset::create(
+                     domain::AssetId::create("repeated-red").value(),
+                     domain::MediaKind::Image, "media/red.ppm", second,
+                     domain::VideoAssetMetadata{2, 2, rate}, std::nullopt, 23,
+                     "repeated-red", domain::AssetAvailability::Available)
+                     .value();
+    auto timeline = domain::Timeline::create(
+                        domain::TimelineId::create("repeated").value(),
+                        "Repeated", rate)
+                        .value();
+    const auto track = domain::TrackId::create("video").value();
+    EXPECT_TRUE(timeline.addTrack(domain::Track::create(
+                                      track, domain::TrackKind::Video,
+                                      "Video", true, false)
+                                      .value())
+                    .hasValue());
+    const auto source = domain::TimeRange::create(
+                            core::TimestampNs{}, second).value();
+    const auto transform = transformed
+        ? std::optional{domain::VisualTransform::create(
+              0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0,
+              0.0, 0.0, 0.0, 0.0, 0.5, 1).value()}
+        : std::nullopt;
+    for (int index = 0; index < clipCount; ++index) {
+        const auto target = domain::TimeRange::create(
+                                core::TimestampNs{second * index}, second)
+                                .value();
+        EXPECT_TRUE(timeline.insertClip(
+                                track,
+                                domain::Clip::createAsset(
+                                    domain::ClipId::create(
+                                        "clip-" + std::to_string(index)).value(),
+                                    asset, source, target, true, transform,
+                                    std::nullopt)
+                                    .value())
+                        .hasValue());
+    }
+    return {std::move(timeline), domain::TimelineRevision::create(3).value(),
+            {std::move(asset)}, root, 16, 16};
+}
+
+edit_engine::TimelineSnapshot repeatedEnvelopedAudioSnapshot(
+    const fs::path& root, int clipCount) {
+    const auto rate = core::FrameRate::create(30, 1).value();
+    const auto second = core::DurationNs{1'000'000'000};
+    auto asset = domain::MediaAsset::create(
+                     domain::AssetId::create("repeated-audio").value(),
+                     domain::MediaKind::Audio, "media/microphone.wav", second,
+                     std::nullopt, domain::AudioAssetMetadata{48'000, 1},
+                     96'044, "repeated-audio",
+                     domain::AssetAvailability::Available)
+                     .value();
+    auto timeline = domain::Timeline::create(
+                        domain::TimelineId::create("repeated-audio").value(),
+                        "Repeated audio", rate)
+                        .value();
+    const auto track = domain::TrackId::create("audio").value();
+    EXPECT_TRUE(timeline.addTrack(domain::Track::create(
+                                      track, domain::TrackKind::Audio,
+                                      "Audio", true, false)
+                                      .value())
+                    .hasValue());
+    const auto source = domain::TimeRange::create(
+                            core::TimestampNs{}, second).value();
+    const auto envelope = domain::AudioEnvelope::create(
+                              -6.0, core::DurationNs{100'000'000},
+                              core::DurationNs{100'000'000}, second)
+                              .value();
+    for (int index = 0; index < clipCount; ++index) {
+        const auto target = domain::TimeRange::create(
+                                core::TimestampNs{second * index}, second)
+                                .value();
+        EXPECT_TRUE(timeline.insertClip(
+                                track,
+                                domain::Clip::createAsset(
+                                    domain::ClipId::create(
+                                        "audio-clip-" +
+                                        std::to_string(index)).value(),
+                                    asset, source, target, true, std::nullopt,
+                                    envelope)
+                                    .value())
+                        .hasValue());
+    }
+    return {std::move(timeline), domain::TimelineRevision::create(4).value(),
+            {std::move(asset)}, root, 16, 16};
 }
 
 edit_engine::TimelineSnapshot layeredSnapshot(const fs::path& root) {
@@ -403,6 +555,95 @@ edit_engine::TimelineSnapshot audioMixSnapshot(const fs::path& root) {
     return edit_engine::TimelineSnapshot{
         std::move(timeline), domain::TimelineRevision::create(5).value(),
         {std::move(video), std::move(microphone), std::move(system)}, root};
+}
+
+edit_engine::TimelineSnapshot quietAudioSnapshot(const fs::path& root) {
+    const auto rate = core::FrameRate::create(30, 1).value();
+    const auto duration = core::DurationNs{3'000'000'000};
+    auto video = domain::MediaAsset::create(
+                     domain::AssetId::create("quiet-video").value(),
+                     domain::MediaKind::Image, "media/red.ppm", duration,
+                     domain::VideoAssetMetadata{2, 2, rate}, std::nullopt, 23,
+                     "quiet-video", domain::AssetAvailability::Available)
+                     .value();
+    auto audio = domain::MediaAsset::create(
+                     domain::AssetId::create("quiet-audio").value(),
+                     domain::MediaKind::Audio, "media/quiet-sine.wav", duration,
+                     std::nullopt, domain::AudioAssetMetadata{48'000, 1},
+                     288'044, "quiet-audio",
+                     domain::AssetAvailability::Available)
+                     .value();
+    auto timeline = domain::Timeline::create(
+                        domain::TimelineId::create("quiet").value(),
+                        "Quiet", rate)
+                        .value();
+    const auto videoTrack = domain::TrackId::create("video").value();
+    const auto audioTrack = domain::TrackId::create("audio").value();
+    EXPECT_TRUE(timeline.addTrack(domain::Track::create(
+                                      videoTrack, domain::TrackKind::Video,
+                                      "Video", true, false)
+                                      .value())
+                    .hasValue());
+    EXPECT_TRUE(timeline.addTrack(domain::Track::create(
+                                      audioTrack, domain::TrackKind::Audio,
+                                      "Audio", true, false)
+                                      .value())
+                    .hasValue());
+    const auto range =
+        domain::TimeRange::create(core::TimestampNs{}, duration).value();
+    EXPECT_TRUE(timeline.insertClip(
+                            videoTrack,
+                            domain::Clip::createAsset(
+                                domain::ClipId::create("video").value(), video,
+                                range, range, true, std::nullopt, std::nullopt)
+                                .value())
+                    .hasValue());
+    EXPECT_TRUE(timeline.insertClip(
+                            audioTrack,
+                            domain::Clip::createAsset(
+                                domain::ClipId::create("audio").value(), audio,
+                                range, range, true, std::nullopt, std::nullopt)
+                                .value())
+                    .hasValue());
+    return {std::move(timeline), domain::TimelineRevision::create(30).value(),
+            {std::move(video), std::move(audio)}, root, 16, 16};
+}
+
+edit_engine::TimelineSnapshot exportedAudioSnapshot(
+    const fs::path& root, const fs::path& relativePath) {
+    const auto rate = core::FrameRate::create(30, 1).value();
+    const auto duration = core::DurationNs{3'000'000'000};
+    auto asset = domain::MediaAsset::create(
+                     domain::AssetId::create("normalized-export").value(),
+                     domain::MediaKind::Video, relativePath.generic_string(),
+                     duration,
+                     domain::VideoAssetMetadata{1920, 1080, rate},
+                     domain::AudioAssetMetadata{48'000, 2}, 1,
+                     "normalized-export",
+                     domain::AssetAvailability::Available)
+                     .value();
+    auto timeline = domain::Timeline::create(
+                        domain::TimelineId::create("normalized").value(),
+                        "Normalized", rate)
+                        .value();
+    const auto track = domain::TrackId::create("video").value();
+    EXPECT_TRUE(timeline.addTrack(domain::Track::create(
+                                      track, domain::TrackKind::Video,
+                                      "Video", true, false)
+                                      .value())
+                    .hasValue());
+    const auto range =
+        domain::TimeRange::create(core::TimestampNs{}, duration).value();
+    EXPECT_TRUE(timeline.insertClip(
+                            track,
+                            domain::Clip::createAsset(
+                                domain::ClipId::create("normalized").value(),
+                                asset, range, range, true, std::nullopt,
+                                std::nullopt)
+                                .value())
+                    .hasValue());
+    return {std::move(timeline), domain::TimelineRevision::create(31).value(),
+            {std::move(asset)}, root, 16, 16};
 }
 
 domain::MediaAsset imageAsset(std::string id, std::string path) {
@@ -1012,6 +1253,85 @@ TEST(MltEditEngineTest, CompositesUpperVideoTrackOverLowerTrack) {
     EXPECT_LT(upperBgra[2], 16U);
 }
 
+TEST(MltEditEngineTest,
+     ReusesOneDecoderForHundredsOfUnmodifiedClipsFromTheSameAsset) {
+    MltFixture fixture;
+    mlt_adapter::MltEditEngine engine{{
+        .runtimeRoot = fs::path{CS_TEST_MLT_ROOT},
+        .previewWidth = 16,
+        .previewHeight = 16}};
+
+    auto loaded = engine.load(repeatedAssetSnapshot(fixture.root(), 500));
+
+    ASSERT_TRUE(loaded.hasValue()) << loaded.error().message();
+    const auto diagnostics = engine.diagnostics();
+    ASSERT_TRUE(diagnostics.hasValue()) << diagnostics.error().message();
+    EXPECT_EQ(diagnostics.value().mediaProducerCount, 1U);
+
+    for (const auto position : {core::TimestampNs{},
+                                core::TimestampNs{
+                                    core::DurationNs{499'500'000'000}}}) {
+        auto frame = engine.requestFrame(position);
+        ASSERT_TRUE(frame.hasValue()) << frame.error().message();
+        const auto* bgra = static_cast<const std::uint8_t*>(
+            frame.value().frame().platformHandle.get());
+        ASSERT_NE(bgra, nullptr);
+        EXPECT_LT(bgra[0], 16U);
+        EXPECT_LT(bgra[1], 16U);
+        EXPECT_GT(bgra[2], 239U);
+        EXPECT_EQ(bgra[3], 255U);
+    }
+}
+
+TEST(MltEditEngineTest,
+     ReusesOneDecoderWhenHundredsOfClipsHaveIndependentVisualFilters) {
+    MltFixture fixture;
+    mlt_adapter::MltEditEngine engine{{
+        .runtimeRoot = fs::path{CS_TEST_MLT_ROOT},
+        .previewWidth = 16,
+        .previewHeight = 16}};
+
+    auto loaded = engine.load(repeatedAssetSnapshot(fixture.root(), 250, true));
+    ASSERT_TRUE(loaded.hasValue()) << loaded.error().message();
+    const auto diagnostics = engine.diagnostics();
+    ASSERT_TRUE(diagnostics.hasValue()) << diagnostics.error().message();
+    EXPECT_EQ(diagnostics.value().mediaProducerCount, 1U);
+    EXPECT_EQ(diagnostics.value().transformedVisualBranchCount, 250U);
+    auto frame = engine.requestFrame(
+        core::TimestampNs{core::DurationNs{249'500'000'000}});
+    ASSERT_TRUE(frame.hasValue()) << frame.error().message();
+    const auto* bgra = static_cast<const std::uint8_t*>(
+        frame.value().frame().platformHandle.get());
+    ASSERT_NE(bgra, nullptr);
+    EXPECT_GT(bgra[2], 110U);
+    EXPECT_LT(bgra[2], 145U);
+}
+
+TEST(MltEditEngineTest,
+     ReusesOneDecoderWhenHundredsOfAudioClipsHaveIndependentEnvelopes) {
+    MltFixture fixture;
+    mlt_adapter::MltEditEngine engine{{
+        .runtimeRoot = fs::path{CS_TEST_MLT_ROOT},
+        .previewWidth = 16,
+        .previewHeight = 16}};
+
+    auto loaded =
+        engine.load(repeatedEnvelopedAudioSnapshot(fixture.root(), 250));
+
+    ASSERT_TRUE(loaded.hasValue()) << loaded.error().message();
+    const auto diagnostics = engine.diagnostics();
+    ASSERT_TRUE(diagnostics.hasValue()) << diagnostics.error().message();
+    EXPECT_EQ(diagnostics.value().mediaProducerCount, 1U);
+    EXPECT_EQ(diagnostics.value().audioEnvelopeBranchCount, 250U);
+    auto audio = engine.requestMixedAudio(
+        core::TimestampNs{core::DurationNs{249'500'000'000}},
+        48'000, 1, 1'600);
+    ASSERT_TRUE(audio.hasValue()) << audio.error().message();
+    ASSERT_FALSE(audio.value().empty());
+    EXPECT_NEAR(audio.value().front(),
+                (1000.0F / 32768.0F) * 0.5011872F, 0.0001F);
+}
+
 TEST(MltEditEngineTest, SuccessfulUpdatePublishesNewRevision) {
     MltFixture fixture;
     mlt_adapter::MltEditEngine engine{{
@@ -1100,6 +1420,32 @@ TEST(MltEditEngineTest, LoadsTwoRealAudioTracksWithCoreMixTransitions) {
     EXPECT_LT(mean, 0.10);
     // Audio extraction consumes this graph position; video is covered by the
     // dedicated composite tests.
+}
+
+TEST(MltEditEngineTest, CreatesFreshAudioProcessorForEveryGraph) {
+    MltFixture fixture;
+    std::atomic_int factoryCalls{};
+    std::atomic_int processCalls{};
+    mlt_adapter::MltEditEngine engine{{
+        .runtimeRoot = fs::path{CS_TEST_MLT_ROOT},
+        .previewWidth = 2,
+        .previewHeight = 2,
+        .audioProcessingFactory = [&]()
+            -> core::Result<std::unique_ptr<audio_dsp::IAudioProcessor>> {
+            factoryCalls.fetch_add(1, std::memory_order_relaxed);
+            return std::unique_ptr<audio_dsp::IAudioProcessor>{
+                new CountingAudioProcessor{processCalls}};
+        }}};
+
+    ASSERT_TRUE(engine.load(audioMixSnapshot(fixture.root())).hasValue());
+    ASSERT_TRUE(engine.requestMixedAudio(core::TimestampNs{}, 48'000, 1, 1'600)
+                    .hasValue());
+    ASSERT_TRUE(engine.load(audioMixSnapshot(fixture.root())).hasValue());
+    ASSERT_TRUE(engine.requestMixedAudio(core::TimestampNs{}, 48'000, 1, 1'600)
+                    .hasValue());
+
+    EXPECT_EQ(factoryCalls.load(std::memory_order_relaxed), 2);
+    EXPECT_GE(processCalls.load(std::memory_order_relaxed), 2);
 }
 
 TEST(MltEditEngineTest, RepeatedEngineDestructionDoesNotCorruptNextGraph) {
@@ -1560,6 +1906,100 @@ TEST(MltEditEngineTest, RendersTwoMixedAudioTracksWithoutInvalidSamples) {
     ASSERT_TRUE(media.value().audio.has_value());
     EXPECT_EQ(media.value().audio->sampleRate, 48'000);
     EXPECT_EQ(media.value().audio->channels, 2);
+}
+
+TEST(MltEditEngineTest,
+     TwoPassLoudnessUsesFreshCleanupAndNormalizesPublishedAudio) {
+    MltFixture fixture;
+    std::atomic_int factoryCalls{};
+    std::atomic_int processCalls{};
+    audio_dsp::ExportLoudnessAnalyzer::Parameters loudness;
+    loudness.targetLufs = -14.0;
+    loudness.truePeakCeilingDbtp = -1.0;
+    mlt_adapter::MltEditEngine engine{{
+        .runtimeRoot = fs::path{CS_TEST_MLT_ROOT},
+        .previewWidth = 16,
+        .previewHeight = 16,
+        .audioProcessingFactory = [&]()
+            -> core::Result<std::unique_ptr<audio_dsp::IAudioProcessor>> {
+            factoryCalls.fetch_add(1, std::memory_order_relaxed);
+            return std::unique_ptr<audio_dsp::IAudioProcessor>{
+                new CountingAudioProcessor{processCalls}};
+        },
+        .exportLoudnessNormalization = loudness}};
+    auto frozen = quietAudioSnapshot(fixture.root());
+    const auto destination = fixture.root() / "normalized.mp4";
+    auto request = edit_engine::RenderRequest::create(
+        domain::ProjectId::create("project").value(), frozen, destination,
+        edit_engine::RenderPreset::h2641080p30().value(),
+        edit_engine::RenderOverwritePolicy::FailIfExists);
+    ASSERT_TRUE(request.hasValue()) << request.error().message();
+
+    auto job = engine.render(request.value());
+    ASSERT_TRUE(job.hasValue()) << job.error().message();
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds{45};
+    edit_engine::RenderJobState state = edit_engine::RenderJobState::Pending;
+    while (std::chrono::steady_clock::now() < deadline) {
+        state = job.value()->progress().value().state();
+        if (state == edit_engine::RenderJobState::Completed ||
+            state == edit_engine::RenderJobState::Failed) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    ASSERT_EQ(state, edit_engine::RenderJobState::Completed)
+        << job.value()->diagnostic();
+    EXPECT_EQ(factoryCalls.load(std::memory_order_relaxed), 2);
+    EXPECT_GT(processCalls.load(std::memory_order_relaxed), 0);
+
+    mlt_adapter::MltEditEngine reader{{
+        .runtimeRoot = fs::path{CS_TEST_MLT_ROOT},
+        .previewWidth = 16,
+        .previewHeight = 16}};
+    ASSERT_TRUE(reader.load(exportedAudioSnapshot(
+                                fixture.root(), destination.filename()))
+                    .hasValue());
+    auto format = audio_dsp::AudioFormat::create(48'000, 2).value();
+    auto meter = audio_dsp::LoudnessMeter::create(format).value();
+    const auto rate = core::FrameRate::create(30, 1).value();
+    for (std::int64_t frame = 0; frame < 90; ++frame) {
+        auto block = reader.requestMixedAudio(
+            core::frameToTimestamp(frame, rate), 48'000, 2, 1'600);
+        ASSERT_TRUE(block.hasValue()) << block.error().message();
+        audio_dsp::AudioBuffer view{block.value().data(),
+                                    block.value().size() / 2U, format};
+        ASSERT_TRUE(meter.addBlock(view).hasValue());
+    }
+    auto analyzer =
+        audio_dsp::ExportLoudnessAnalyzer::create(loudness).value();
+    auto decision = analyzer.decide(meter);
+    ASSERT_TRUE(decision.hasValue()) << decision.error().message();
+    EXPECT_NEAR(decision.value().measuredLufs, -14.0, 0.8);
+    EXPECT_LE(decision.value().truePeakDbtp, -0.2);
+}
+
+TEST(MltEditEngineTest, LocalAiLoaderReadsEditedMixAs16kMono) {
+    MltFixture fixture;
+    std::atomic_int factoryCalls{};
+    std::atomic_int processCalls{};
+    auto loader = app::makeMltCreatorIntelligenceAudioLoader(
+        fs::path{CS_TEST_MLT_ROOT},
+        [&]() -> core::Result<
+                    std::unique_ptr<audio_dsp::IAudioProcessor>> {
+            factoryCalls.fetch_add(1, std::memory_order_relaxed);
+            return std::unique_ptr<audio_dsp::IAudioProcessor>{
+                new CountingAudioProcessor{processCalls}};
+        });
+
+    auto audio = loader(quietAudioSnapshot(fixture.root()), std::stop_token{});
+
+    ASSERT_TRUE(audio.hasValue()) << audio.error().message();
+    EXPECT_EQ(audio.value().size(), 48'000U);
+    EXPECT_EQ(factoryCalls.load(std::memory_order_relaxed), 1);
+    EXPECT_GT(processCalls.load(std::memory_order_relaxed), 0);
+    EXPECT_TRUE(std::all_of(audio.value().begin(), audio.value().end(),
+                            [](float sample) { return std::isfinite(sample); }));
 }
 
 }  // namespace

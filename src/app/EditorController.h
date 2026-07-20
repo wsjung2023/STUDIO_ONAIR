@@ -6,6 +6,7 @@
 #include "core/Timebase.h"
 #include "edit_engine/EditEngineTypes.h"
 #include "edit_engine/IEditEngine.h"
+#include "transcription/Transcript.h"
 
 #include <QAbstractItemModel>
 #include <QElapsedTimer>
@@ -124,6 +125,12 @@ public:
     [[nodiscard]] bool clean() const noexcept { return clean_; }
     [[nodiscard]] std::optional<edit_engine::TimelineSnapshot>
     exportSnapshot() const { return snapshot_; }
+    [[nodiscard]] core::Result<void> approveTranscriptProposal(
+        const transcription::Transcript& transcript,
+        std::int64_t expectedRevision);
+    [[nodiscard]] core::Result<void> approveCutProposal(
+        const domain::TimeRange& range, std::int64_t expectedRevision,
+        bool ripple = true);
 
     void openSession(std::vector<domain::MediaAsset> assets,
                      edit_engine::TimelineSnapshot snapshot);
@@ -230,6 +237,8 @@ private:
     void setPreviewStale(bool value);
     void setPlaying(bool value);
     void setStatus(QString value);
+    void publishTranscript(const transcription::Transcript& transcript,
+                           QString status);
     [[nodiscard]] const domain::Clip* selectedClip() const noexcept;
     [[nodiscard]] const domain::Track* selectedTrack() const noexcept;
 

@@ -31,6 +31,7 @@ $ExpectedSourceCommit = "6cbfd53eb348a8d394e0757b4025c6ded34eb2b6"
 $ExpectedSourceArchiveSha256 = "1641712c9ae31f3b364e8b2f2e0ec3ce24330e76055c151f695941b0ea5d3987"
 $OfficialSourceArchiveUrl = "https://github.com/xiph/rnnoise/archive/refs/tags/v$ExpectedRnnoiseVersion.tar.gz"
 $ExpectedLicense = "BSD-3-Clause"
+$MsVcCompatibilityPatchId = "creator-studio-rnnoise-v0.1.1-msvc-vla-bounds-v1"
 
 # Authoritative library source list from the pinned Makefile.am
 # (librnnoise_la_SOURCES) — the model/weights (rnn_data.c) are part of it.
@@ -116,21 +117,53 @@ if (Test-Path -LiteralPath (Join-Path $SourceRoot "download_model.sh")) {
     throw "Pinned RNNoise release unexpectedly requires an external model download"
 }
 
+function Invoke-VerifiedSourceReplacement {
+    param(
+        [Parameter(Mandatory = $true)][string]$RelativePath,
+        [Parameter(Mandatory = $true)][string]$ExpectedText,
+        [Parameter(Mandatory = $true)][string]$ReplacementText
+    )
+
+    $Path = Join-Path $SourceRoot $RelativePath
+    $Text = [System.IO.File]::ReadAllText($Path)
+    $FirstMatch = $Text.IndexOf($ExpectedText, [System.StringComparison]::Ordinal)
+    if ($FirstMatch -lt 0) {
+        throw "RNNoise MSVC compatibility patch no longer matches $RelativePath"
+    }
+    if ($Text.IndexOf($ExpectedText, $FirstMatch + $ExpectedText.Length,
+                      [System.StringComparison]::Ordinal) -ge 0) {
+        throw "RNNoise MSVC compatibility patch is ambiguous in $RelativePath"
+    }
+
+    $Patched = $Text.Substring(0, $FirstMatch) + $ReplacementText +
+        $Text.Substring($FirstMatch + $ExpectedText.Length)
+    [System.IO.File]::WriteAllText($Path, $Patched, [System.Text.UTF8Encoding]::new($false))
+}
+
+# RNNoise v0.1.1 uses C99 variable-length arrays in four internal routines.
+# MSVC does not implement VLAs, while every call site in this pinned release
+# uses the fixed bounds below. Replace only the exact audited declarations and
+# fail closed if the verified upstream source ever stops matching them.
+Invoke-VerifiedSourceReplacement "src/pitch.c" `
+    "   opus_val16 x_lp4[len>>2];" "   opus_val16 x_lp4[240];"
+Invoke-VerifiedSourceReplacement "src/pitch.c" `
+    "   opus_val16 y_lp4[lag>>2];" "   opus_val16 y_lp4[387];"
+Invoke-VerifiedSourceReplacement "src/pitch.c" `
+    "   opus_val32 xcorr[max_pitch>>1];" "   opus_val32 xcorr[294];"
+Invoke-VerifiedSourceReplacement "src/pitch.c" `
+    "   opus_val32 yy_lookup[maxperiod+1];" "   opus_val32 yy_lookup[385];"
+Invoke-VerifiedSourceReplacement "src/celt_lpc.c" `
+    "   opus_val16 xx[n];" "   opus_val16 xx[864];"
+
 # --- 3. Build the library from the verified source (CPU only, no GPL) --------
 # A minimal CMake project compiles exactly the audited library source list into
 # one static lib. No external dependencies, no examples, no training tools, no
 # GPL/nonfree code paths. HAVE_CONFIG_H is intentionally left undefined so the
 # portable, autotools-free defaults are used.
 #
-# Toolchain note (Windows): RNNoise v0.1.1's CELT-derived pitch.c / celt_lpc.c
-# use C99 variable-length arrays (e.g. `opus_val16 xx[n]`), which MSVC `cl.exe`
-# does NOT implement. The library therefore builds with any C99 compiler
-# (gcc/clang) or with the LLVM `clang-cl` toolset on Windows (ABI-compatible
-# static .lib that links into the MSVC-built adapter), but NOT with plain
-# `cl.exe`. This script auto-selects `clang-cl` when the LLVM toolset is present
-# and otherwise lets CMake pick the default compiler; on a pure-MSVC machine the
-# build will fail here with a clear VLA error, which is expected. `M_PI` is
-# supplied via _USE_MATH_DEFINES for every toolchain.
+# The verified compatibility patch above makes the pinned C99 VLA declarations
+# compile as fixed-size arrays under plain MSVC. `M_PI` is supplied via
+# _USE_MATH_DEFINES for every Windows toolchain.
 $SourceList = ($LibrarySources | ForEach-Object { "    `"$_`"" }) -join [Environment]::NewLine
 $GeneratedCMake = @"
 cmake_minimum_required(VERSION 3.25)
@@ -172,22 +205,8 @@ if (Test-Path -LiteralPath $InstallRoot) {
     Remove-Item -LiteralPath $ResolvedInstall -Recurse -Force
 }
 
-# Prefer the LLVM clang-cl toolset (C99 VLA support) when it is available; the
-# resulting static lib is MSVC-ABI compatible and links into the adapter.
-$ClangClArgs = @()
-$ClangCl = (Get-Command clang-cl.exe -ErrorAction SilentlyContinue)
-if (-not $ClangCl) {
-    $LlvmClangCl = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin\clang-cl.exe"
-    if (Test-Path -LiteralPath $LlvmClangCl) { $ClangCl = $LlvmClangCl }
-}
-if ($ClangCl) {
-    $ClangClPath = if ($ClangCl -is [string]) { $ClangCl } else { $ClangCl.Source }
-    Write-Host "Using clang-cl for the RNNoise C99 sources: $ClangClPath"
-    $ClangClArgs = @("-DCMAKE_C_COMPILER=$ClangClPath")
-}
-
 & cmake -S $SourceRoot -B $NativeBuildRoot -G Ninja `
-    "-DCMAKE_BUILD_TYPE=Release" "-DCMAKE_INSTALL_PREFIX=$InstallRoot" @ClangClArgs
+    "-DCMAKE_BUILD_TYPE=Release" "-DCMAKE_INSTALL_PREFIX=$InstallRoot"
 if ($LASTEXITCODE -ne 0) { throw "RNNoise configure failed" }
 & cmake --build $NativeBuildRoot --config Release --target rnnoise
 if ($LASTEXITCODE -ne 0) { throw "RNNoise library build failed" }
@@ -212,6 +231,7 @@ $Evidence = @(
     "license=$ExpectedLicense",
     "linking=static",
     "model_weights=in-source (src/rnn_data.c); no separate model download",
+    "msvc_compatibility_patch=$MsVcCompatibilityPatchId",
     "gpl=false",
     "nonfree=false",
     "cpu_only=true",

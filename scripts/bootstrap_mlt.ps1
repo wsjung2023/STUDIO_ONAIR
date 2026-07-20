@@ -19,6 +19,8 @@ $ExpectedSourceArchiveSha256 = "49070c3aa84af719de77875d44a62a1c115aff923aff6065
 $ExpectedFfmpegVersion = "8.1.2"
 $ExpectedFfmpegArchiveSha256 = "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"
 $OfficialSourceArchiveUrl = "https://github.com/mltframework/mlt/archive/refs/tags/v$ExpectedMltVersion.tar.gz"
+$WindowsMutexPatchId = "creator-studio-pthreads4w-v3.0.0-lazy-mutex-events-v1"
+$PatchedPthreadsPortVersion = 15
 
 if ([string]::IsNullOrWhiteSpace($VcpkgRoot)) {
     $VcpkgRoot = Join-Path $RepositoryRoot "build/tools/vcpkg"
@@ -109,6 +111,55 @@ if ($LASTEXITCODE -ne 0) { throw "Could not checkout pinned vcpkg commit" }
 if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
 
 $Vcpkg = Join-Path $VcpkgRoot "vcpkg.exe"
+$PthreadsPatchSource = Join-Path $RepositoryRoot `
+    "scripts/patches/pthreads4w-lazy-mutex-events.patch"
+if (-not (Test-Path -LiteralPath $PthreadsPatchSource -PathType Leaf)) {
+    throw "Audited PThreads4W lazy-event patch is missing"
+}
+$OverlayRoot = Join-Path $BuildRoot "vcpkg-overlay-ports"
+if (Test-Path -LiteralPath $OverlayRoot) {
+    $ResolvedOverlay = [System.IO.Path]::GetFullPath($OverlayRoot)
+    if (-not $ResolvedOverlay.StartsWith(
+            $BuildRoot + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to replace overlay directory outside MLT build root"
+    }
+    Remove-Item -LiteralPath $ResolvedOverlay -Recurse -Force
+}
+$PthreadsOverlay = Join-Path $OverlayRoot "pthreads"
+Copy-Item -LiteralPath (Join-Path $VcpkgRoot "ports/pthreads") `
+    -Destination $PthreadsOverlay -Recurse
+Copy-Item -LiteralPath $PthreadsPatchSource `
+    -Destination (Join-Path $PthreadsOverlay `
+        "creator-studio-lazy-mutex-events.patch")
+$OverlayManifestPath = Join-Path $PthreadsOverlay "vcpkg.json"
+$OverlayManifest = [System.IO.File]::ReadAllText($OverlayManifestPath)
+$PortVersionNeedle = '"port-version": 14'
+if ([regex]::Matches(
+        $OverlayManifest, [regex]::Escape($PortVersionNeedle)).Count -ne 1) {
+    throw "Pinned PThreads4W port version no longer matches the overlay"
+}
+$OverlayManifest = $OverlayManifest.Replace(
+    $PortVersionNeedle,
+    '"port-version": ' + $PatchedPthreadsPortVersion)
+[System.IO.File]::WriteAllText(
+    $OverlayManifestPath, $OverlayManifest,
+    [System.Text.UTF8Encoding]::new($false))
+$OverlayPortfilePath = Join-Path $PthreadsOverlay "portfile.cmake"
+$OverlayPortfile = [System.IO.File]::ReadAllText($OverlayPortfilePath)
+$PortfileInsertion = "    whitespace_in_path.patch"
+if ([regex]::Matches(
+        $OverlayPortfile, [regex]::Escape($PortfileInsertion)).Count -ne 1) {
+    throw "Pinned PThreads4W port no longer matches the lazy-event overlay"
+}
+$OverlayPortfile = $OverlayPortfile.Replace(
+    $PortfileInsertion,
+    $PortfileInsertion + [Environment]::NewLine +
+        "    creator-studio-lazy-mutex-events.patch")
+[System.IO.File]::WriteAllText(
+    $OverlayPortfilePath, $OverlayPortfile,
+    [System.Text.UTF8Encoding]::new($false))
+
 $BuildDependencies = @(
     "pthreads:$Triplet",
     "dirent:$Triplet",
@@ -116,8 +167,32 @@ $BuildDependencies = @(
     "dlfcn-win32:$Triplet",
     "pkgconf:$Triplet"
 )
-& $Vcpkg install @BuildDependencies "--x-install-root=$DependencyInstallRoot" --clean-after-build
+$ExistingPackages = & $Vcpkg list `
+    "--x-install-root=$DependencyInstallRoot"
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not inspect installed MLT build dependencies"
+}
+$ExistingPackageText = $ExistingPackages -join [Environment]::NewLine
+if ($ExistingPackageText -match "(?m)^pthreads:$Triplet\s" -and
+    $ExistingPackageText -notmatch
+        "(?m)^pthreads:$Triplet\s+3\.0\.0#$PatchedPthreadsPortVersion\s") {
+    & $Vcpkg remove "pthreads:$Triplet" --recurse `
+        "--x-install-root=$DependencyInstallRoot"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not replace the unpatched PThreads4W dependency"
+    }
+}
+& $Vcpkg install @BuildDependencies `
+    "--x-install-root=$DependencyInstallRoot" `
+    "--overlay-ports=$OverlayRoot" --recurse --clean-after-build
 if ($LASTEXITCODE -ne 0) { throw "MLT build dependency installation failed" }
+$InstalledPackages = & $Vcpkg list `
+    "--x-install-root=$DependencyInstallRoot"
+if ($LASTEXITCODE -ne 0 -or
+    ($InstalledPackages -join [Environment]::NewLine) -notmatch
+        "(?m)^pthreads:$Triplet\s+3\.0\.0#$PatchedPthreadsPortVersion\s") {
+    throw "Patched PThreads4W overlay was not installed"
+}
 
 if (Test-Path -LiteralPath $SourceRoot) {
     $ResolvedSource = [System.IO.Path]::GetFullPath($SourceRoot)
@@ -135,7 +210,6 @@ $CMakeLists = Get-Content -LiteralPath (Join-Path $SourceRoot "CMakeLists.txt") 
 if ($CMakeLists -notmatch 'project\(MLT\s+VERSION\s+7\.40\.0') {
     throw "Extracted MLT source version is not $ExpectedMltVersion"
 }
-
 if (Test-Path -LiteralPath $NativeBuildRoot) {
     $ResolvedNativeBuild = [System.IO.Path]::GetFullPath($NativeBuildRoot)
     if (-not $ResolvedNativeBuild.StartsWith($BuildRoot + [System.IO.Path]::DirectorySeparatorChar,
@@ -289,6 +363,7 @@ $Evidence = @(
     "dynamic_linking=true",
     "melt_packaged=false",
     "allowed_modules=core,avformat",
+    "windows_mutex_patch=$WindowsMutexPatchId",
     "",
     ($ConfigureFlags -join [Environment]::NewLine)
 ) -join [Environment]::NewLine
@@ -299,6 +374,7 @@ function Get-FileProvenance {
     $Lower = $Relative.ToLowerInvariant()
     $Name = [System.IO.Path]::GetFileName($Lower)
     $VcpkgIdentity = "vcpkg:$PinnedVcpkgCommit"
+    $PatchedPthreadsIdentity = "$VcpkgIdentity;patch:$WindowsMutexPatchId"
     if ($Name -match '^(avcodec-|avfilter-|avformat-|avutil-|swresample-|swscale-).*\.dll$') {
         return [ordered]@{ component = "FFmpeg"; version = $ExpectedFfmpegVersion; source_identity = "sha256:$ExpectedFfmpegArchiveSha256"; license = "LGPL-2.1-or-later" }
     }
@@ -306,7 +382,7 @@ function Get-FileProvenance {
         return [ordered]@{ component = "zlib"; version = "1.3.2"; source_identity = $VcpkgIdentity; license = "Zlib" }
     }
     if ($Name -match '^pthread.*\.dll$' -or $Lower.StartsWith("include/mlt-deps/")) {
-        return [ordered]@{ component = "PThreads4W"; version = "3.0.0"; source_identity = $VcpkgIdentity; license = "Apache-2.0" }
+        return [ordered]@{ component = "PThreads4W"; version = "3.0.0"; source_identity = $PatchedPthreadsIdentity; license = "Apache-2.0" }
     }
     if ($Name -in @("iconv-2.dll", "libiconv-2.dll")) {
         return [ordered]@{ component = "GNU libiconv"; version = "1.19"; source_identity = $VcpkgIdentity; license = "LGPL-2.1-or-later" }
@@ -344,12 +420,13 @@ $Manifest = [ordered]@{
     component = "MLT Framework"
     version = $ExpectedMltVersion
     source_commit = $ExpectedSourceCommit
+    windows_mutex_patch = $WindowsMutexPatchId
     linking = "dynamic"
     allowed_modules = @("core", "avformat")
     dependencies = @(
         [ordered]@{ component = "FFmpeg"; version = $ExpectedFfmpegVersion; source_identity = "sha256:$ExpectedFfmpegArchiveSha256"; license = "LGPL-2.1-or-later" }
         [ordered]@{ component = "zlib"; version = "1.3.2"; source_identity = "vcpkg:$PinnedVcpkgCommit"; license = "Zlib" }
-        [ordered]@{ component = "PThreads4W"; version = "3.0.0"; source_identity = "vcpkg:$PinnedVcpkgCommit"; license = "Apache-2.0" }
+        [ordered]@{ component = "PThreads4W"; version = "3.0.0"; source_identity = "vcpkg:$PinnedVcpkgCommit;patch:$WindowsMutexPatchId"; license = "Apache-2.0" }
         [ordered]@{ component = "GNU libiconv"; version = "1.19"; source_identity = "vcpkg:$PinnedVcpkgCommit"; license = "LGPL-2.1-or-later" }
         [ordered]@{ component = "dlfcn-win32"; version = "1.4.2"; source_identity = "vcpkg:$PinnedVcpkgCommit"; license = "MIT" }
     )

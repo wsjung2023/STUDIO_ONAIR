@@ -12,6 +12,9 @@ Item {
     id: root
     readonly property bool compact: width < 700
     property string compactSection: "preview"
+    readonly property var cursorTelemetry:
+        typeof cursorRecordingController !== "undefined"
+        ? cursorRecordingController : null
 
     readonly property bool workflowEditable: !studioController.recording
                                              && !studioWorkflowController.recording
@@ -249,6 +252,7 @@ Item {
                 Layout.preferredWidth: root.compact ? parent.width : 250
                 Layout.fillWidth: root.compact
                 Layout.fillHeight: true
+                Layout.minimumHeight: 0
 
                 ScrollView {
                     id: studioLeftScroll
@@ -1043,6 +1047,29 @@ Item {
                                 .arg(studioController.maximumDriftMilliseconds.toFixed(1))
                                 .arg(studioController.audioCorrectionPpm.toFixed(1))
                           : qsTr("Sync: Not active")
+                }
+                Label {
+                    objectName: "cursorTelemetryStatusLabel"
+                    visible: root.cursorTelemetry !== null
+                    text: root.cursorTelemetry !== null
+                          ? root.cursorTelemetry.statusMessage
+                          : qsTr("Cursor data: Unavailable")
+                    color: root.cursorTelemetry !== null
+                           && root.cursorTelemetry.statusMessage.indexOf(
+                               "failed") >= 0
+                           ? "#ff6b6b" : palette.text
+                    Accessible.name: qsTr("Cursor telemetry status")
+                }
+                Label {
+                    objectName: "cursorTelemetryCountLabel"
+                    visible: root.cursorTelemetry !== null
+                             && (root.cursorTelemetry.active
+                                 || root.cursorTelemetry.eventCount > 0)
+                    text: root.cursorTelemetry !== null
+                          ? qsTr("Cursor events: %1").arg(
+                                root.cursorTelemetry.eventCount)
+                          : ""
+                    Accessible.name: qsTr("Recorded cursor event count")
                 }
 
                 ColumnLayout {

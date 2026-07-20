@@ -138,7 +138,11 @@ ApplicationWindow {
 
         HomePage {}
         StudioPage {}
-        EditorPage { controller: editorController }
+        EditorPage {
+            controller: editorController
+            intelligenceController: typeof intelligenceController !== "undefined"
+                                    ? intelligenceController : null
+        }
         ExportPage { controller: exportController }
         SettingsPage { controller: commercialControlsController }
         RecoveryPage {}
