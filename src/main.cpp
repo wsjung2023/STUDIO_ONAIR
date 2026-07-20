@@ -3,7 +3,14 @@
 #include "app/EditorController.h"
 #include "app/ExportController.h"
 #include "app/EditorPreviewItem.h"
+#include "app/AvatarPreviewItem.h"
+#include "app/AvatarSceneController.h"
 #include "app/DeviceCaptureController.h"
+#include "avatar/AvatarParameterMapper.h"
+#include "avatar/IAvatarRenderer.h"
+#include "avatar/PlaceholderAvatarRenderer.h"
+#include "avatar/SyntheticFaceTrackingProvider.h"
+#include "avatar/inochi2d/Inochi2dAvatarRenderer.h"
 #include "app/LiveRecordingController.h"
 #include "app/LiveRecordingEngineFactory.h"
 #include "app/ScreenCaptureController.h"
@@ -140,6 +147,8 @@ int main(int argc, char* argv[]) {
                                                       "CameraPreviewItem");
     qmlRegisterType<creator::app::EditorPreviewItem>("CreatorStudio.Native", 1, 0,
                                                       "EditorPreviewItem");
+    qmlRegisterType<creator::app::AvatarPreviewItem>("CreatorStudio.Native", 1, 0,
+                                                     "AvatarPreviewItem");
 
     auto packageStore = std::make_unique<creator::project_store::ProjectPackageStore>();
     creator::app::ProjectController projectController{std::move(packageStore), &app};
@@ -181,10 +190,60 @@ int main(int argc, char* argv[]) {
         std::make_unique<creator::capture::UnsupportedScreenCaptureDiscovery>(),
         std::make_unique<creator::capture::UnsupportedScreenCaptureSourceFactory>(), &app};
 #endif
+    // Live VTuber avatar source: synthetic (fake) tracking drives a rendered
+    // avatar that composites into the Studio preview and records to its own
+    // media/avatar track, exactly like the camera/screen sources. No real
+    // face-tracking model (MediaPipe/OpenSeeFace) runs here, and no Inochi2D
+    // runtime/model asset is bundled, so this uses a clearly-labelled synthetic
+    // tracker and a placeholder puppet renderer. If a real Inochi2D runtime DLL
+    // and .inp model are staged next to the executable the adapter is used
+    // instead; both facts are surfaced in the UI (avatarSceneController.trackingLabel).
+    constexpr std::uint32_t kAvatarWidth = 640;
+    constexpr std::uint32_t kAvatarHeight = 480;
+    auto avatarBindings = creator::avatar::placeholderAvatarBindings();
+    auto avatarMapper =
+        creator::avatar::AvatarParameterMapper::create(std::move(avatarBindings));
+    std::unique_ptr<creator::avatar::IAvatarRenderer> avatarRenderer;
+    bool avatarRealModel = false;
+    {
+        const std::filesystem::path appDir{
+            QGuiApplication::applicationDirPath().toStdWString()};
+        const auto modelPath = appDir / L"resources" / L"avatar" / L"model.inp";
+        const auto runtimePath = appDir / L"inochi2d-c.dll";
+        std::error_code modelError;
+        std::error_code runtimeError;
+        if (std::filesystem::is_regular_file(modelPath, modelError) &&
+            std::filesystem::is_regular_file(runtimePath, runtimeError)) {
+            if (auto real = creator::avatar::inochi2d::Inochi2dAvatarRenderer::open(
+                    runtimePath, modelPath, kAvatarWidth, kAvatarHeight);
+                real.hasValue()) {
+                avatarRenderer = std::move(real).value();
+                avatarRealModel = true;
+            } else {
+                qWarning().noquote()
+                    << "Inochi2D avatar unavailable, using placeholder:"
+                    << QString::fromStdString(real.error().message());
+            }
+        }
+    }
+    if (!avatarRenderer) {
+        avatarRenderer = std::make_unique<creator::avatar::PlaceholderAvatarRenderer>(
+            kAvatarWidth, kAvatarHeight);
+    }
+    creator::app::AvatarSceneController avatarSceneController{
+        std::make_unique<creator::avatar::SyntheticFaceTrackingProvider>(),
+        std::move(avatarMapper).value(), std::move(avatarRenderer), kAvatarWidth,
+        kAvatarHeight,
+        [&deviceCaptureController] {
+            return deviceCaptureController.cameraCapturing();
+        },
+        avatarRealModel, /*usingRealTracking=*/false, &app};
+
     auto recordingStore =
         std::make_shared<creator::project_store::ProjectPackageStore>();
     auto recordingEngine = creator::app::makeLiveRecordingEngine(
-        &screenCaptureController, &deviceCaptureController, std::move(recordingStore));
+        &screenCaptureController, &deviceCaptureController,
+        std::move(recordingStore), &avatarSceneController);
     creator::app::LiveRecordingController studioController{
         std::move(recordingEngine), &projectController,
         [&projectController] { return projectController.recordingPackagePath(); },
@@ -316,6 +375,8 @@ int main(int argc, char* argv[]) {
                                              &screenCaptureController);
     engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
                                              &deviceCaptureController);
+    engine.rootContext()->setContextProperty(QStringLiteral("avatarSceneController"),
+                                             &avatarSceneController);
     engine.rootContext()->setContextProperty(QStringLiteral("editorController"),
                                              &editorController);
     engine.rootContext()->setContextProperty(QStringLiteral("exportController"),
@@ -345,6 +406,8 @@ int main(int argc, char* argv[]) {
             int phaseTicks = 0;
             bool systemAudioRequested = false;
             bool cameraRequested = false;
+            bool avatarRequested = false;
+            bool avatarShotSaved = false;
             bool presentationShotSaved = false;
             bool cameraSceneSwitched = false;
             bool workflowOpenRequested = false;
@@ -363,7 +426,8 @@ int main(int argc, char* argv[]) {
         };
         QObject::connect(driver, &QTimer::timeout, &app,
             [&engine, &projectController, &screenCaptureController,
-             &deviceCaptureController, &studioController, &studioWorkflowController,
+             &deviceCaptureController, &avatarSceneController, &studioController,
+             &studioWorkflowController,
              autoDriveDir, driver, state, advance]() mutable {
             ++state->phaseTicks;
             if (++state->totalTicks > 800) {  // ~2 min hard cap
@@ -439,6 +503,12 @@ int main(int argc, char* argv[]) {
                     deviceCaptureController.setCameraEnabled(true);
                     state->cameraRequested = true;
                 }
+                if (!state->avatarRequested) {
+                    qInfo("[autodrive] enabling avatar source (%s)",
+                          qUtf8Printable(avatarSceneController.trackingLabel()));
+                    avatarSceneController.setAvatarEnabled(true);
+                    state->avatarRequested = true;
+                }
                 const bool audioReady =
                     deviceCaptureController.systemAudioCapturing();
                 const bool cameraReady =
@@ -487,6 +557,39 @@ int main(int argc, char* argv[]) {
                 // live camera as a picture-in-picture overlay.
                 if (!state->presentationShotSaved && state->phaseTicks >= 12) {
                     grabTo(QStringLiteral("preview.png"));
+                    // A dedicated avatar shot proves the rendered, moving avatar
+                    // is visible in the Studio preview (it is a PiP overlay in
+                    // every scene while the avatar source is capturing).
+                    if (avatarSceneController.avatarCapturing()) {
+                        qInfo("[autodrive] avatar capturing (%s), status=\"%s\" "
+                              "producedFrames=%llu",
+                              qUtf8Printable(avatarSceneController.trackingLabel()),
+                              qUtf8Printable(avatarSceneController.avatarStatus()),
+                              static_cast<unsigned long long>(
+                                  avatarSceneController.producedFrames()));
+                        grabTo(QStringLiteral("avatar_preview.png"));
+                        // Direct render-to-PNG of the avatar frames (bypassing the
+                        // Qt Quick preview surface) so the rendered, moving avatar
+                        // face is provable even in a headless/automated run. Two
+                        // frames a moment apart show the tracking-driven motion.
+                        const QImage faceA =
+                            avatarSceneController.renderDiagnosticImage(0.0);
+                        const QImage faceB =
+                            avatarSceneController.renderDiagnosticImage(0.5);
+                        if (!faceA.isNull() &&
+                            faceA.save(autoDriveDir +
+                                       QStringLiteral("/avatar_face_a.png"))) {
+                            qInfo("[autodrive] saved avatar_face_a.png (%dx%d)",
+                                  faceA.width(), faceA.height());
+                        }
+                        if (!faceB.isNull() &&
+                            faceB.save(autoDriveDir +
+                                       QStringLiteral("/avatar_face_b.png"))) {
+                            qInfo("[autodrive] saved avatar_face_b.png (%dx%d)",
+                                  faceB.width(), faceB.height());
+                        }
+                        state->avatarShotSaved = true;
+                    }
                     state->presentationShotSaved = true;
                     // Switch to the full-frame 'camera' scene so the webcam fills the
                     // composition for an unmistakable camera-preview screenshot.

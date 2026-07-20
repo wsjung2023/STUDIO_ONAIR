@@ -507,6 +507,27 @@ Item {
                         font.pixelSize: 11
                     }
 
+                    Label { text: qsTr("Avatar (VTuber)"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
+
+                    Button {
+                        objectName: "studioAvatarButton"
+                        Layout.fillWidth: true
+                        text: avatarSceneController.avatarCanStop
+                              ? qsTr("Stop Avatar") : qsTr("Start Avatar")
+                        Accessible.name: qsTr("Toggle avatar source")
+                        onClicked: avatarSceneController.setAvatarEnabled(
+                                       !avatarSceneController.avatarCanStop)
+                    }
+                    Label {
+                        objectName: "studioAvatarStatus"
+                        Layout.fillWidth: true
+                        text: avatarSceneController.avatarStatus + "\n"
+                              + avatarSceneController.trackingLabel
+                        wrapMode: Text.WordWrap
+                        color: theme.warning
+                        font.pixelSize: 11
+                    }
+
                     Label { text: qsTr("Microphone"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
 
                     ComboBox {
@@ -747,6 +768,57 @@ Item {
                                     Math.max(0.000001, 1 - cameraComposition.cropTop
                                              - cameraComposition.cropBottom)
                             captureController: deviceCaptureController
+                        }
+                    }
+
+                    // Live avatar source. Rendered from (synthetic) tracking and
+                    // composited as a picture-in-picture overlay whenever the
+                    // avatar source is capturing, mirroring the camera source. The
+                    // banner keeps it clearly marked as synthetic/placeholder.
+                    Item {
+                        id: avatarComposition
+                        objectName: "studioAvatarCompositionPreview"
+                        width: parent.width * 0.34
+                        height: avatarSceneController.avatarWidth > 0
+                                ? width * (avatarSceneController.avatarHeight
+                                           / avatarSceneController.avatarWidth)
+                                : width * 0.75
+                        x: parent.width * 0.03
+                        y: parent.height * 0.12
+                        visible: avatarSceneController.avatarCapturing
+                        z: 50
+                        clip: true
+                        Accessible.name: qsTr("Avatar composition preview")
+
+                        Rectangle {
+                            anchors.fill: parent
+                            color: "#0d1b2a"
+                            border.color: "#1e88e5"
+                            border.width: 2
+                        }
+
+                        AvatarPreviewItem {
+                            objectName: "studioAvatarNativePreview"
+                            anchors.fill: parent
+                            avatarController: avatarSceneController
+                        }
+
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            height: 22
+                            color: "#e61e88e5"
+                            Label {
+                                anchors.centerIn: parent
+                                text: avatarSceneController.trackingLabel
+                                color: "white"
+                                font.pixelSize: 11
+                                font.bold: true
+                                elide: Text.ElideRight
+                                width: parent.width - 8
+                                horizontalAlignment: Text.AlignHCenter
+                            }
                         }
                     }
 

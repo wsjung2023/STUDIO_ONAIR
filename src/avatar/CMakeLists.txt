@@ -12,6 +12,10 @@ cs_add_qtfree_library(cs_avatar
         AvatarSoftwareRenderer.h
         AvatarSoftwareRenderer.cpp
         IAvatarRenderer.h
+        PlaceholderAvatarRenderer.h
+        PlaceholderAvatarRenderer.cpp
+        SyntheticFaceTrackingProvider.h
+        SyntheticFaceTrackingProvider.cpp
         AvatarRenderPipeline.h
         AvatarRenderPipeline.cpp
         TrackingResult.h

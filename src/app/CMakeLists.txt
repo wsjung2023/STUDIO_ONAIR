@@ -40,6 +40,10 @@ add_library(cs_app STATIC
     VideoPreviewItem.cpp
     CameraPreviewItem.h
     CameraPreviewItem.cpp
+    AvatarPreviewItem.h
+    AvatarPreviewItem.cpp
+    AvatarSceneController.h
+    AvatarSceneController.cpp
     RecentProjectRegistry.h
     RecentProjectRegistry.cpp
     ProjectWorker.h

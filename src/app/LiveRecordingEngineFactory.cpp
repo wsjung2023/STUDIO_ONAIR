@@ -38,15 +38,17 @@ public:
 
 std::unique_ptr<ILiveRecordingEngine> makeLiveRecordingEngine(
     ScreenCaptureController* screen, DeviceCaptureController* devices,
-    std::shared_ptr<project_store::IProjectPackageStore> store) {
+    std::shared_ptr<project_store::IProjectPackageStore> store,
+    AvatarSceneController* avatar) {
 #if defined(CS_APP_ENABLE_FFMPEG)
     return std::make_unique<FfmpegLiveRecordingEngine>(
-        std::make_shared<ControllerLiveCaptureBindings>(screen, devices),
+        std::make_shared<ControllerLiveCaptureBindings>(screen, devices, avatar),
         std::move(store));
 #else
     static_cast<void>(screen);
     static_cast<void>(devices);
     static_cast<void>(store);
+    static_cast<void>(avatar);
     return std::make_unique<UnavailableLiveRecordingEngine>();
 #endif
 }

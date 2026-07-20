@@ -1,8 +1,13 @@
 #include "app/ScreenPreviewItem.h"
 #include "app/CameraPreviewItem.h"
+#include "app/AvatarPreviewItem.h"
+#include "app/AvatarSceneController.h"
 #include "app/EditorPreviewItem.h"
 #include "app/MediaBinModel.h"
 #include "app/TimelineTrackModel.h"
+#include "avatar/AvatarParameterMapper.h"
+#include "avatar/PlaceholderAvatarRenderer.h"
+#include "avatar/SyntheticFaceTrackingProvider.h"
 
 #include "core/Timebase.h"
 #include "domain/Identifiers.h"
@@ -38,6 +43,25 @@
 #include <vector>
 
 namespace {
+
+// Installs a real (hardware-free) avatar scene controller as the QML context
+// property StudioPage/Main expect. Parented to the engine so it is cleaned up
+// with it. Uses synthetic tracking + the placeholder renderer so no device or
+// GPU is touched.
+creator::app::AvatarSceneController* installAvatarController(QQmlEngine& engine) {
+    auto mapper = creator::avatar::AvatarParameterMapper::create(
+                      creator::avatar::placeholderAvatarBindings())
+                      .value();
+    auto* controller = new creator::app::AvatarSceneController(
+        std::make_unique<creator::avatar::SyntheticFaceTrackingProvider>(),
+        std::move(mapper),
+        std::make_unique<creator::avatar::PlaceholderAvatarRenderer>(64, 48), 64,
+        48, [] { return false; }, /*usingRealModel=*/false,
+        /*usingRealTracking=*/false, &engine);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("avatarSceneController"), controller);
+    return controller;
+}
 
 QQuickItem* findVisualItem(QQuickItem* root, const QString& objectName) {
     if (root->objectName() == objectName) return root;
@@ -1038,6 +1062,7 @@ TEST(QmlSmokeTest, MainOpensRecoveryWhenStartupScanAlreadyFinished) {
                                              &screenCaptureController);
     engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
                                              &deviceCaptureController);
+        installAvatarController(engine);
     engine.rootContext()->setContextProperty(QStringLiteral("editorController"),
                                              &editorController);
     engine.rootContext()->setContextProperty(
@@ -1074,6 +1099,7 @@ TEST(QmlSmokeTest, MainRecordShortcutSharesVisibleActionAndStateGuard) {
                                              &screenCaptureController);
     engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
                                              &deviceCaptureController);
+        installAvatarController(engine);
     engine.rootContext()->setContextProperty(QStringLiteral("editorController"),
                                              &editorController);
     engine.rootContext()->setContextProperty(
@@ -1543,6 +1569,7 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
                                              &screenCaptureController);
     engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
                                              &deviceCaptureController);
+        installAvatarController(engine);
     engine.rootContext()->setContextProperty(
         QStringLiteral("studioWorkflowController"), &studioWorkflowController);
     engine.rootContext()->setContextProperty(
@@ -1602,6 +1629,7 @@ TEST(QmlSmokeTest, StudioShortcutsShareVisibleActionsAndStateGuards) {
                                              &screenCaptureController);
     engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
                                              &deviceCaptureController);
+        installAvatarController(engine);
     engine.rootContext()->setContextProperty(
         QStringLiteral("studioWorkflowController"), &studioWorkflowController);
     engine.rootContext()->setContextProperty(
@@ -1720,6 +1748,7 @@ TEST(QmlSmokeTest, StudioPageProvidesModelDrivenAccessibleWorkflowAtAllSizes) {
             QStringLiteral("screenCaptureController"), &screenCaptureController);
         engine.rootContext()->setContextProperty(
             QStringLiteral("deviceCaptureController"), &deviceCaptureController);
+        installAvatarController(engine);
         engine.rootContext()->setContextProperty(
             QStringLiteral("studioWorkflowController"), &studioWorkflowController);
         engine.rootContext()->setContextProperty(
@@ -1965,6 +1994,8 @@ int main(int argc, char** argv) {
                                                       "CameraPreviewItem");
     qmlRegisterType<creator::app::EditorPreviewItem>("CreatorStudio.Native", 1, 0,
                                                       "EditorPreviewItem");
+    qmlRegisterType<creator::app::AvatarPreviewItem>("CreatorStudio.Native", 1, 0,
+                                                     "AvatarPreviewItem");
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

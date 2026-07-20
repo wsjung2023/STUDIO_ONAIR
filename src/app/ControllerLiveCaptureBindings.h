@@ -4,13 +4,15 @@
 
 namespace creator::app {
 
+class AvatarSceneController;
 class DeviceCaptureController;
 class ScreenCaptureController;
 
 class ControllerLiveCaptureBindings final : public ILiveCaptureBindings {
 public:
     ControllerLiveCaptureBindings(ScreenCaptureController* screen,
-                                  DeviceCaptureController* devices);
+                                  DeviceCaptureController* devices,
+                                  AvatarSceneController* avatar = nullptr);
 
     [[nodiscard]] std::vector<LiveCaptureSource> activeSources() const override;
     [[nodiscard]] core::Result<void> attach(
@@ -23,6 +25,7 @@ public:
 private:
     ScreenCaptureController* screen_{};
     DeviceCaptureController* devices_{};
+    AvatarSceneController* avatar_{};
 };
 
 }  // namespace creator::app

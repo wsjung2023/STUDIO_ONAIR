@@ -10,11 +10,13 @@ class IProjectPackageStore;
 
 namespace creator::app {
 
+class AvatarSceneController;
 class DeviceCaptureController;
 class ScreenCaptureController;
 
 [[nodiscard]] std::unique_ptr<ILiveRecordingEngine> makeLiveRecordingEngine(
     ScreenCaptureController* screen, DeviceCaptureController* devices,
-    std::shared_ptr<project_store::IProjectPackageStore> store);
+    std::shared_ptr<project_store::IProjectPackageStore> store,
+    AvatarSceneController* avatar = nullptr);
 
 }  // namespace creator::app
