@@ -93,6 +93,7 @@ add_executable(cs_tests
     capture/CaptureFanoutSinksTest.cpp
     capture/UnsupportedScreenCaptureBackendTest.cpp
     capture/NumericCaptureTargetIdTest.cpp
+    capture/ScreenCaptureRegionTest.cpp
     capture/ScreenCaptureFrameAssemblerTest.cpp
     capture/ScreenCaptureStopCoordinatorTest.cpp
     capture/DeviceCapturePortsTest.cpp

@@ -102,7 +102,18 @@ Item {
                     + Number(transformCropBottomField.text) < 1
     }
 
-    Component.onCompleted: syncTransformFields()
+    Component.onCompleted: {
+        syncTransformFields()
+        // Avatar discoverability: the VTuber avatar starts automatically on
+        // entering Studio so creators see it immediately, instead of having to
+        // scroll to the bottom of the left panel to find "Start Avatar" and
+        // concluding the avatar "doesn't show up". Guarded so a re-entry does
+        // not restart an already-running avatar.
+        if (avatarSceneController.avatarStyleSelectable
+                && !avatarSceneController.avatarCanStop) {
+            avatarSceneController.setAvatarEnabled(true)
+        }
+    }
     Connections {
         target: studioWorkflowController
         function onSelectionChanged() { root.syncTransformFields() }
@@ -308,9 +319,13 @@ Item {
                     id: leftColumn
                     objectName: "studioLeftColumn"
                     width: studioLeftScroll.availableWidth
-                    // Fixed, generous height so the ScrollView scrolls rather than
-                    // compressing rows; sized for the taller Material metrics.
-                    height: 1320
+                    // Height tracks the real content (no Layout.fillHeight children
+                    // live here, so implicitHeight is the true stacked height). This
+                    // keeps the ScrollView able to reveal EVERY control regardless of
+                    // mode: in 코너(corner) placement the extra corner-picker grid,
+                    // size slider and drag hint grow the column and stay reachable,
+                    // instead of being clipped by a fixed height.
+                    height: implicitHeight
 
                     Label { text: qsTr("Scenes"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
 
@@ -848,6 +863,91 @@ Item {
                         onClicked: screenCaptureController.canStopPreview
                                    ? screenCaptureController.stopPreview()
                                    : screenCaptureController.startPreview()
+                    }
+                }
+
+                // Screen-recording scope: full monitor vs a chosen rectangular
+                // region. Region capture also removes the avatar-corner mirror
+                // effect by letting the creator exclude the studio window's area.
+                ColumnLayout {
+                    id: regionControls
+                    Layout.fillWidth: true
+                    spacing: theme.spaceSm
+                    enabled: !screenCaptureController.busy
+                             && !screenCaptureController.previewing
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: theme.spaceSm
+
+                        Label {
+                            text: qsTr("화면 녹화 범위")
+                            color: theme.textMuted
+                            font.family: theme.fontFamily
+                            font.pixelSize: theme.sizeCaption
+                        }
+                        RadioButton {
+                            objectName: "screenScopeFullButton"
+                            text: qsTr("전체 화면")
+                            checked: !screenCaptureController.regionActive
+                            onClicked: screenCaptureController.clearRegion()
+                        }
+                        RadioButton {
+                            id: screenScopeRegionButton
+                            objectName: "screenScopeRegionButton"
+                            text: qsTr("영역")
+                            checked: screenCaptureController.regionActive
+                            onClicked: screenCaptureController.setRegion(
+                                           regionXField.value, regionYField.value,
+                                           regionWField.value, regionHField.value)
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: theme.spaceSm
+                        visible: screenScopeRegionButton.checked
+
+                        Label { text: qsTr("X"); color: theme.textMuted; font.pixelSize: theme.sizeCaption }
+                        SpinBox {
+                            id: regionXField
+                            objectName: "screenRegionX"
+                            from: 0; to: 16384; editable: true
+                            value: screenCaptureController.regionActive
+                                   ? screenCaptureController.regionX : 0
+                        }
+                        Label { text: qsTr("Y"); color: theme.textMuted; font.pixelSize: theme.sizeCaption }
+                        SpinBox {
+                            id: regionYField
+                            objectName: "screenRegionY"
+                            from: 0; to: 16384; editable: true
+                            value: screenCaptureController.regionActive
+                                   ? screenCaptureController.regionY : 0
+                        }
+                        Label { text: qsTr("너비"); color: theme.textMuted; font.pixelSize: theme.sizeCaption }
+                        SpinBox {
+                            id: regionWField
+                            objectName: "screenRegionWidth"
+                            from: 1; to: 16384; editable: true
+                            value: screenCaptureController.regionActive
+                                   ? screenCaptureController.regionWidth : 1280
+                        }
+                        Label { text: qsTr("높이"); color: theme.textMuted; font.pixelSize: theme.sizeCaption }
+                        SpinBox {
+                            id: regionHField
+                            objectName: "screenRegionHeight"
+                            from: 1; to: 16384; editable: true
+                            value: screenCaptureController.regionActive
+                                   ? screenCaptureController.regionHeight : 720
+                        }
+                        Button {
+                            objectName: "screenRegionApplyButton"
+                            text: qsTr("적용")
+                            onClicked: screenCaptureController.setRegion(
+                                           regionXField.value, regionYField.value,
+                                           regionWField.value, regionHField.value)
+                        }
                     }
                 }
 

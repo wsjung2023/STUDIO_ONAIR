@@ -4,6 +4,7 @@
 #include "capture/CameraCaptureFrameAssembler.h"
 #include "capture/NumericCaptureTargetId.h"
 #include "capture/ScreenCaptureFrameAssembler.h"
+#include "capture/ScreenCaptureRegion.h"
 #include "core/AppError.h"
 #include "ffmpeg_adapter/BgraFrameMappers.h"
 
@@ -246,8 +247,10 @@ struct DeviceListDeleter final {
 class ScreenSource final : public capture::IScreenCaptureSource {
 public:
     ScreenSource(MonitorSpec monitor,
+                 std::optional<capture::ScreenCaptureRegion> region,
                  std::shared_ptr<capture::IVideoFrameSink> sink)
-        : monitor_(std::move(monitor)), sink_(std::move(sink)),
+        : monitor_(std::move(monitor)), region_(std::move(region)),
+          sink_(std::move(sink)),
           id_(domain::SourceId::create("windows/" + monitor_.id).value()) {}
 
     ~ScreenSource() override {
@@ -336,12 +339,25 @@ private:
             AVDictionary* options = nullptr;
             const auto rate = std::to_string(config.frameRateNumerator) + "/" +
                               std::to_string(config.frameRateDenominator);
-            const auto size = std::to_string(monitor_.width) + "x" +
-                              std::to_string(monitor_.height);
+            // Region capture rides gdigrab's own offset/size cropping: it grabs
+            // exactly the sub-rectangle, so both preview and recording receive
+            // region-only pixels without a separate CPU crop. Full-screen keeps
+            // the monitor geometry unchanged. The region was already validated
+            // against the monitor bounds at source-creation time.
+            const int captureWidth =
+                region_ ? static_cast<int>(region_->width) : monitor_.width;
+            const int captureHeight =
+                region_ ? static_cast<int>(region_->height) : monitor_.height;
+            const int offsetX =
+                region_ ? monitor_.left + static_cast<int>(region_->x) : monitor_.left;
+            const int offsetY =
+                region_ ? monitor_.top + static_cast<int>(region_->y) : monitor_.top;
+            const auto size = std::to_string(captureWidth) + "x" +
+                              std::to_string(captureHeight);
             av_dict_set(&options, "framerate", rate.c_str(), 0);
             av_dict_set(&options, "video_size", size.c_str(), 0);
-            av_dict_set(&options, "offset_x", std::to_string(monitor_.left).c_str(), 0);
-            av_dict_set(&options, "offset_y", std::to_string(monitor_.top).c_str(), 0);
+            av_dict_set(&options, "offset_x", std::to_string(offsetX).c_str(), 0);
+            av_dict_set(&options, "offset_y", std::to_string(offsetY).c_str(), 0);
             av_dict_set(&options, "draw_mouse", "1", 0);
             const int opened = avformat_open_input(
                 &rawFormat, "desktop", input, &options);
@@ -482,6 +498,7 @@ private:
     }
 
     MonitorSpec monitor_;
+    std::optional<capture::ScreenCaptureRegion> region_;
     std::shared_ptr<capture::IVideoFrameSink> sink_;
     domain::SourceId id_;
     capture::ScreenCaptureFrameAssembler assembler_;
@@ -505,14 +522,22 @@ public:
         const domain::CaptureTargetId& targetId,
         std::shared_ptr<capture::IVideoFrameSink> sink) override {
         if (!sink) return invalid("screen sink is required");
-        auto monitor = registry_->monitor(targetId.value());
+        const auto parsed = capture::parseRegionTargetId(targetId.value());
+        auto monitor = registry_->monitor(parsed.baseId);
         if (!monitor.has_value()) {
             return core::AppError{
                 core::ErrorCode::NotFound,
                 "selected Windows display is no longer available"};
         }
+        if (parsed.region) {
+            const auto bounded = capture::ensureRegionWithinBounds(
+                *parsed.region, static_cast<std::uint32_t>(monitor->width),
+                static_cast<std::uint32_t>(monitor->height));
+            if (!bounded.hasValue()) return bounded.error();
+        }
         std::unique_ptr<capture::IScreenCaptureSource> source =
-            std::make_unique<ScreenSource>(std::move(*monitor), std::move(sink));
+            std::make_unique<ScreenSource>(std::move(*monitor), parsed.region,
+                                           std::move(sink));
         return source;
     }
 

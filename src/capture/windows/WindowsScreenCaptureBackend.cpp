@@ -4,6 +4,7 @@
 #include "capture/IVideoFrameSink.h"
 #include "capture/NumericCaptureTargetId.h"
 #include "capture/ScreenCaptureFrameAssembler.h"
+#include "capture/ScreenCaptureRegion.h"
 #include "capture/ScreenCaptureStopCoordinator.h"
 #include "core/AppError.h"
 
@@ -126,10 +127,12 @@ class WgcStreamState final {
 public:
     WgcStreamState(std::shared_ptr<IVideoFrameSink> sink,
                    winrt::com_ptr<ID3D11Device> device,
-                   winrt::com_ptr<ID3D11DeviceContext> context)
+                   winrt::com_ptr<ID3D11DeviceContext> context,
+                   std::optional<ScreenCaptureRegion> region)
         : sink_(std::move(sink)),
           device_(std::move(device)),
-          context_(std::move(context)) {}
+          context_(std::move(context)),
+          region_(std::move(region)) {}
 
     void notifyStarted() noexcept {
         std::scoped_lock lock{mutex_};
@@ -201,14 +204,36 @@ private:
         D3D11_MAPPED_SUBRESOURCE mapped{};
         winrt::check_hresult(context_->Map(staging_.get(), 0, D3D11_MAP_READ, 0, &mapped));
 
-        const auto width = desc.Width;
-        const auto height = desc.Height;
+        // When a region is requested we crop while packing the visible rows,
+        // reading only the sub-rectangle out of the mapped surface. The origin
+        // and extent arithmetic mirrors cropBgra8() (the unit-tested geometry);
+        // a region that no longer fits the live surface (e.g. the monitor
+        // changed resolution) is rejected rather than read out of bounds.
+        std::uint32_t outX = 0;
+        std::uint32_t outY = 0;
+        std::uint32_t outW = desc.Width;
+        std::uint32_t outH = desc.Height;
+        if (region_) {
+            if (region_->x + region_->width > desc.Width ||
+                region_->y + region_->height > desc.Height) {
+                context_->Unmap(staging_.get(), 0);
+                return std::nullopt;
+            }
+            outX = region_->x;
+            outY = region_->y;
+            outW = region_->width;
+            outH = region_->height;
+        }
+
+        const auto width = outW;
+        const auto height = outH;
         const auto rowBytes = static_cast<std::size_t>(width) * 4U;
         auto storage = std::make_shared<std::vector<std::uint8_t>>(rowBytes * height);
         const auto* source = static_cast<const std::uint8_t*>(mapped.pData);
         for (std::uint32_t row = 0; row < height; ++row) {
             std::memcpy(storage->data() + static_cast<std::size_t>(row) * rowBytes,
-                        source + static_cast<std::size_t>(row) * mapped.RowPitch,
+                        source + static_cast<std::size_t>(outY + row) * mapped.RowPitch +
+                            static_cast<std::size_t>(outX) * 4U,
                         rowBytes);
         }
         context_->Unmap(staging_.get(), 0);
@@ -289,6 +314,7 @@ private:
     winrt::com_ptr<ID3D11Texture2D> staging_;
     std::uint32_t stagingWidth_{0};
     std::uint32_t stagingHeight_{0};
+    std::optional<ScreenCaptureRegion> region_;
     ScreenCaptureFrameAssembler assembler_;
     CaptureStats stats_;
     std::optional<core::TimestampNs> firstTimestamp_;
@@ -391,8 +417,12 @@ private:
 class WindowsScreenCaptureSource final : public IScreenCaptureSource {
 public:
     WindowsScreenCaptureSource(domain::SourceId id, MonitorEntry monitor,
+                               std::optional<ScreenCaptureRegion> region,
                                std::shared_ptr<IVideoFrameSink> sink)
-        : id_(std::move(id)), monitor_(std::move(monitor)), sink_(std::move(sink)) {}
+        : id_(std::move(id)),
+          monitor_(std::move(monitor)),
+          region_(std::move(region)),
+          sink_(std::move(sink)) {}
 
     ~WindowsScreenCaptureSource() override {
         static_cast<void>(stop());
@@ -461,7 +491,7 @@ public:
                 winrtDevice, wgdx::DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
             auto session = framePool.CreateCaptureSession(item);
 
-            auto state = std::make_shared<WgcStreamState>(sink_, device, context);
+            auto state = std::make_shared<WgcStreamState>(sink_, device, context, region_);
             frameArrivedToken_ = framePool.FrameArrived(
                 [state](const wgc::Direct3D11CaptureFramePool& sender,
                         const wf::IInspectable&) { state->onFrameArrived(sender); });
@@ -564,6 +594,7 @@ private:
 
     domain::SourceId id_;
     MonitorEntry monitor_;
+    std::optional<ScreenCaptureRegion> region_;
     std::shared_ptr<IVideoFrameSink> sink_;
     std::shared_ptr<WgcStreamState> state_;
     std::shared_ptr<ScreenCaptureStopCoordinator> stopCoordinator_;
@@ -587,16 +618,23 @@ public:
         const domain::CaptureTargetId& targetId,
         std::shared_ptr<IVideoFrameSink> sink) override {
         if (!sink) return invalid("screen sink is required");
-        auto monitor = registry_->find(targetId.value());
+        const auto parsed = parseRegionTargetId(targetId.value());
+        auto monitor = registry_->find(parsed.baseId);
         if (!monitor.has_value()) {
             return core::AppError{core::ErrorCode::NotFound,
                                   "selected Windows display is no longer available"};
+        }
+        if (parsed.region) {
+            const auto bounded = ensureRegionWithinBounds(*parsed.region, monitor->width,
+                                                          monitor->height);
+            if (!bounded.hasValue()) return bounded.error();
         }
         auto sourceId = domain::SourceId::create("screen-preview:" + targetId.value());
         if (!sourceId.hasValue()) return sourceId.error();
         std::unique_ptr<IScreenCaptureSource> source =
             std::make_unique<WindowsScreenCaptureSource>(
-                std::move(sourceId).value(), std::move(*monitor), std::move(sink));
+                std::move(sourceId).value(), std::move(*monitor), parsed.region,
+                std::move(sink));
         return source;
     }
 

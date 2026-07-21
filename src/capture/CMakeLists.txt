@@ -38,6 +38,8 @@ cs_add_qtfree_library(cs_capture
         NumericCaptureTargetId.cpp
         ScreenCaptureTypes.h
         ScreenCaptureTypes.cpp
+        ScreenCaptureRegion.h
+        ScreenCaptureRegion.cpp
         ScreenCaptureFrameAssembler.h
         ScreenCaptureFrameAssembler.cpp
         ScreenCaptureStopCoordinator.h

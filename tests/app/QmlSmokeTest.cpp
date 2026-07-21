@@ -553,6 +553,11 @@ class FakeScreenCaptureController final : public QObject {
     Q_PROPERTY(bool permissionRequired READ permissionRequired CONSTANT)
     Q_PROPERTY(QVariantList targets READ targets CONSTANT)
     Q_PROPERTY(QString selectedTargetId READ selectedTargetId CONSTANT)
+    Q_PROPERTY(bool regionActive READ regionActive CONSTANT)
+    Q_PROPERTY(quint32 regionX READ regionX CONSTANT)
+    Q_PROPERTY(quint32 regionY READ regionY CONSTANT)
+    Q_PROPERTY(quint32 regionWidth READ regionWidth CONSTANT)
+    Q_PROPERTY(quint32 regionHeight READ regionHeight CONSTANT)
     Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
     Q_PROPERTY(quint32 actualWidth READ actualWidth CONSTANT)
     Q_PROPERTY(quint32 actualHeight READ actualHeight CONSTANT)
@@ -578,6 +583,11 @@ public:
                             {QStringLiteral("height"), 1080}}};
     }
     [[nodiscard]] QString selectedTargetId() const { return QStringLiteral("display:1"); }
+    [[nodiscard]] bool regionActive() const noexcept { return false; }
+    [[nodiscard]] quint32 regionX() const noexcept { return 0; }
+    [[nodiscard]] quint32 regionY() const noexcept { return 0; }
+    [[nodiscard]] quint32 regionWidth() const noexcept { return 0; }
+    [[nodiscard]] quint32 regionHeight() const noexcept { return 0; }
     [[nodiscard]] QString statusMessage() const {
         return QStringLiteral("captured window closed");
     }
@@ -594,6 +604,8 @@ public:
     Q_INVOKABLE void requestPermission() {}
     Q_INVOKABLE void refreshTargets() {}
     Q_INVOKABLE void selectTarget(const QString&) {}
+    Q_INVOKABLE void setRegion(int, int, int, int) {}
+    Q_INVOKABLE void clearRegion() {}
     Q_INVOKABLE void startPreview() {}
     Q_INVOKABLE void stopPreview() {}
 };

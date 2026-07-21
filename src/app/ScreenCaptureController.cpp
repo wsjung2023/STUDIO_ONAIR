@@ -192,6 +192,42 @@ void ScreenCaptureController::selectTarget(const QString& targetId) {
     setStatusMessage(tr("Ready to preview"));
 }
 
+void ScreenCaptureController::setRegion(int x, int y, int width, int height) {
+    if (busy() || previewing()) {
+        setStatusMessage(tr("Stop the preview before changing the capture region"));
+        return;
+    }
+    auto region = capture::makeScreenCaptureRegion(x, y, width, height);
+    if (!region.hasValue()) {
+        setStatusMessage(fromUtf8(region.error().message()));
+        return;
+    }
+    if (const auto* target = selectedTarget()) {
+        const auto bounded = capture::ensureRegionWithinBounds(
+            region.value(), target->width(), target->height());
+        if (!bounded.hasValue()) {
+            setStatusMessage(fromUtf8(bounded.error().message()));
+            return;
+        }
+    }
+    region_ = region.value();
+    emit regionChanged();
+    setStatusMessage(tr("Region capture set to %1×%2")
+                         .arg(region_->width)
+                         .arg(region_->height));
+}
+
+void ScreenCaptureController::clearRegion() {
+    if (busy() || previewing()) {
+        setStatusMessage(tr("Stop the preview before changing the capture region"));
+        return;
+    }
+    if (!region_.has_value()) return;
+    region_.reset();
+    emit regionChanged();
+    setStatusMessage(tr("Capturing the full screen"));
+}
+
 void ScreenCaptureController::startPreview() {
     if (state_ != ScreenCaptureState::Ready) return;
     const auto* target = selectedTarget();
@@ -200,12 +236,35 @@ void ScreenCaptureController::startPreview() {
         return;
     }
 
+    // A region is re-validated against the current monitor geometry here so a
+    // stale rectangle (monitor unplugged/resized since it was set) is reported
+    // rather than captured out of bounds (CLAUDE.md 9).
+    std::optional<domain::CaptureTargetId> effectiveTargetId;
+    if (region_) {
+        const auto bounded = capture::ensureRegionWithinBounds(
+            *region_, target->width(), target->height());
+        if (!bounded.hasValue()) {
+            setState(ScreenCaptureState::Error);
+            setStatusMessage(fromUtf8(bounded.error().message()));
+            return;
+        }
+        auto encoded = domain::CaptureTargetId::create(
+            capture::encodeRegionTargetId(target->id().value(), *region_));
+        if (!encoded.hasValue()) {
+            setState(ScreenCaptureState::Error);
+            setStatusMessage(fromUtf8(encoded.error().message()));
+            return;
+        }
+        effectiveTargetId = std::move(encoded).value();
+    }
+
     setState(ScreenCaptureState::Starting);
     setStatusMessage(tr("Starting screen preview"));
     mailbox_ = std::make_shared<capture::LatestVideoFrameMailbox>();
     fanout_ = std::make_shared<capture::VideoFrameFanoutSink>(mailbox_);
     fanout_->setSecondary(recordingSink_);
-    auto created = sourceFactory_->create(target->id(), fanout_);
+    auto created = sourceFactory_->create(
+        effectiveTargetId ? *effectiveTargetId : target->id(), fanout_);
     if (!created.hasValue()) {
         fanout_.reset();
         mailbox_.reset();

@@ -6,6 +6,7 @@
 #include "capture/IScreenCaptureSourceFactory.h"
 #include "capture/CaptureFanoutSinks.h"
 #include "capture/LatestVideoFrameMailbox.h"
+#include "capture/ScreenCaptureRegion.h"
 #include "capture/ScreenCaptureTypes.h"
 #include "core/Result.h"
 
@@ -46,6 +47,11 @@ class ScreenCaptureController final : public QObject {
     Q_PROPERTY(bool permissionRequired READ permissionRequired NOTIFY captureStateChanged)
     Q_PROPERTY(QVariantList targets READ targets NOTIFY targetsChanged)
     Q_PROPERTY(QString selectedTargetId READ selectedTargetId NOTIFY selectedTargetChanged)
+    Q_PROPERTY(bool regionActive READ regionActive NOTIFY regionChanged)
+    Q_PROPERTY(quint32 regionX READ regionX NOTIFY regionChanged)
+    Q_PROPERTY(quint32 regionY READ regionY NOTIFY regionChanged)
+    Q_PROPERTY(quint32 regionWidth READ regionWidth NOTIFY regionChanged)
+    Q_PROPERTY(quint32 regionHeight READ regionHeight NOTIFY regionChanged)
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
     Q_PROPERTY(quint32 actualWidth READ actualWidth NOTIFY statsChanged)
     Q_PROPERTY(quint32 actualHeight READ actualHeight NOTIFY statsChanged)
@@ -78,6 +84,15 @@ public:
     }
     [[nodiscard]] QVariantList targets() const { return targetModel_; }
     [[nodiscard]] QString selectedTargetId() const { return selectedTargetId_; }
+    [[nodiscard]] bool regionActive() const noexcept { return region_.has_value(); }
+    [[nodiscard]] quint32 regionX() const noexcept { return region_ ? region_->x : 0; }
+    [[nodiscard]] quint32 regionY() const noexcept { return region_ ? region_->y : 0; }
+    [[nodiscard]] quint32 regionWidth() const noexcept {
+        return region_ ? region_->width : 0;
+    }
+    [[nodiscard]] quint32 regionHeight() const noexcept {
+        return region_ ? region_->height : 0;
+    }
     [[nodiscard]] QString statusMessage() const { return statusMessage_; }
     [[nodiscard]] quint32 actualWidth() const noexcept { return actualWidth_; }
     [[nodiscard]] quint32 actualHeight() const noexcept { return actualHeight_; }
@@ -108,6 +123,12 @@ public:
     Q_INVOKABLE void requestPermission();
     Q_INVOKABLE void refreshTargets();
     Q_INVOKABLE void selectTarget(const QString& targetId);
+    /// Constrains capture to a monitor-relative rectangle. Rejected (with a
+    /// surfaced status message) when the rectangle is empty or falls outside the
+    /// selected monitor. Takes effect on the next startPreview.
+    Q_INVOKABLE void setRegion(int x, int y, int width, int height);
+    /// Reverts to full-screen capture of the selected monitor.
+    Q_INVOKABLE void clearRegion();
     Q_INVOKABLE void startPreview();
     Q_INVOKABLE void stopPreview();
 
@@ -118,6 +139,7 @@ signals:
     void captureStateChanged();
     void targetsChanged();
     void selectedTargetChanged();
+    void regionChanged();
     void statusMessageChanged();
     void statsChanged();
 
@@ -148,6 +170,7 @@ private:
     std::vector<creator::capture::ScreenCaptureTarget> targetSnapshot_;
     QVariantList targetModel_;
     QString selectedTargetId_;
+    std::optional<creator::capture::ScreenCaptureRegion> region_;
     QString statusMessage_;
     QTimer pollTimer_;
     ScreenCaptureState state_{ScreenCaptureState::Idle};

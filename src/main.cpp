@@ -33,6 +33,19 @@
 #endif
 #if defined(_WIN32)
 #include "capture/windows/WindowsScreenCaptureBackend.h"
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+// WDA_EXCLUDEFROMCAPTURE (Windows 10 2004+) hides the window from screen
+// capture while leaving it fully visible to the user. Defined defensively in
+// case the toolchain's headers predate it.
+#ifndef WDA_EXCLUDEFROMCAPTURE
+#define WDA_EXCLUDEFROMCAPTURE 0x00000011
+#endif
 #endif
 #include "project_store/ProjectPackageStore.h"
 #include "project_store/SqliteStudioStore.h"
@@ -440,6 +453,42 @@ int main(int argc, char* argv[]) {
         Qt::QueuedConnection);
 
     engine.loadFromModule("CreatorStudio", "Main");
+
+#if defined(_WIN32)
+    // Mirror/Droste fix: exclude the Creator Studio window itself from screen
+    // capture. When the avatar is in "코너"(corner) overlay mode its transparent
+    // background shows the desktop, and capturing the same monitor the app lives
+    // on would otherwise feed the preview back into itself indefinitely. With
+    // WDA_EXCLUDEFROMCAPTURE the window stays visible to the user but is invisible
+    // to WGC/gdigrab, so there is zero feedback even in full-screen capture.
+    // Applied on window creation and re-applied whenever a native window appears
+    // (winId() is only valid once the platform window exists). A failure is
+    // surfaced via qWarning rather than hidden (CLAUDE.md 9).
+    {
+        auto excludeFromCapture = [](QQuickWindow* window) {
+            if (window == nullptr) return;
+            const auto handle = reinterpret_cast<HWND>(window->winId());
+            if (handle == nullptr) return;
+            if (!SetWindowDisplayAffinity(handle, WDA_EXCLUDEFROMCAPTURE)) {
+                qWarning("[capture] SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) "
+                         "failed (error %lu); the app window may appear in screen "
+                         "recordings on this Windows version",
+                         static_cast<unsigned long>(GetLastError()));
+            }
+        };
+        auto applyToAllRoots = [&engine, excludeFromCapture]() {
+            for (auto* object : engine.rootObjects()) {
+                if (auto* window = qobject_cast<QQuickWindow*>(object)) {
+                    excludeFromCapture(window);
+                }
+            }
+        };
+        applyToAllRoots();
+        // Re-apply once the event loop has created native windows, covering the
+        // case where winId() was not yet valid at load time.
+        QTimer::singleShot(0, &app, applyToAllRoots);
+    }
+#endif
 
     // Optional non-interactive UX screenshot drive. When CS_UXSHOT_DIR is set the
     // app opens a project (so Studio/Editor/Export are reachable), then cycles the
