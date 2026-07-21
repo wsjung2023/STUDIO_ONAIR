@@ -11,6 +11,9 @@ Pane {
     Theme { id: theme }
     required property var controller
 
+    // Phone layout below 600px: the export card fills the width.
+    readonly property bool compact: width < 600
+
     padding: 0
     background: Rectangle { color: "transparent" }
 
@@ -28,8 +31,9 @@ Pane {
 
     Rectangle {
         anchors.centerIn: parent
-        width: Math.min(parent.width - 64, 620)
-        height: card.implicitHeight + theme.spaceXxl * 2
+        width: root.compact ? parent.width - 2 * theme.spaceLg
+                            : Math.min(parent.width - 64, 620)
+        height: card.implicitHeight + (root.compact ? theme.spaceXl : theme.spaceXxl) * 2
         radius: theme.radiusLg
         color: theme.surface
         border.color: theme.border
@@ -40,8 +44,8 @@ Pane {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            anchors.margins: theme.spaceXxl
-            spacing: theme.spaceXl
+            anchors.margins: root.compact ? theme.spaceLg : theme.spaceXxl
+            spacing: root.compact ? theme.spaceLg : theme.spaceXl
 
             ColumnLayout {
                 Layout.fillWidth: true

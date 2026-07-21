@@ -10,6 +10,9 @@ Pane {
     // Design tokens for this page (see qml/Theme.qml).
     Theme { id: theme }
 
+    // Phone layout below 600px: single column, full-width CTA, tighter type.
+    readonly property bool compact: width < 600
+
     padding: 0
     background: Rectangle { color: "transparent" }
 
@@ -30,16 +33,17 @@ Pane {
 
     Flickable {
         anchors.fill: parent
-        contentHeight: content.implicitHeight + 96
+        contentHeight: content.implicitHeight + (root.compact ? 48 : 96)
         clip: true
         ScrollBar.vertical: ScrollBar {}
 
         ColumnLayout {
             id: content
-            width: Math.min(parent.width - 96, 960)
+            width: root.compact ? parent.width - 2 * theme.spaceLg
+                                 : Math.min(parent.width - 96, 720)
             anchors.horizontalCenter: parent.horizontalCenter
-            y: 64
-            spacing: theme.spaceXxl
+            y: root.compact ? theme.spaceXl : 64
+            spacing: root.compact ? theme.spaceXl : theme.spaceXxl
 
             // ---- Hero ------------------------------------------------------
             ColumnLayout {
@@ -75,7 +79,7 @@ Pane {
                     text: qsTr("Create, record, and safely recover your project")
                     color: theme.textPrimary
                     font.family: theme.fontFamily
-                    font.pixelSize: theme.sizeDisplay
+                    font.pixelSize: root.compact ? theme.sizeTitle : theme.sizeDisplay
                     font.weight: theme.weightBold
                     wrapMode: Text.WordWrap
                     lineHeight: 1.15
@@ -87,16 +91,91 @@ Pane {
                     text: qsTr("화면, 카메라, 마이크, 시스템 오디오를 분리 저장하고 촬영 후 자유롭게 편집하는 크리에이터 스튜디오")
                     color: theme.textSecondary
                     font.family: theme.fontFamily
-                    font.pixelSize: theme.sizeSubtitle
+                    font.pixelSize: root.compact ? theme.sizeBody : theme.sizeSubtitle
                     wrapMode: Text.WordWrap
+                }
+            }
+
+            // ---- Guided flow strip: 촬영 → 편집 → 내보내기 ----------------
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredWidth: root.compact ? -1 : 640
+                Layout.maximumWidth: root.compact ? 100000 : 640
+                Layout.alignment: Qt.AlignHCenter
+                implicitHeight: flowRow.implicitHeight + theme.spaceLg * 2
+                radius: theme.radiusLg
+                color: theme.surface
+                border.color: theme.border
+                border.width: 1
+
+                RowLayout {
+                    id: flowRow
+                    anchors.fill: parent
+                    anchors.margins: theme.spaceLg
+                    spacing: theme.spaceSm
+
+                    Repeater {
+                        model: [
+                            { n: "1", label: qsTr("스튜디오"), sub: qsTr("촬영"), icon: "●" },
+                            { n: "2", label: qsTr("편집"), sub: qsTr("배치·컷"), icon: "✂" },
+                            { n: "3", label: qsTr("내보내기"), sub: qsTr("MP4"), icon: "⭱" }
+                        ]
+                        delegate: RowLayout {
+                            required property var modelData
+                            required property int index
+                            Layout.fillWidth: true
+                            spacing: theme.spaceSm
+
+                            Rectangle {
+                                width: 30; height: 30; radius: 15
+                                color: theme.accentSoft
+                                border.color: theme.accent
+                                border.width: 1
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.n
+                                    color: theme.accentBright
+                                    font.pixelSize: theme.sizeLabel
+                                    font.weight: theme.weightBold
+                                }
+                            }
+                            ColumnLayout {
+                                spacing: 0
+                                Layout.fillWidth: true
+                                Label {
+                                    text: modelData.label
+                                    color: theme.textPrimary
+                                    font.family: theme.fontFamily
+                                    font.pixelSize: theme.sizeLabel
+                                    font.weight: theme.weightSemiBold
+                                    elide: Text.ElideRight
+                                    Layout.fillWidth: true
+                                }
+                                Label {
+                                    text: modelData.sub
+                                    color: theme.textMuted
+                                    font.family: theme.fontFamily
+                                    font.pixelSize: theme.sizeCaption
+                                    elide: Text.ElideRight
+                                    Layout.fillWidth: true
+                                }
+                            }
+                            Text {
+                                visible: index < 2
+                                text: "→"
+                                color: theme.textMuted
+                                font.pixelSize: theme.sizeSubtitle
+                            }
+                        }
+                    }
                 }
             }
 
             // ---- Start-project card ---------------------------------------
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredWidth: 640
-                Layout.maximumWidth: 640
+                Layout.preferredWidth: root.compact ? -1 : 640
+                Layout.maximumWidth: root.compact ? 100000 : 640
                 Layout.alignment: Qt.AlignHCenter
                 implicitHeight: startCol.implicitHeight + theme.spaceXl * 2
                 radius: theme.radiusLg
@@ -157,14 +236,18 @@ Pane {
                         }
                     }
 
-                    RowLayout {
+                    // Primary CTA — full-width big button; secondary open sits
+                    // beneath it on phones, beside it on desktop.
+                    GridLayout {
                         Layout.fillWidth: true
-                        spacing: theme.spaceMd
+                        columns: root.compact ? 1 : 2
+                        columnSpacing: theme.spaceMd
+                        rowSpacing: theme.spaceMd
 
                         Button {
                             id: createButton
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 50
+                            Layout.preferredHeight: 52
                             text: qsTr("Create Project")
                             enabled: !projectController.busy && projectName.text.trim().length > 0
                             font.family: theme.fontFamily
@@ -198,8 +281,9 @@ Pane {
 
                         Button {
                             id: openButton
-                            Layout.preferredWidth: 180
-                            Layout.preferredHeight: 50
+                            Layout.fillWidth: root.compact
+                            Layout.preferredWidth: root.compact ? -1 : 180
+                            Layout.preferredHeight: 52
                             text: qsTr("Open Project")
                             enabled: !projectController.busy
                             font.family: theme.fontFamily
@@ -222,22 +306,27 @@ Pane {
                                 Behavior on color { ColorAnimation { duration: theme.animFast } }
                             }
                         }
+                    }
 
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: theme.spaceSm
                         BusyIndicator {
                             running: projectController.busy
                             visible: running
+                            implicitWidth: 24
+                            implicitHeight: 24
                             Material.accent: theme.accent
                         }
-                    }
-
-                    Label {
-                        visible: projectController.statusMessage.length > 0
-                        text: projectController.statusMessage
-                        color: theme.warning
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                        font.family: theme.fontFamily
-                        font.pixelSize: theme.sizeLabel
+                        Label {
+                            visible: projectController.statusMessage.length > 0
+                            text: projectController.statusMessage
+                            color: theme.warning
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                            font.family: theme.fontFamily
+                            font.pixelSize: theme.sizeLabel
+                        }
                     }
                 }
             }
@@ -245,8 +334,8 @@ Pane {
             // ---- Recent projects ------------------------------------------
             ColumnLayout {
                 Layout.fillWidth: true
-                Layout.preferredWidth: 640
-                Layout.maximumWidth: 640
+                Layout.preferredWidth: root.compact ? -1 : 640
+                Layout.maximumWidth: root.compact ? 100000 : 640
                 Layout.alignment: Qt.AlignHCenter
                 spacing: theme.spaceMd
 
@@ -347,7 +436,8 @@ Pane {
                         }
                     }
 
-                    // Intentional, calm empty state.
+                    // Intentional, calm empty state that tells a first-time user
+                    // what to do next.
                     Rectangle {
                         anchors.fill: parent
                         visible: recentList.count === 0

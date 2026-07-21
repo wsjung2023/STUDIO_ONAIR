@@ -67,6 +67,7 @@
 #include <QElapsedTimer>
 #include <QImage>
 #include <QQuickWindow>
+#include <QVector>
 #include <QTimer>
 #include <QUrl>
 
@@ -390,6 +391,104 @@ int main(int argc, char* argv[]) {
         Qt::QueuedConnection);
 
     engine.loadFromModule("CreatorStudio", "Main");
+
+    // Optional non-interactive UX screenshot drive. When CS_UXSHOT_DIR is set the
+    // app opens a project (so Studio/Editor/Export are reachable), then cycles the
+    // window through desktop (1440x900) and phone (390x844) geometries, visiting
+    // each page and saving a PNG per (size,page). It touches no capture hardware,
+    // so it is a fast, deterministic way to prove the responsive layout renders.
+    if (qEnvironmentVariableIsSet("CS_UXSHOT_DIR") &&
+        !qEnvironmentVariable("CS_UXSHOT_DIR").isEmpty()) {
+        const QString shotDir = qEnvironmentVariable("CS_UXSHOT_DIR");
+        QDir().mkpath(shotDir);
+
+        struct Shot { QString name; int width; int height; QString page; };
+        auto shots = std::make_shared<QVector<Shot>>(QVector<Shot>{
+            {QStringLiteral("desktop-home"), 1440, 900, QStringLiteral("Home")},
+            {QStringLiteral("desktop-studio"), 1440, 900, QStringLiteral("Studio")},
+            {QStringLiteral("desktop-editor"), 1440, 900, QStringLiteral("Editor")},
+            {QStringLiteral("desktop-export"), 1440, 900, QStringLiteral("Export")},
+            {QStringLiteral("mobile-home"), 390, 844, QStringLiteral("Home")},
+            {QStringLiteral("mobile-studio"), 390, 844, QStringLiteral("Studio")},
+            {QStringLiteral("mobile-editor"), 390, 844, QStringLiteral("Editor")},
+            {QStringLiteral("mobile-export"), 390, 844, QStringLiteral("Export")},
+        });
+
+        struct UxState { int phase = 0; int ticks = 0; int index = 0; int total = 0; };
+        auto ux = std::make_shared<UxState>();
+
+        auto* driver = new QTimer(&app);
+        driver->setInterval(90);
+        QObject::connect(driver, &QTimer::timeout, &app,
+            [&engine, &projectController, shotDir, shots, ux, driver]() mutable {
+            ++ux->ticks;
+            if (++ux->total > 1200) {
+                qWarning("[uxshot] timeout");
+                driver->stop();
+                QCoreApplication::exit(2);
+                return;
+            }
+            auto* window = engine.rootObjects().isEmpty()
+                ? nullptr
+                : qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst());
+            if (window == nullptr)
+                return;
+            switch (ux->phase) {
+            case 0: {  // create a project so all pages are reachable
+                if (ux->ticks < 6) return;
+                const QString packagePath =
+                    shotDir + QStringLiteral("/uxshot.cstudio");
+                projectController.createProject(
+                    QUrl::fromLocalFile(packagePath), QStringLiteral("UX"));
+                ux->phase = 1;
+                ux->ticks = 0;
+                break;
+            }
+            case 1: {  // wait for the project to open, then begin the shot loop
+                if (!projectController.hasOpenProject()) return;
+                if (ux->ticks < 4) return;
+                ux->phase = 2;
+                ux->ticks = 0;
+                break;
+            }
+            case 2: {  // apply geometry + page for the current shot
+                if (ux->index >= shots->size()) {
+                    qInfo("[uxshot] done (%d shots)", ux->index);
+                    driver->stop();
+                    QCoreApplication::quit();
+                    return;
+                }
+                const Shot& s = shots->at(ux->index);
+                window->setWidth(s.width);
+                window->setHeight(s.height);
+                window->setProperty("currentPage", s.page);
+                ux->phase = 3;
+                ux->ticks = 0;
+                break;
+            }
+            case 3: {  // let the resize + page switch settle, then grab
+                if (ux->ticks < 10) return;
+                const Shot& s = shots->at(ux->index);
+                const QImage shot = window->grabWindow();
+                const QString path =
+                    shotDir + QStringLiteral("/") + s.name + QStringLiteral(".png");
+                if (!shot.isNull() && shot.save(path)) {
+                    qInfo("[uxshot] saved %s (%dx%d)", qUtf8Printable(path),
+                          shot.width(), shot.height());
+                } else {
+                    qWarning("[uxshot] failed to save %s", qUtf8Printable(path));
+                }
+                ++ux->index;
+                ux->phase = 2;
+                ux->ticks = 0;
+                break;
+            }
+            default:
+                break;
+            }
+        });
+        driver->start();
+    }
 
     // Optional non-interactive drive for verification. When CS_AUTODRIVE_DIR is
     // set the app creates a project, starts the primary-display screen preview
