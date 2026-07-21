@@ -190,12 +190,26 @@ const domain::StudioScene* findScene(
 }
 
 SourceState stateInScene(const domain::StudioScene& scene,
-                         const domain::SourceId& sourceId) {
-    const auto found = std::find_if(
+                         const domain::SourceId& sourceId,
+                         StudioSourceRole role) {
+    // A recorded scene snapshot keys its sources by the logical role id (e.g.
+    // "screen"), which for a real capture differs from the live device id (e.g.
+    // "windows/display:824773883") the recording segments carry. Match by exact
+    // source id first (covers tests/fixtures that reuse the logical id), then
+    // fall back to matching by role so real device recordings resolve their
+    // scene visibility/transform instead of defaulting to disabled.
+    auto found = std::find_if(
         scene.sources().begin(), scene.sources().end(),
         [&sourceId](const domain::SceneSource& source) {
             return source.id() == sourceId;
         });
+    if (found == scene.sources().end()) {
+        found = std::find_if(
+            scene.sources().begin(), scene.sources().end(),
+            [role](const domain::SceneSource& source) {
+                return source.role() == role;
+            });
+    }
     if (found == scene.sources().end()) return {};
     return SourceState{.enabled = found->enabled(),
                        .transform = found->transform()};
@@ -219,15 +233,15 @@ const project_store::RecordingSceneEvent* activeEventAt(
 Result<SourceState> stateAt(
     const RecordingImportRequest& request,
     const std::vector<project_store::RecordingSceneEvent>& events,
-    const domain::SourceId& sourceId, TimestampNs position,
-    bool includeEqual = true) {
+    const domain::SourceId& sourceId, StudioSourceRole role,
+    TimestampNs position, bool includeEqual = true) {
     const auto* event = activeEventAt(events, position, includeEqual);
     if (event == nullptr) {
         return invalid("recording has no active scene at segment position");
     }
     const auto* scene = findScene(request.scenes, event->sceneId);
     if (scene == nullptr) return notFound("recording scene snapshot was not found");
-    return stateInScene(*scene, sourceId);
+    return stateInScene(*scene, sourceId, role);
 }
 
 std::string idPrefix(const domain::SessionId& sessionId) {
@@ -382,9 +396,9 @@ Result<std::vector<TimestampNs>> splitBoundaries(
             continue;
         }
         if (!videoRole(role)) {
-            auto before = stateAt(request, events, segment.sourceId,
+            auto before = stateAt(request, events, segment.sourceId, role,
                                   event.position, false);
-            auto after = stateAt(request, events, segment.sourceId,
+            auto after = stateAt(request, events, segment.sourceId, role,
                                  event.position, true);
             if (!before.hasValue()) return before.error();
             if (!after.hasValue()) return after.error();
@@ -538,7 +552,7 @@ Result<RecordingImportPlan> planRecordingImport(
         for (std::size_t index = 0; index + 1 < boundaries.value().size(); ++index) {
             const auto pieceStart = boundaries.value()[index];
             const auto duration = boundaries.value()[index + 1] - pieceStart;
-            auto state = stateAt(request, events.value(), unit.sourceId,
+            auto state = stateAt(request, events.value(), unit.sourceId, role,
                                  pieceStart);
             if (!state.hasValue()) return state.error();
             auto timelineStart = addTime(appendBase, pieceStart.time_since_epoch());

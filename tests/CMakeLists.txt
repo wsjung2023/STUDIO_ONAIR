@@ -688,6 +688,38 @@ if(CS_ENABLE_FFMPEG AND CS_ENABLE_MLT AND CS_ENABLE_WHISPER)
         gtest_discover_tests(cs_onetool_e2e_acceptance_tests
             PROPERTIES TIMEOUT 300 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     endif()
+
+    # Headless driver that feeds a REAL recorded .cstudio package (actual desktop
+    # captured by the app) through reconcile -> cut -> MP4 export. Not a gtest;
+    # run manually with <package> <sessionId> <output.mp4>.
+    add_executable(cs_onetool_real_screen_driver
+        acceptance/RealScreenEditExportDriver.cpp
+    )
+    target_link_libraries(cs_onetool_real_screen_driver PRIVATE
+        cs_app
+        cs_ffmpeg_adapter
+        cs_mlt_adapter
+        Qt6::Quick
+    )
+    target_compile_definitions(cs_onetool_real_screen_driver PRIVATE
+        CS_DRIVER_MLT_ROOT="${CS_MLT_ROOT}"
+    )
+    target_include_directories(cs_onetool_real_screen_driver SYSTEM PRIVATE
+        ${FFMPEG_INCLUDE_DIRS}
+    )
+    if(WIN32 AND MSVC)
+        target_link_libraries(cs_onetool_real_screen_driver PRIVATE psapi)
+    endif()
+    cs_apply_warnings(cs_onetool_real_screen_driver)
+    if(WIN32)
+        file(GLOB CS_DRIVER_FFMPEG_DLLS CONFIGURE_DEPENDS "${CS_FFMPEG_ROOT}/bin/*.dll")
+        add_custom_command(TARGET cs_onetool_real_screen_driver POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CS_DRIVER_FFMPEG_DLLS}
+                $<TARGET_FILE_DIR:cs_onetool_real_screen_driver>
+            COMMAND_EXPAND_LISTS
+        )
+    endif()
 endif()
 
 if(CS_ENABLE_FFMPEG)
