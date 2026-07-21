@@ -55,6 +55,14 @@ class AvatarSceneController final : public QObject {
                    setAvatarPlacementMode NOTIFY styleChanged)
     Q_PROPERTY(int avatarCorner READ avatarCorner WRITE setAvatarCorner NOTIFY
                    styleChanged)
+    // Free transform: a size multiplier and a normalised [0,1] head position that
+    // a live drag and the size slider drive. These always win over the presets.
+    Q_PROPERTY(double avatarScale READ avatarScale WRITE setAvatarScale NOTIFY
+                   transformChanged)
+    Q_PROPERTY(double avatarPosX READ avatarPosX NOTIFY transformChanged)
+    Q_PROPERTY(double avatarPosY READ avatarPosY NOTIFY transformChanged)
+    Q_PROPERTY(double avatarMinScale READ avatarMinScale CONSTANT)
+    Q_PROPERTY(double avatarMaxScale READ avatarMaxScale CONSTANT)
 
 public:
     /// `cameraLive` reports whether the webcam is currently capturing; the
@@ -91,6 +99,17 @@ public:
     [[nodiscard]] int avatarCorner() const noexcept { return corner_; }
     void setAvatarCorner(int corner);
 
+    [[nodiscard]] double avatarScale() const noexcept { return scale_; }
+    [[nodiscard]] double avatarPosX() const noexcept { return posX_; }
+    [[nodiscard]] double avatarPosY() const noexcept { return posY_; }
+    [[nodiscard]] double avatarMinScale() const noexcept;
+    [[nodiscard]] double avatarMaxScale() const noexcept;
+
+    /// Live size control (size slider). Clamped to the renderer's scale range.
+    Q_INVOKABLE void setAvatarScale(double scale);
+    /// Live free position (drag). nx, ny are normalised [0,1] frame coordinates.
+    Q_INVOKABLE void setAvatarPosition(double nx, double ny);
+
     /// Renders one avatar frame (at the current animation phase plus
     /// `extraSeconds`) straight to a QImage, using the exact tracking -> map ->
     /// render chain that feeds the preview and recording. Used to prove the
@@ -115,6 +134,9 @@ public:
 signals:
     void stateChanged();
     void styleChanged();
+    /// Emitted when the free transform (size / position) changes, from either a
+    /// drag/slider or a placement preset, so the QML size slider stays in sync.
+    void transformChanged();
     /// Emitted once per produced frame (~30 fps) so the live preview surface can
     /// repaint. stateChanged fires only on status transitions, which is too rare
     /// to drive a moving avatar, so this is the per-frame repaint trigger.
@@ -123,6 +145,7 @@ signals:
 private:
     void tick();
     void publishStatus(QString message);
+    void syncTransformFromRenderer();
 
     std::unique_ptr<avatar::ITrackingProvider> provider_;
     avatar::AvatarParameterMapper mapper_;
@@ -138,6 +161,11 @@ private:
     int characterIndex_{0};
     int placementMode_{0};
     int corner_{1};
+    // Cached free-transform values, mirroring the renderer atomics so the QML
+    // properties can read them without touching the renderer off-thread.
+    double scale_{1.0};
+    double posX_{0.5};
+    double posY_{0.46};
 
     creator::domain::SourceId sourceId_;
     std::shared_ptr<creator::capture::LatestVideoFrameMailbox> previewMailbox_;

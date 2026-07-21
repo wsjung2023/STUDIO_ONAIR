@@ -273,7 +273,7 @@ struct Rig final {
 void drawEye(Canvas& cv, const Rig& r, float side /* -1 left, +1 right */,
              float openness, float browUp, const Rgba& skin, const Rgba& iris,
              const Rgba& brow, float eyeW, float eyeH, float almond,
-             bool drawBrow) {
+             bool drawBrow, const Rgba& sclera = rgb(255, 253, 250)) {
     const Pose& p = r.pose;
     const float ex = side * 0.42F;
     const float ey = -0.10F;
@@ -281,8 +281,8 @@ void drawEye(Canvas& cv, const Rig& r, float side /* -1 left, +1 right */,
     const float rx = eyeW * p.R;
     const float ry = eyeH * p.R * almond;
 
-    // Sclera.
-    cv.fillEllipse(e.x, e.y, rx, ry, rgb(255, 253, 250), p.roll);
+    // Sclera (white by default; a dark colour gives glossy "black" eyes).
+    cv.fillEllipse(e.x, e.y, rx, ry, sclera, p.roll);
     // Iris + pupil, shifted by gaze/pitch.
     const float gx = clampf(r.gaze, -0.55F, 0.55F) * rx;
     const float gy = clampf(-r.pitch * 0.35F, -0.4F, 0.4F) * ry;
@@ -553,6 +553,509 @@ void drawFox(Canvas& cv, const Rig& r) {
     }
 }
 
+// Small helper: a subtle brow mark (for the animal faces) that rises with the
+// browUp channel, so browUp visibly drives even the brow-less characters.
+void drawBrowDots(Canvas& cv, const Rig& r, const Rgba& c) {
+    const Pose& p = r.pose;
+    for (float s : {-1.0F, 1.0F}) {
+        const float bu = s < 0.0F ? r.browUpL : r.browUpR;
+        const Pt bp = p.at(s * 0.42F, -0.34F - bu * 0.12F);
+        cv.fillEllipse(bp.x, bp.y, p.R * 0.11F, p.R * 0.045F, c, p.roll);
+    }
+}
+
+void drawManMid(Canvas& cv, const Rig& r) {
+    const Pose& p = r.pose;
+    const Rgba skin = rgb(230, 190, 158);
+    const Rgba skinShade = rgb(206, 164, 132);
+    const Rgba hair = rgb(70, 62, 58);
+    const Rgba hairHi = rgb(104, 94, 88);
+    const Rgba stubble = rgb(96, 84, 84, 0.32F);
+
+    // Collared shirt shoulders.
+    cv.fillRoundedRect(p.cx - p.R * 1.4F, p.cy + p.R * 1.05F, p.cx + p.R * 1.4F,
+                       p.cy + p.R * 2.4F, p.R * 0.4F, rgb(92, 104, 120));
+    cv.fillPolygon({p.at(-0.5F, 1.02F), p.at(0.0F, 1.66F), p.at(0.5F, 1.02F)},
+                   rgb(232, 236, 240));
+    // Neck.
+    cv.fillRoundedRect(p.cx - p.R * 0.3F, p.cy + p.R * 0.6F, p.cx + p.R * 0.3F,
+                       p.cy + p.R * 1.2F, p.R * 0.2F, skinShade);
+    // Ears.
+    cv.fillEllipse(p.at(-0.98F, 0.08F).x, p.at(-0.98F, 0.08F).y, p.R * 0.16F,
+                   p.R * 0.22F, skin, p.roll);
+    cv.fillEllipse(p.at(0.98F, 0.08F).x, p.at(0.98F, 0.08F).y, p.R * 0.16F,
+                   p.R * 0.22F, skin, p.roll);
+    // Face with a heavier, squarer jaw.
+    cv.fillEllipse(p.cx, p.cy, p.R * 0.9F, p.R * 1.0F, skin, p.roll);
+    cv.fillEllipse(p.at(0.0F, 0.44F).x, p.at(0.0F, 0.44F).y, p.R * 0.74F,
+                   p.R * 0.52F, skin, p.roll);
+    // Stubble shadow on the lower jaw/chin.
+    cv.fillEllipse(p.at(0.0F, 0.54F).x, p.at(0.0F, 0.54F).y, p.R * 0.64F,
+                   p.R * 0.36F, stubble, p.roll);
+    cv.fillEllipse(p.at(-0.5F, 0.34F).x, p.at(-0.5F, 0.34F).y, p.R * 0.22F,
+                   p.R * 0.2F, stubble, p.roll);
+    cv.fillEllipse(p.at(0.5F, 0.34F).x, p.at(0.5F, 0.34F).y, p.R * 0.22F,
+                   p.R * 0.2F, stubble, p.roll);
+    // Side-parted hair: a cap plus a sweeping asymmetric fringe.
+    cv.fillEllipse(p.at(-0.04F, -0.66F).x, p.at(-0.04F, -0.66F).y, p.R * 0.95F,
+                   p.R * 0.5F, hair, p.roll);
+    cv.fillPolygon({p.at(-0.95F, -0.82F), p.at(0.38F, -0.96F), p.at(0.2F, -0.4F),
+                    p.at(-0.95F, -0.28F)},
+                   hair);
+    cv.fillEllipse(p.at(-0.5F, -0.8F).x, p.at(-0.5F, -0.8F).y, p.R * 0.1F,
+                   p.R * 0.18F, hairHi, p.roll);
+
+    drawEye(cv, r, -1.0F, r.eyeOpenL, r.browUpL, skin, rgb(96, 72, 52), hair,
+            0.18F, 0.14F, 1.0F, true);
+    drawEye(cv, r, 1.0F, r.eyeOpenR, r.browUpR, skin, rgb(96, 72, 52), hair,
+            0.18F, 0.14F, 1.0F, true);
+    // Heavier brows overlaid on the drawEye brow line.
+    for (float s : {-1.0F, 1.0F}) {
+        const float bu = s < 0.0F ? r.browUpL : r.browUpR;
+        const float browY = -0.38F - bu * 0.10F;
+        cv.strokeLine({p.at(s * 0.62F, browY + 0.02F).x, p.at(s * 0.62F, browY + 0.02F).y},
+                      {p.at(s * 0.2F, browY - 0.02F).x, p.at(s * 0.2F, browY - 0.02F).y},
+                      p.R * 0.06F, hair);
+    }
+    // Nose.
+    const Pt n = p.at(0.0F, 0.22F);
+    cv.fillEllipse(n.x, n.y, p.R * 0.07F, p.R * 0.09F, skinShade, p.roll);
+    // Mouth.
+    const Pt m = p.at(0.0F, 0.5F);
+    const float mw = p.R * (0.15F + 0.16F * r.mouthWide);
+    const float mo = p.R * (0.02F + 0.26F * r.mouthOpen);
+    if (r.mouthOpen > 0.12F) {
+        cv.fillEllipse(m.x, m.y, mw, mo, rgb(150, 76, 78), p.roll);
+        cv.fillEllipse(m.x, m.y, mw * 0.82F, mo * 0.8F, rgb(96, 40, 46), p.roll);
+    } else {
+        cv.strokeLine({p.at(-0.15F, 0.5F).x, p.at(-0.15F, 0.5F).y},
+                      {p.at(0.15F, 0.5F).x, p.at(0.15F, 0.5F).y}, p.R * 0.045F,
+                      rgb(150, 84, 82));
+    }
+}
+
+void drawWoman(Canvas& cv, const Rig& r) {
+    const Pose& p = r.pose;
+    const Rgba skin = rgb(250, 220, 198);
+    const Rgba skinShade = rgb(232, 196, 170);
+    const Rgba hair = rgb(120, 78, 52);
+    const Rgba hairHi = rgb(160, 114, 80);
+    const Rgba lip = rgb(214, 96, 108);
+
+    // Long hair fanning out behind the head and shoulders.
+    cv.fillEllipse(p.cx, p.cy + p.R * 0.45F, p.R * 1.28F, p.R * 1.72F, hair, p.roll);
+    // Top / bust.
+    cv.fillRoundedRect(p.cx - p.R * 1.2F, p.cy + p.R * 1.1F, p.cx + p.R * 1.2F,
+                       p.cy + p.R * 2.4F, p.R * 0.6F, rgb(198, 122, 152));
+    // Neck.
+    cv.fillRoundedRect(p.cx - p.R * 0.22F, p.cy + p.R * 0.6F, p.cx + p.R * 0.22F,
+                       p.cy + p.R * 1.15F, p.R * 0.18F, skinShade);
+    // Face — soft, tapered chin.
+    cv.fillEllipse(p.cx, p.cy, p.R * 0.8F, p.R * 0.98F, skin, p.roll);
+    cv.fillEllipse(p.at(0.0F, 0.46F).x, p.at(0.0F, 0.46F).y, p.R * 0.46F,
+                   p.R * 0.46F, skin, p.roll);
+    drawBlush(cv, r, rgb(255, 150, 156, 0.5F));
+    // Long side locks framing the face.
+    cv.fillPolygon({p.at(-1.08F, -0.5F), p.at(-0.72F, -0.9F), p.at(-0.56F, 0.95F),
+                    p.at(-1.18F, 0.72F)},
+                   hair);
+    cv.fillPolygon({p.at(1.08F, -0.5F), p.at(0.72F, -0.9F), p.at(0.56F, 0.95F),
+                    p.at(1.18F, 0.72F)},
+                   hair);
+    // Centre-parted fringe.
+    cv.fillEllipse(p.cx, p.cy - p.R * 0.6F, p.R * 0.9F, p.R * 0.5F, hair, p.roll);
+    cv.fillPolygon({p.at(-0.92F, -0.62F), p.at(-0.06F, -0.66F), p.at(-0.5F, 0.06F)},
+                   hair);
+    cv.fillPolygon({p.at(0.92F, -0.62F), p.at(0.06F, -0.66F), p.at(0.5F, 0.06F)},
+                   hair);
+    cv.fillEllipse(p.at(-0.42F, -0.78F).x, p.at(-0.42F, -0.78F).y, p.R * 0.08F,
+                   p.R * 0.18F, hairHi, p.roll);
+
+    drawEye(cv, r, -1.0F, r.eyeOpenL, r.browUpL, skin, rgb(122, 84, 60), hair,
+            0.2F, 0.18F, 1.0F, true);
+    drawEye(cv, r, 1.0F, r.eyeOpenR, r.browUpR, skin, rgb(122, 84, 60), hair,
+            0.2F, 0.18F, 1.0F, true);
+    // Long outer lashes.
+    for (float s : {-1.0F, 1.0F}) {
+        const Pt o = p.at(s * 0.62F, -0.16F);
+        cv.strokeLine({o.x, o.y}, {p.at(s * 0.82F, -0.26F).x, p.at(s * 0.82F, -0.26F).y},
+                      p.R * 0.03F, rgb(58, 42, 48));
+        cv.strokeLine({o.x, o.y}, {p.at(s * 0.8F, -0.12F).x, p.at(s * 0.8F, -0.12F).y},
+                      p.R * 0.024F, rgb(58, 42, 48));
+    }
+    // Nose.
+    const Pt n = p.at(0.0F, 0.2F);
+    cv.fillEllipse(n.x, n.y, p.R * 0.045F, p.R * 0.06F, skinShade, p.roll);
+    // Lips.
+    const Pt m = p.at(0.0F, 0.48F);
+    const float mw = p.R * (0.15F + 0.14F * r.mouthWide);
+    const float mo = p.R * (0.02F + 0.26F * r.mouthOpen);
+    if (r.mouthOpen > 0.12F) {
+        cv.fillEllipse(m.x, m.y, mw, mo, lip, p.roll);
+        cv.fillEllipse(m.x, m.y, mw * 0.8F, mo * 0.78F, rgb(120, 46, 60), p.roll);
+        cv.fillEllipse(m.x, m.y + mo * 0.42F, mw * 0.55F, mo * 0.45F,
+                       rgb(226, 120, 130), p.roll);
+    } else {
+        cv.fillEllipse(m.x, m.y, mw * 0.92F, p.R * 0.06F, lip, p.roll);
+    }
+}
+
+void drawBoy(Canvas& cv, const Rig& r) {
+    const Pose& p = r.pose;
+    const Rgba skin = rgb(252, 216, 184);
+    const Rgba skinShade = rgb(234, 190, 158);
+    const Rgba hair = rgb(74, 54, 42);
+    const Rgba hairHi = rgb(108, 82, 64);
+
+    cv.fillRoundedRect(p.cx - p.R * 1.2F, p.cy + p.R * 1.0F, p.cx + p.R * 1.2F,
+                       p.cy + p.R * 2.3F, p.R * 0.5F, rgb(84, 172, 118));
+    cv.fillRoundedRect(p.cx - p.R * 0.24F, p.cy + p.R * 0.62F, p.cx + p.R * 0.24F,
+                       p.cy + p.R * 1.1F, p.R * 0.2F, skinShade);
+    // Ears.
+    cv.fillEllipse(p.at(-0.92F, 0.08F).x, p.at(-0.92F, 0.08F).y, p.R * 0.15F,
+                   p.R * 0.19F, skin, p.roll);
+    cv.fillEllipse(p.at(0.92F, 0.08F).x, p.at(0.92F, 0.08F).y, p.R * 0.15F,
+                   p.R * 0.19F, skin, p.roll);
+    // Small round face.
+    cv.fillEllipse(p.cx, p.cy, p.R * 0.88F, p.R * 0.92F, skin, p.roll);
+    drawBlush(cv, r, rgb(255, 148, 148, 0.6F));
+    // Short boyish hair: a cap with little spikes and a side fringe.
+    cv.fillEllipse(p.cx, p.cy - p.R * 0.56F, p.R * 0.92F, p.R * 0.56F, hair, p.roll);
+    for (float x : {-0.68F, -0.34F, 0.0F, 0.34F, 0.68F}) {
+        cv.fillPolygon({p.at(x - 0.16F, -0.68F), p.at(x + 0.16F, -0.68F),
+                        p.at(x + (x < 0.0F ? -0.05F : 0.05F), -1.02F)},
+                       hair);
+    }
+    cv.fillPolygon({p.at(-0.82F, -0.58F), p.at(-0.15F, -0.6F), p.at(-0.5F, -0.06F)},
+                   hair);
+    cv.fillPolygon({p.at(0.05F, -0.6F), p.at(0.6F, -0.58F), p.at(0.32F, -0.1F)},
+                   hair);
+    cv.fillEllipse(p.at(-0.28F, -0.7F).x, p.at(-0.28F, -0.7F).y, p.R * 0.08F,
+                   p.R * 0.14F, hairHi, p.roll);
+    // Big cheeky eyes.
+    drawEye(cv, r, -1.0F, r.eyeOpenL, r.browUpL, skin, rgb(88, 118, 150), hair,
+            0.23F, 0.22F, 1.0F, false);
+    drawEye(cv, r, 1.0F, r.eyeOpenR, r.browUpR, skin, rgb(88, 118, 150), hair,
+            0.23F, 0.22F, 1.0F, false);
+    drawBrowDots(cv, r, hair);
+    // Nose dot.
+    cv.fillEllipse(p.at(0.0F, 0.22F).x, p.at(0.0F, 0.22F).y, p.R * 0.04F,
+                   p.R * 0.05F, skinShade, p.roll);
+    // Cheeky grin.
+    const float mw = p.R * (0.18F + 0.12F * r.mouthWide);
+    const float mo = p.R * (0.02F + 0.26F * r.mouthOpen);
+    if (r.mouthOpen > 0.12F) {
+        cv.fillEllipse(p.at(0.0F, 0.5F).x, p.at(0.0F, 0.5F).y, mw, mo,
+                       rgb(150, 70, 76), p.roll);
+        cv.fillEllipse(p.at(0.0F, 0.46F).x, p.at(0.0F, 0.46F).y, mw * 0.85F,
+                       mo * 0.35F, rgb(255, 252, 250), p.roll);  // upper teeth
+    } else {
+        cv.strokeLine({p.at(-0.22F, 0.46F).x, p.at(-0.22F, 0.46F).y},
+                      {p.at(0.0F, 0.54F).x, p.at(0.0F, 0.54F).y}, p.R * 0.04F,
+                      rgb(150, 78, 76));
+        cv.strokeLine({p.at(0.0F, 0.54F).x, p.at(0.0F, 0.54F).y},
+                      {p.at(0.22F, 0.46F).x, p.at(0.22F, 0.46F).y}, p.R * 0.04F,
+                      rgb(150, 78, 76));
+    }
+}
+
+void drawGirl(Canvas& cv, const Rig& r) {
+    const Pose& p = r.pose;
+    const Rgba skin = rgb(253, 218, 196);
+    const Rgba skinShade = rgb(236, 192, 166);
+    const Rgba hair = rgb(96, 62, 46);
+    const Rgba hairHi = rgb(132, 92, 66);
+    const Rgba ribbon = rgb(244, 122, 150);
+
+    // Pigtails (twin-tails): big soft puffs on each side, behind the head.
+    cv.fillEllipse(p.at(-1.02F, 0.1F).x, p.at(-1.02F, 0.1F).y, p.R * 0.42F,
+                   p.R * 0.56F, hair, p.roll);
+    cv.fillEllipse(p.at(1.02F, 0.1F).x, p.at(1.02F, 0.1F).y, p.R * 0.42F,
+                   p.R * 0.56F, hair, p.roll);
+    cv.fillRoundedRect(p.cx - p.R * 0.9F, p.cy + p.R * 1.0F, p.cx + p.R * 0.9F,
+                       p.cy + p.R * 2.2F, p.R * 0.5F, rgb(240, 170, 190));
+    cv.fillRoundedRect(p.cx - p.R * 0.22F, p.cy + p.R * 0.6F, p.cx + p.R * 0.22F,
+                       p.cy + p.R * 1.1F, p.R * 0.18F, skinShade);
+    // Round face.
+    cv.fillEllipse(p.cx, p.cy, p.R * 0.86F, p.R * 0.9F, skin, p.roll);
+    drawBlush(cv, r, rgb(255, 146, 152, 0.6F));
+    // Hair crown + bangs.
+    cv.fillEllipse(p.cx, p.cy - p.R * 0.5F, p.R * 0.94F, p.R * 0.62F, hair, p.roll);
+    cv.fillPolygon({p.at(-0.9F, -0.5F), p.at(-0.3F, -0.55F), p.at(-0.6F, 0.02F)}, hair);
+    cv.fillPolygon({p.at(-0.35F, -0.56F), p.at(0.35F, -0.56F), p.at(0.0F, 0.06F)}, hair);
+    cv.fillPolygon({p.at(0.3F, -0.55F), p.at(0.9F, -0.5F), p.at(0.6F, 0.02F)}, hair);
+    cv.fillEllipse(p.at(-0.34F, -0.62F).x, p.at(-0.34F, -0.62F).y, p.R * 0.08F,
+                   p.R * 0.14F, hairHi, p.roll);
+    // Ribbons on the pigtails.
+    cv.fillPolygon({p.at(-1.02F, -0.28F), p.at(-1.3F, -0.44F), p.at(-1.3F, -0.1F)}, ribbon);
+    cv.fillPolygon({p.at(-1.02F, -0.28F), p.at(-0.74F, -0.44F), p.at(-0.74F, -0.1F)}, ribbon);
+    cv.fillPolygon({p.at(1.02F, -0.28F), p.at(1.3F, -0.44F), p.at(1.3F, -0.1F)}, ribbon);
+    cv.fillPolygon({p.at(1.02F, -0.28F), p.at(0.74F, -0.44F), p.at(0.74F, -0.1F)}, ribbon);
+    // Big sparkly eyes.
+    drawEye(cv, r, -1.0F, r.eyeOpenL, r.browUpL, skin, rgb(150, 96, 176), hair,
+            0.24F, 0.24F, 1.0F, false);
+    drawEye(cv, r, 1.0F, r.eyeOpenR, r.browUpR, skin, rgb(150, 96, 176), hair,
+            0.24F, 0.24F, 1.0F, false);
+    // Extra sparkle catchlights (only meaningful while the eyes are open).
+    if (r.eyeOpenL > 0.35F) {
+        const Pt s = p.at(-0.5F, -0.02F);
+        cv.fillEllipse(s.x, s.y, p.R * 0.03F, p.R * 0.03F, rgb(255, 255, 255, 0.9F), p.roll);
+    }
+    if (r.eyeOpenR > 0.35F) {
+        const Pt s = p.at(0.34F, -0.02F);
+        cv.fillEllipse(s.x, s.y, p.R * 0.03F, p.R * 0.03F, rgb(255, 255, 255, 0.9F), p.roll);
+    }
+    drawBrowDots(cv, r, hair);
+    // Nose + small smile.
+    cv.fillEllipse(p.at(0.0F, 0.22F).x, p.at(0.0F, 0.22F).y, p.R * 0.035F,
+                   p.R * 0.045F, skinShade, p.roll);
+    const float mw = p.R * (0.14F + 0.12F * r.mouthWide);
+    const float mo = p.R * (0.02F + 0.24F * r.mouthOpen);
+    if (r.mouthOpen > 0.12F) {
+        cv.fillEllipse(p.at(0.0F, 0.5F).x, p.at(0.0F, 0.5F).y, mw, mo,
+                       rgb(210, 96, 110), p.roll);
+        cv.fillEllipse(p.at(0.0F, 0.52F).x, p.at(0.0F, 0.52F).y, mw * 0.6F,
+                       mo * 0.5F, rgb(232, 128, 138), p.roll);
+    } else {
+        cv.strokeLine({p.at(-0.12F, 0.48F).x, p.at(-0.12F, 0.48F).y},
+                      {p.at(0.0F, 0.54F).x, p.at(0.0F, 0.54F).y}, p.R * 0.032F,
+                      rgb(206, 96, 110));
+        cv.strokeLine({p.at(0.0F, 0.54F).x, p.at(0.0F, 0.54F).y},
+                      {p.at(0.12F, 0.48F).x, p.at(0.12F, 0.48F).y}, p.R * 0.032F,
+                      rgb(206, 96, 110));
+    }
+}
+
+void drawTeen(Canvas& cv, const Rig& r) {
+    const Pose& p = r.pose;
+    const Rgba skin = rgb(251, 219, 197);
+    const Rgba skinShade = rgb(234, 194, 168);
+    const Rgba hair = rgb(58, 52, 66);
+    const Rgba hairHi = rgb(92, 84, 104);
+    const Rgba collar = rgb(48, 66, 110);
+
+    // Neat bob: hair rounded to the jaw, behind the head.
+    cv.fillEllipse(p.cx, p.cy + p.R * 0.1F, p.R * 1.05F, p.R * 1.16F, hair, p.roll);
+    // Blazer / sailor top.
+    cv.fillRoundedRect(p.cx - p.R * 1.25F, p.cy + p.R * 1.05F, p.cx + p.R * 1.25F,
+                       p.cy + p.R * 2.4F, p.R * 0.5F, rgb(236, 238, 244));
+    // Sailor collar with stripes.
+    cv.fillPolygon({p.at(-0.9F, 1.02F), p.at(0.9F, 1.02F), p.at(0.55F, 1.5F),
+                    p.at(-0.55F, 1.5F)},
+                   collar);
+    cv.fillPolygon({p.at(-0.42F, 1.02F), p.at(0.42F, 1.02F), p.at(0.0F, 1.62F)},
+                   rgb(236, 238, 244));
+    cv.strokeLine({p.at(-0.8F, 1.12F).x, p.at(-0.8F, 1.12F).y},
+                  {p.at(-0.5F, 1.44F).x, p.at(-0.5F, 1.44F).y}, p.R * 0.03F,
+                  rgb(236, 238, 244));
+    cv.strokeLine({p.at(0.8F, 1.12F).x, p.at(0.8F, 1.12F).y},
+                  {p.at(0.5F, 1.44F).x, p.at(0.5F, 1.44F).y}, p.R * 0.03F,
+                  rgb(236, 238, 244));
+    // Neck.
+    cv.fillRoundedRect(p.cx - p.R * 0.22F, p.cy + p.R * 0.6F, p.cx + p.R * 0.22F,
+                       p.cy + p.R * 1.12F, p.R * 0.18F, skinShade);
+    // Face.
+    cv.fillEllipse(p.cx, p.cy, p.R * 0.82F, p.R * 0.96F, skin, p.roll);
+    cv.fillEllipse(p.at(0.0F, 0.46F).x, p.at(0.0F, 0.46F).y, p.R * 0.5F,
+                   p.R * 0.42F, skin, p.roll);
+    drawBlush(cv, r, rgb(255, 152, 156, 0.45F));
+    // Front bob fringe framing the face.
+    cv.fillEllipse(p.cx, p.cy - p.R * 0.56F, p.R * 0.92F, p.R * 0.54F, hair, p.roll);
+    cv.fillPolygon({p.at(-0.95F, -0.5F), p.at(-0.9F, -0.9F), p.at(-0.62F, 0.5F),
+                    p.at(-0.98F, 0.35F)},
+                   hair);
+    cv.fillPolygon({p.at(0.95F, -0.5F), p.at(0.9F, -0.9F), p.at(0.62F, 0.5F),
+                    p.at(0.98F, 0.35F)},
+                   hair);
+    cv.fillPolygon({p.at(-0.7F, -0.6F), p.at(0.05F, -0.62F), p.at(-0.4F, 0.0F)}, hair);
+    cv.fillPolygon({p.at(-0.05F, -0.62F), p.at(0.7F, -0.6F), p.at(0.35F, 0.0F)}, hair);
+    cv.fillEllipse(p.at(-0.36F, -0.68F).x, p.at(-0.36F, -0.68F).y, p.R * 0.08F,
+                   p.R * 0.16F, hairHi, p.roll);
+
+    drawEye(cv, r, -1.0F, r.eyeOpenL, r.browUpL, skin, rgb(96, 74, 96), hair,
+            0.21F, 0.2F, 1.0F, true);
+    drawEye(cv, r, 1.0F, r.eyeOpenR, r.browUpR, skin, rgb(96, 74, 96), hair,
+            0.21F, 0.2F, 1.0F, true);
+    // Nose + gentle smile.
+    cv.fillEllipse(p.at(0.0F, 0.22F).x, p.at(0.0F, 0.22F).y, p.R * 0.04F,
+                   p.R * 0.05F, skinShade, p.roll);
+    const float mw = p.R * (0.14F + 0.13F * r.mouthWide);
+    const float mo = p.R * (0.02F + 0.24F * r.mouthOpen);
+    if (r.mouthOpen > 0.12F) {
+        cv.fillEllipse(p.at(0.0F, 0.5F).x, p.at(0.0F, 0.5F).y, mw, mo,
+                       rgb(196, 92, 104), p.roll);
+        cv.fillEllipse(p.at(0.0F, 0.5F).x, p.at(0.0F, 0.5F).y, mw * 0.78F,
+                       mo * 0.76F, rgb(120, 48, 60), p.roll);
+    } else {
+        cv.strokeLine({p.at(-0.12F, 0.5F).x, p.at(-0.12F, 0.5F).y},
+                      {p.at(0.0F, 0.54F).x, p.at(0.0F, 0.54F).y}, p.R * 0.03F,
+                      rgb(190, 96, 104));
+        cv.strokeLine({p.at(0.0F, 0.54F).x, p.at(0.0F, 0.54F).y},
+                      {p.at(0.12F, 0.5F).x, p.at(0.12F, 0.5F).y}, p.R * 0.03F,
+                      rgb(190, 96, 104));
+    }
+}
+
+void drawDog(Canvas& cv, const Rig& r) {
+    const Pose& p = r.pose;
+    const Rgba fur = rgb(198, 150, 104);
+    const Rgba furDk = rgb(166, 120, 78);
+    const Rgba cream = rgb(246, 228, 202);
+    const Rgba black = rgb(40, 34, 32);
+    const Rgba tongue = rgb(232, 118, 138);
+
+    cv.fillRoundedRect(p.cx - p.R * 1.0F, p.cy + p.R * 0.85F, p.cx + p.R * 1.0F,
+                       p.cy + p.R * 2.2F, p.R * 0.6F, furDk);
+    // Floppy droopy ears hanging from the top-sides (behind the head).
+    cv.fillEllipse(p.at(-0.95F, 0.35F).x, p.at(-0.95F, 0.35F).y, p.R * 0.34F,
+                   p.R * 0.66F, furDk, p.roll + 0.25F);
+    cv.fillEllipse(p.at(0.95F, 0.35F).x, p.at(0.95F, 0.35F).y, p.R * 0.34F,
+                   p.R * 0.66F, furDk, p.roll - 0.25F);
+    // Round head.
+    cv.fillEllipse(p.cx, p.cy, p.R * 0.95F, p.R * 0.9F, fur, p.roll);
+    // A patch over one eye for character.
+    cv.fillEllipse(p.at(0.42F, -0.1F).x, p.at(0.42F, -0.1F).y, p.R * 0.34F,
+                   p.R * 0.34F, furDk, p.roll);
+    // Cream muzzle.
+    cv.fillEllipse(p.at(0.0F, 0.34F).x, p.at(0.0F, 0.34F).y, p.R * 0.46F,
+                   p.R * 0.4F, cream, p.roll);
+    drawBlush(cv, r, rgb(255, 150, 140, 0.4F));
+
+    drawEye(cv, r, -1.0F, r.eyeOpenL, r.browUpL, fur, rgb(78, 56, 44),
+            rgb(120, 88, 60), 0.2F, 0.2F, 1.0F, false);
+    drawEye(cv, r, 1.0F, r.eyeOpenR, r.browUpR, fur, rgb(78, 56, 44),
+            rgb(120, 88, 60), 0.2F, 0.2F, 1.0F, false);
+    drawBrowDots(cv, r, furDk);
+
+    // Nose at the top of the muzzle.
+    const Pt nose = p.at(0.0F, 0.22F);
+    cv.fillEllipse(nose.x, nose.y, p.R * 0.12F, p.R * 0.1F, black, p.roll);
+    cv.fillEllipse(nose.x - p.R * 0.03F, nose.y - p.R * 0.03F, p.R * 0.035F,
+                   p.R * 0.03F, rgb(140, 140, 148, 0.8F), p.roll);
+    // Happy mouth with a lolling tongue when open.
+    const float mo = p.R * (0.02F + 0.32F * r.mouthOpen);
+    if (r.mouthOpen > 0.12F) {
+        cv.fillEllipse(p.at(0.0F, 0.5F).x, p.at(0.0F, 0.5F).y,
+                       p.R * (0.2F + 0.08F * r.mouthWide), mo, rgb(120, 52, 60),
+                       p.roll);
+        cv.fillEllipse(p.at(0.0F, 0.56F).x, p.at(0.0F, 0.56F).y + mo * 0.4F,
+                       p.R * 0.14F, mo * 0.7F, tongue, p.roll);
+    } else {
+        cv.strokeLine({nose.x, nose.y}, {p.at(0.0F, 0.44F).x, p.at(0.0F, 0.44F).y},
+                      p.R * 0.026F, rgb(120, 88, 66));
+        cv.strokeLine({p.at(0.0F, 0.44F).x, p.at(0.0F, 0.44F).y},
+                      {p.at(-0.18F, 0.5F).x, p.at(-0.18F, 0.5F).y}, p.R * 0.026F,
+                      rgb(120, 88, 66));
+        cv.strokeLine({p.at(0.0F, 0.44F).x, p.at(0.0F, 0.44F).y},
+                      {p.at(0.18F, 0.5F).x, p.at(0.18F, 0.5F).y}, p.R * 0.026F,
+                      rgb(120, 88, 66));
+    }
+}
+
+void drawBear(Canvas& cv, const Rig& r) {
+    const Pose& p = r.pose;
+    const Rgba fur = rgb(152, 112, 82);
+    const Rgba furDk = rgb(120, 86, 60);
+    const Rgba muzzle = rgb(208, 178, 144);
+    const Rgba black = rgb(38, 30, 28);
+
+    cv.fillRoundedRect(p.cx - p.R * 1.0F, p.cy + p.R * 0.85F, p.cx + p.R * 1.0F,
+                       p.cy + p.R * 2.2F, p.R * 0.6F, furDk);
+    // Round ears on top.
+    cv.fillEllipse(p.at(-0.66F, -0.86F).x, p.at(-0.66F, -0.86F).y, p.R * 0.32F,
+                   p.R * 0.32F, fur, p.roll);
+    cv.fillEllipse(p.at(0.66F, -0.86F).x, p.at(0.66F, -0.86F).y, p.R * 0.32F,
+                   p.R * 0.32F, fur, p.roll);
+    cv.fillEllipse(p.at(-0.66F, -0.84F).x, p.at(-0.66F, -0.84F).y, p.R * 0.16F,
+                   p.R * 0.16F, muzzle, p.roll);
+    cv.fillEllipse(p.at(0.66F, -0.84F).x, p.at(0.66F, -0.84F).y, p.R * 0.16F,
+                   p.R * 0.16F, muzzle, p.roll);
+    // Round head.
+    cv.fillEllipse(p.cx, p.cy, p.R * 0.96F, p.R * 0.92F, fur, p.roll);
+    // Muzzle.
+    cv.fillEllipse(p.at(0.0F, 0.32F).x, p.at(0.0F, 0.32F).y, p.R * 0.44F,
+                   p.R * 0.36F, muzzle, p.roll);
+    drawBlush(cv, r, rgb(240, 150, 130, 0.45F));
+
+    drawEye(cv, r, -1.0F, r.eyeOpenL, r.browUpL, fur, rgb(60, 44, 36),
+            rgb(90, 66, 46), 0.17F, 0.18F, 1.0F, false);
+    drawEye(cv, r, 1.0F, r.eyeOpenR, r.browUpR, fur, rgb(60, 44, 36),
+            rgb(90, 66, 46), 0.17F, 0.18F, 1.0F, false);
+    drawBrowDots(cv, r, furDk);
+
+    // Nose + mouth.
+    const Pt nose = p.at(0.0F, 0.18F);
+    cv.fillEllipse(nose.x, nose.y, p.R * 0.13F, p.R * 0.1F, black, p.roll);
+    const float mo = p.R * (0.02F + 0.28F * r.mouthOpen);
+    if (r.mouthOpen > 0.12F) {
+        cv.fillEllipse(p.at(0.0F, 0.44F).x, p.at(0.0F, 0.44F).y,
+                       p.R * (0.14F + 0.08F * r.mouthWide), mo, rgb(110, 54, 58),
+                       p.roll);
+    } else {
+        cv.strokeLine({nose.x, nose.y}, {p.at(0.0F, 0.4F).x, p.at(0.0F, 0.4F).y},
+                      p.R * 0.028F, rgb(90, 64, 50));
+        cv.strokeLine({p.at(0.0F, 0.4F).x, p.at(0.0F, 0.4F).y},
+                      {p.at(-0.16F, 0.46F).x, p.at(-0.16F, 0.46F).y}, p.R * 0.028F,
+                      rgb(90, 64, 50));
+        cv.strokeLine({p.at(0.0F, 0.4F).x, p.at(0.0F, 0.4F).y},
+                      {p.at(0.16F, 0.46F).x, p.at(0.16F, 0.46F).y}, p.R * 0.028F,
+                      rgb(90, 64, 50));
+    }
+}
+
+void drawAlien(Canvas& cv, const Rig& r) {
+    const Pose& p = r.pose;
+    const Rgba head = rgb(120, 198, 168);
+    const Rgba headDk = rgb(92, 170, 142);
+    const Rgba headHi = rgb(168, 224, 200);
+    const Rgba rim = rgb(70, 148, 126);
+    const Rgba eyeBlack = rgb(20, 24, 28);
+
+    // Antennae (behind the head), lifting slightly with browUp.
+    const float lift = (r.browUpL + r.browUpR) * 0.5F * 0.22F;
+    for (float s : {-1.0F, 1.0F}) {
+        const Pt base = p.at(s * 0.34F, -0.86F);
+        const Pt tip = p.at(s * 0.52F, -1.5F - lift);
+        cv.strokeLine({base.x, base.y}, {tip.x, tip.y}, p.R * 0.05F, headDk);
+        cv.fillEllipse(tip.x, tip.y, p.R * 0.12F, p.R * 0.12F, rgb(150, 236, 120));
+        cv.fillEllipse(tip.x - p.R * 0.03F, tip.y - p.R * 0.03F, p.R * 0.035F,
+                       p.R * 0.035F, rgb(255, 255, 255, 0.85F));
+    }
+    // Slim neck / body.
+    cv.fillRoundedRect(p.cx - p.R * 0.7F, p.cy + p.R * 0.95F, p.cx + p.R * 0.7F,
+                       p.cy + p.R * 2.2F, p.R * 0.5F, headDk);
+    // Smooth tapered head: rounded cranium + a pointed chin.
+    cv.fillEllipse(p.cx, p.cy - p.R * 0.1F, p.R * 0.92F, p.R * 0.86F, head, p.roll);
+    cv.fillPolygon({p.at(-0.58F, 0.3F), p.at(0.58F, 0.3F), p.at(0.0F, 1.08F)}, head);
+    // Cranium sheen.
+    cv.fillEllipse(p.at(-0.3F, -0.55F).x, p.at(-0.3F, -0.55F).y, p.R * 0.26F,
+                   p.R * 0.18F, headHi, p.roll);
+    // Big glossy black almond eyes: a teal rim, then the reused eye with a dark
+    // sclera so blink + gaze + catchlight all still read.
+    for (float s : {-1.0F, 1.0F}) {
+        const Pt e = p.at(s * 0.42F, -0.10F);  // matches drawEye's eye line
+        cv.fillEllipse(e.x, e.y, 0.3F * p.R * 1.14F, 0.24F * p.R * 1.35F * 1.14F,
+                       rim, p.roll);
+    }
+    // Reuse drawEye with a dark sclera so blink + gaze + catchlight still read on
+    // the big glossy black almond eyes.
+    drawEye(cv, r, -1.0F, r.eyeOpenL, r.browUpL, head, eyeBlack, headDk, 0.3F,
+            0.24F, 1.35F, false, eyeBlack);
+    drawEye(cv, r, 1.0F, r.eyeOpenR, r.browUpR, head, eyeBlack, headDk, 0.3F,
+            0.24F, 1.35F, false, eyeBlack);
+    // Tiny mouth.
+    const float mo = p.R * (0.015F + 0.12F * r.mouthOpen);
+    if (r.mouthOpen > 0.12F) {
+        cv.fillEllipse(p.at(0.0F, 0.62F).x, p.at(0.0F, 0.62F).y,
+                       p.R * (0.06F + 0.05F * r.mouthWide), mo, rgb(60, 40, 50),
+                       p.roll);
+    } else {
+        cv.strokeLine({p.at(-0.08F, 0.62F).x, p.at(-0.08F, 0.62F).y},
+                      {p.at(0.08F, 0.62F).x, p.at(0.08F, 0.62F).y}, p.R * 0.03F,
+                      headDk);
+    }
+}
+
 struct Backdrop final {
     Rgba top, bottom;
 };
@@ -563,6 +1066,22 @@ Backdrop backdropFor(AvatarCharacterId id) {
             return {rgb(206, 240, 224), rgb(150, 210, 196)};
         case AvatarCharacterId::Fox:
             return {rgb(255, 224, 196), rgb(250, 186, 150)};
+        case AvatarCharacterId::ManMid:
+            return {rgb(214, 224, 236), rgb(176, 192, 214)};
+        case AvatarCharacterId::Woman:
+            return {rgb(248, 220, 234), rgb(228, 184, 208)};
+        case AvatarCharacterId::Boy:
+            return {rgb(214, 240, 220), rgb(174, 216, 188)};
+        case AvatarCharacterId::Girl:
+            return {rgb(252, 224, 236), rgb(244, 190, 214)};
+        case AvatarCharacterId::Teen:
+            return {rgb(220, 228, 244), rgb(186, 200, 230)};
+        case AvatarCharacterId::Dog:
+            return {rgb(246, 232, 208), rgb(226, 198, 158)};
+        case AvatarCharacterId::Bear:
+            return {rgb(236, 222, 202), rgb(206, 182, 152)};
+        case AvatarCharacterId::Alien:
+            return {rgb(210, 234, 226), rgb(150, 200, 186)};
         case AvatarCharacterId::Human:
         default:
             return {rgb(226, 220, 248), rgb(196, 190, 236)};
@@ -576,6 +1095,30 @@ void drawCharacter(Canvas& cv, AvatarCharacterId id, const Rig& r) {
             break;
         case AvatarCharacterId::Fox:
             drawFox(cv, r);
+            break;
+        case AvatarCharacterId::ManMid:
+            drawManMid(cv, r);
+            break;
+        case AvatarCharacterId::Woman:
+            drawWoman(cv, r);
+            break;
+        case AvatarCharacterId::Boy:
+            drawBoy(cv, r);
+            break;
+        case AvatarCharacterId::Girl:
+            drawGirl(cv, r);
+            break;
+        case AvatarCharacterId::Teen:
+            drawTeen(cv, r);
+            break;
+        case AvatarCharacterId::Dog:
+            drawDog(cv, r);
+            break;
+        case AvatarCharacterId::Bear:
+            drawBear(cv, r);
+            break;
+        case AvatarCharacterId::Alien:
+            drawAlien(cv, r);
             break;
         case AvatarCharacterId::Human:
         default:
@@ -591,6 +1134,20 @@ std::vector<AvatarCharacterInfo> avatarCharacterCatalog() {
         {AvatarCharacterId::Human, "human", "\xEC\x82\xAC\xEB\x9E\x8C"},          // 사람
         {AvatarCharacterId::Cat, "cat", "\xEA\xB3\xA0\xEC\x96\x91\xEC\x9D\xB4"},  // 고양이
         {AvatarCharacterId::Fox, "fox", "\xEC\x97\xAC\xEC\x9A\xB0"},              // 여우
+        {AvatarCharacterId::ManMid, "man_mid",
+         "\xEC\x95\x84\xEC\xA0\x80\xEC\x94\xA8"},  // 아저씨
+        {AvatarCharacterId::Woman, "woman", "\xEC\x97\xAC\xEC\x9E\x90"},  // 여자
+        {AvatarCharacterId::Boy, "boy",
+         "\xEB\x82\xA8\xEC\x9E\x90\xEC\x95\xA0"},  // 남자애
+        {AvatarCharacterId::Girl, "girl",
+         "\xEC\x97\xAC\xEC\x9E\x90\xEC\x95\xA0"},  // 여자애
+        {AvatarCharacterId::Teen, "teen",
+         "\xEC\x86\x8C\xEB\x85\x80(\xEC\xA4\x91\xED\x95\x99\xEC\x83\x9D)"},  // 소녀(중학생)
+        {AvatarCharacterId::Dog, "dog",
+         "\xEA\xB0\x95\xEC\x95\x84\xEC\xA7\x80"},                       // 강아지
+        {AvatarCharacterId::Bear, "bear", "\xEA\xB3\xB0"},              // 곰
+        {AvatarCharacterId::Alien, "alien",
+         "\xEC\x99\xB8\xEA\xB3\x84\xEC\x9D\xB8"},  // 외계인
     };
 }
 
@@ -598,6 +1155,49 @@ std::vector<AvatarParameterBinding> characterAvatarBindings() {
     // Identical channel mapping to the placeholder, so the same
     // AvatarParameterMapper drives either renderer.
     return placeholderAvatarBindings();
+}
+
+namespace {
+
+// Normalised (posX, posY) head-centre presets for the four corners. Chosen so the
+// smaller overlay avatar (with its legibility card and a little body) sits neatly
+// inside the frame edge.
+struct CornerPreset final {
+    float nx, ny;
+};
+
+CornerPreset cornerPreset(AvatarCorner corner) {
+    switch (corner) {
+        case AvatarCorner::LeftTop:
+            return {0.17F, 0.30F};
+        case AvatarCorner::RightTop:
+            return {0.83F, 0.30F};
+        case AvatarCorner::LeftBottom:
+            return {0.17F, 0.66F};
+        case AvatarCorner::RightBottom:
+        default:
+            return {0.83F, 0.66F};
+    }
+}
+
+constexpr float kFrontScale = 1.0F;
+constexpr float kFrontPosX = 0.5F;
+constexpr float kFrontPosY = 0.46F;
+constexpr float kCornerScale = 0.55F;
+
+}  // namespace
+
+void CharacterAvatarRenderer::applyFrontPreset() noexcept {
+    userScale_.store(kFrontScale, std::memory_order_relaxed);
+    posX_.store(kFrontPosX, std::memory_order_relaxed);
+    posY_.store(kFrontPosY, std::memory_order_relaxed);
+}
+
+void CharacterAvatarRenderer::applyCornerPreset(AvatarCorner corner) noexcept {
+    const CornerPreset preset = cornerPreset(corner);
+    userScale_.store(kCornerScale, std::memory_order_relaxed);
+    posX_.store(preset.nx, std::memory_order_relaxed);
+    posY_.store(preset.ny, std::memory_order_relaxed);
 }
 
 CharacterAvatarRenderer::CharacterAvatarRenderer(std::uint32_t width,
@@ -610,7 +1210,15 @@ CharacterAvatarRenderer::CharacterAvatarRenderer(std::uint32_t width,
       supersample_(std::clamp<std::uint32_t>(supersample, 1U, 4U)),
       character_(character),
       placementMode_(placement.mode),
-      placementCorner_(placement.corner) {}
+      placementCorner_(placement.corner) {
+    // Seed the free transform from the initial placement so the very first frame
+    // already matches the requested preset.
+    if (placement.mode == AvatarPlacementMode::Corner) {
+        applyCornerPreset(placement.corner);
+    } else {
+        applyFrontPreset();
+    }
+}
 
 core::Result<AvatarRenderFrame> CharacterAvatarRenderer::render(
     core::TimestampNs timestamp,
@@ -635,30 +1243,34 @@ core::Result<AvatarRenderFrame> CharacterAvatarRenderer::render(
 
     const AvatarCharacterId id = character_.load(std::memory_order_relaxed);
     const AvatarPlacementMode mode = placementMode_.load(std::memory_order_relaxed);
-    const AvatarCorner corner = placementCorner_.load(std::memory_order_relaxed);
+    const float scale = userScale_.load(std::memory_order_relaxed);
+    const float nx = posX_.load(std::memory_order_relaxed);
+    const float ny = posY_.load(std::memory_order_relaxed);
 
     const float w = static_cast<float>(width_);
     const float h = static_cast<float>(height_);
     Canvas cv{width_, height_, supersample_};
 
-    // Head geometry differs by placement.
+    // Free transform: the head radius is baseR * userScale, and the head centre is
+    // the normalised (posX, posY) mapped into the frame, plus a small yaw/pitch
+    // parallax. Clamp so at least part of the head always stays on-frame — the
+    // avatar can be moved and resized freely but never fully lost. Placement mode
+    // now controls only the backdrop style (opaque front vs transparent overlay).
+    const float baseR = std::min(w, h) * 0.30F;
     Pose pose;
     pose.roll = r.roll * 0.42F;  // radians
+    pose.R = baseR * scale;
+    const float rawCx = nx * w + r.yaw * pose.R * 0.20F;
+    const float rawCy = ny * h - r.pitch * pose.R * 0.16F;
+    const float marginX = pose.R * 0.4F;
+    const float marginY = pose.R * 0.4F;
+    pose.cx = clampf(rawCx, marginX, w - marginX);
+    pose.cy = clampf(rawCy, marginY, h - marginY);
+
     if (mode == AvatarPlacementMode::Front) {
         cv.fillVerticalGradient(backdropFor(id).top, backdropFor(id).bottom);
-        pose.R = std::min(w, h) * 0.30F;
-        pose.cx = w * 0.5F + r.yaw * pose.R * 0.22F;
-        pose.cy = h * 0.46F - r.pitch * pose.R * 0.16F;
     } else {
         cv.clearTransparent();
-        pose.R = std::min(w, h) * 0.17F;
-        const float mx = pose.R * 1.55F;  // margin from edges
-        const bool left = corner == AvatarCorner::LeftBottom ||
-                          corner == AvatarCorner::LeftTop;
-        const bool top = corner == AvatarCorner::LeftTop ||
-                         corner == AvatarCorner::RightTop;
-        pose.cx = (left ? mx : w - mx) + r.yaw * pose.R * 0.2F;
-        pose.cy = (top ? mx : h - mx * 1.15F) - r.pitch * pose.R * 0.14F;
         // Soft rounded backdrop card so the avatar stays legible over any screen.
         cv.fillRoundedRect(pose.cx - pose.R * 1.5F, pose.cy - pose.R * 1.7F,
                            pose.cx + pose.R * 1.5F, pose.cy + pose.R * 1.9F,

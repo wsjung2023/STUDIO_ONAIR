@@ -672,6 +672,52 @@ Item {
                         }
                     }
 
+                    // Free size control. The avatar can be resized live between
+                    // the renderer's min/max scale; dragging in the preview moves
+                    // it freely, and these presets/sliders update together.
+                    Label {
+                        visible: avatarSceneController.avatarStyleSelectable
+                        text: qsTr("크기")
+                        color: theme.textMuted; font.family: theme.fontFamily
+                        font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold
+                        font.capitalization: Font.AllUppercase; font.letterSpacing: 1
+                    }
+                    RowLayout {
+                        visible: avatarSceneController.avatarStyleSelectable
+                        Layout.fillWidth: true
+                        spacing: 8
+                        Slider {
+                            id: avatarSizeSlider
+                            objectName: "studioAvatarSizeSlider"
+                            Layout.fillWidth: true
+                            from: avatarSceneController.avatarMinScale
+                            to: avatarSceneController.avatarMaxScale
+                            value: avatarSceneController.avatarScale
+                            Accessible.name: qsTr("Avatar size")
+                            onMoved: avatarSceneController.setAvatarScale(value)
+                            // Keep in sync when a preset or drag changes the scale.
+                            Connections {
+                                target: avatarSceneController
+                                function onTransformChanged() {
+                                    avatarSizeSlider.value = avatarSceneController.avatarScale
+                                }
+                            }
+                        }
+                        Label {
+                            text: avatarSceneController.avatarScale.toFixed(2) + "x"
+                            color: theme.textSecondary
+                            font.pixelSize: 11
+                        }
+                    }
+                    Label {
+                        visible: avatarSceneController.avatarStyleSelectable
+                        Layout.fillWidth: true
+                        text: qsTr("미리보기에서 아바타를 드래그해 위치를 옮기고, 크기 슬라이더로 크기를 조정하세요.")
+                        wrapMode: Text.WordWrap
+                        color: theme.textMuted
+                        font.pixelSize: 11
+                    }
+
                     Label { text: qsTr("Microphone"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
 
                     ComboBox {
@@ -933,6 +979,32 @@ Item {
                             objectName: "studioAvatarNativePreview"
                             anchors.fill: parent
                             avatarController: avatarSceneController
+                        }
+
+                        // Free-position drag: map the pointer to normalised
+                        // [0,1] frame coordinates and move the avatar live. The
+                        // preview renders the avatar frame at the stage aspect, so
+                        // this mapping matches the baked frame 1:1.
+                        MouseArea {
+                            id: avatarDragArea
+                            objectName: "studioAvatarDragArea"
+                            anchors.fill: parent
+                            enabled: avatarSceneController.avatarStyleSelectable
+                            cursorShape: Qt.OpenHandCursor
+                            preventStealing: true
+                            function moveTo(px, py) {
+                                var nx = Math.max(0, Math.min(1, px / Math.max(1, width)))
+                                var ny = Math.max(0, Math.min(1, py / Math.max(1, height)))
+                                avatarSceneController.setAvatarPosition(nx, ny)
+                            }
+                            onPressed: function(mouse) {
+                                cursorShape = Qt.ClosedHandCursor
+                                moveTo(mouse.x, mouse.y)
+                            }
+                            onPositionChanged: function(mouse) {
+                                if (pressed) moveTo(mouse.x, mouse.y)
+                            }
+                            onReleased: cursorShape = Qt.OpenHandCursor
                         }
 
                         Rectangle {

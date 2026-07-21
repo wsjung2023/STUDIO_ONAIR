@@ -46,6 +46,9 @@ AvatarSceneController::AvatarSceneController(
         placementMode_ =
             placement.mode == avatar::AvatarPlacementMode::Corner ? 1 : 0;
         corner_ = static_cast<int>(placement.corner);
+        scale_ = characterControl_->userScale();
+        posX_ = characterControl_->posX();
+        posY_ = characterControl_->posY();
     }
     const QString trackingKind = usingRealTracking
                                      ? tr("live face tracking")
@@ -124,9 +127,17 @@ void AvatarSceneController::setAvatarPlacementMode(int mode) {
     if (clamped == placementMode_) return;
     placementMode_ = clamped;
     if (characterControl_ != nullptr) {
-        characterControl_->setPlacementMode(
-            clamped == 1 ? avatar::AvatarPlacementMode::Corner
-                         : avatar::AvatarPlacementMode::Front);
+        // Switching style also snaps the free transform to that style's preset
+        // (front = centred + large + opaque; corner = the current corner + small).
+        if (clamped == 1) {
+            characterControl_->setPlacementMode(avatar::AvatarPlacementMode::Corner);
+            characterControl_->applyCornerPreset(
+                static_cast<avatar::AvatarCorner>(corner_));
+        } else {
+            characterControl_->setPlacementMode(avatar::AvatarPlacementMode::Front);
+            characterControl_->applyFrontPreset();
+        }
+        syncTransformFromRenderer();
     }
     emit styleChanged();
 }
@@ -137,8 +148,49 @@ void AvatarSceneController::setAvatarCorner(int corner) {
     if (characterControl_ != nullptr) {
         characterControl_->setPlacementCorner(
             static_cast<avatar::AvatarCorner>(corner));
+        // Picking a corner also moves/sizes the avatar to that corner preset.
+        characterControl_->applyCornerPreset(
+            static_cast<avatar::AvatarCorner>(corner));
+        syncTransformFromRenderer();
     }
     emit styleChanged();
+}
+
+double AvatarSceneController::avatarMinScale() const noexcept {
+    return static_cast<double>(avatar::CharacterAvatarRenderer::kMinScale);
+}
+
+double AvatarSceneController::avatarMaxScale() const noexcept {
+    return static_cast<double>(avatar::CharacterAvatarRenderer::kMaxScale);
+}
+
+void AvatarSceneController::setAvatarScale(double scale) {
+    if (characterControl_ == nullptr) return;
+    characterControl_->setUserScale(static_cast<float>(scale));
+    const double applied = static_cast<double>(characterControl_->userScale());
+    if (applied == scale_) return;
+    scale_ = applied;
+    emit transformChanged();
+}
+
+void AvatarSceneController::setAvatarPosition(double nx, double ny) {
+    if (characterControl_ == nullptr) return;
+    characterControl_->setPosition(static_cast<float>(nx),
+                                   static_cast<float>(ny));
+    const double ax = static_cast<double>(characterControl_->posX());
+    const double ay = static_cast<double>(characterControl_->posY());
+    if (ax == posX_ && ay == posY_) return;
+    posX_ = ax;
+    posY_ = ay;
+    emit transformChanged();
+}
+
+void AvatarSceneController::syncTransformFromRenderer() {
+    if (characterControl_ == nullptr) return;
+    scale_ = static_cast<double>(characterControl_->userScale());
+    posX_ = static_cast<double>(characterControl_->posX());
+    posY_ = static_cast<double>(characterControl_->posY());
+    emit transformChanged();
 }
 
 QImage AvatarSceneController::renderDiagnosticImage(double extraSeconds) {

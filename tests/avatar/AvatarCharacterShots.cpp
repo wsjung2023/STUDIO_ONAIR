@@ -200,7 +200,15 @@ int main(int argc, char** argv) {
     };
     const C chars[] = {{av::AvatarCharacterId::Human, "human"},
                        {av::AvatarCharacterId::Cat, "cat"},
-                       {av::AvatarCharacterId::Fox, "fox"}};
+                       {av::AvatarCharacterId::Fox, "fox"},
+                       {av::AvatarCharacterId::ManMid, "man_mid"},
+                       {av::AvatarCharacterId::Woman, "woman"},
+                       {av::AvatarCharacterId::Boy, "boy"},
+                       {av::AvatarCharacterId::Girl, "girl"},
+                       {av::AvatarCharacterId::Teen, "teen"},
+                       {av::AvatarCharacterId::Dog, "dog"},
+                       {av::AvatarCharacterId::Bear, "bear"},
+                       {av::AvatarCharacterId::Alien, "alien"}};
     struct S {
         const char* name;
         av::ExpressionParameters expr;
@@ -281,6 +289,89 @@ int main(int argc, char** argv) {
             ++total;
             if (writePng(outDir / "corner_overlay_composite.png", W, H, screen))
                 ++ok;
+        }
+    }
+
+    // ---- Free-transform proofs (position + size) ---------------------------
+    {
+        // A small avatar parked in a transparent bottom-right corner.
+        av::CharacterAvatarRenderer renderer{
+            960, 540, av::AvatarCharacterId::Fox,
+            {av::AvatarPlacementMode::Corner, av::AvatarCorner::RightBottom}, 3};
+        renderer.setUserScale(0.5F);
+        renderer.setPosition(0.82F, 0.68F);
+        auto e = neutral();
+        e.mouthOpen = 0.3F;
+        ++total;
+        if (renderTo(outDir / "transform_small_corner.png", mapper, renderer, e))
+            ++ok;
+    }
+    {
+        // A large avatar centred with the opaque front backdrop.
+        av::CharacterAvatarRenderer renderer{
+            720, 720, av::AvatarCharacterId::Woman,
+            {av::AvatarPlacementMode::Front, {}}, 3};
+        renderer.setUserScale(1.9F);
+        renderer.setPosition(0.5F, 0.5F);
+        ++total;
+        if (renderTo(outDir / "transform_large_center.png", mapper, renderer,
+                     mouthOpen()))
+            ++ok;
+    }
+    {
+        // The same free transform moved to the top-left (transparent overlay).
+        av::CharacterAvatarRenderer renderer{
+            960, 540, av::AvatarCharacterId::Girl,
+            {av::AvatarPlacementMode::Corner, av::AvatarCorner::LeftTop}, 3};
+        renderer.setUserScale(0.62F);
+        renderer.setPosition(0.17F, 0.26F);
+        ++total;
+        if (renderTo(outDir / "transform_moved_topleft.png", mapper, renderer,
+                     turn()))
+            ++ok;
+    }
+    // A small, freely-repositioned avatar composited over a synthetic screen —
+    // exactly the usable-overlay case the user cares about.
+    {
+        constexpr std::uint32_t W = 1280, H = 720;
+        av::CharacterAvatarRenderer renderer{
+            W, H, av::AvatarCharacterId::Bear,
+            {av::AvatarPlacementMode::Corner, av::AvatarCorner::LeftBottom}, 3};
+        renderer.setUserScale(0.5F);
+        renderer.setPosition(0.15F, 0.72F);
+        auto e = neutral();
+        e.mouthOpen = 0.6F;
+        e.headYaw = 0.2F;
+        const auto mapped = mapper.map(e);
+        const auto frame =
+            renderer.render(creator::core::TimestampNs{}, mapped.value());
+        if (frame.hasValue()) {
+            std::vector<std::uint8_t> screen(static_cast<std::size_t>(W) * H * 4U);
+            for (std::uint32_t y = 0; y < H; ++y) {
+                for (std::uint32_t x = 0; x < W; ++x) {
+                    const auto o = (static_cast<std::size_t>(y) * W + x) * 4U;
+                    const float t = static_cast<float>(y) / H;
+                    const std::uint8_t base =
+                        static_cast<std::uint8_t>(30 + t * 34);
+                    const bool band =
+                        (y > 90 && y < 150 && x > 110 && x < 900) ||
+                        (y > 210 && y < 250 && x > 110 && x < 760) ||
+                        (y > 300 && y < 340 && x > 110 && x < 820);
+                    screen[o + 0] = band ? 70 : base;
+                    screen[o + 1] = band ? 120 : static_cast<std::uint8_t>(base + 8);
+                    screen[o + 2] = band ? 170 : static_cast<std::uint8_t>(base + 18);
+                    screen[o + 3] = 255;
+                }
+            }
+            const auto avatarRgba = bgraToRgba(frame.value());
+            for (std::size_t p = 0; p < screen.size(); p += 4) {
+                const float a = avatarRgba[p + 3] / 255.0F;
+                for (int k = 0; k < 3; ++k)
+                    screen[p + k] = static_cast<std::uint8_t>(
+                        avatarRgba[p + k] * a + screen[p + k] * (1.0F - a) + 0.5F);
+            }
+            ++total;
+            if (writePng(outDir / "overlay_over_screen.png", W, H, screen)) ++ok;
         }
     }
 

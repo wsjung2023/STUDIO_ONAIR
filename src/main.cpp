@@ -201,8 +201,10 @@ int main(int argc, char* argv[]) {
     // tracker and a placeholder puppet renderer. If a real Inochi2D runtime DLL
     // and .inp model are staged next to the executable the adapter is used
     // instead; both facts are surfaced in the UI (avatarSceneController.trackingLabel).
+    // 16:9 to match the Studio stage's aspect so the live preview is not
+    // pillar-boxed/stretched and what the user drags matches the baked frame.
     constexpr std::uint32_t kAvatarWidth = 640;
-    constexpr std::uint32_t kAvatarHeight = 480;
+    constexpr std::uint32_t kAvatarHeight = 360;
     auto avatarBindings = creator::avatar::characterAvatarBindings();
     auto avatarMapper =
         creator::avatar::AvatarParameterMapper::create(std::move(avatarBindings));
