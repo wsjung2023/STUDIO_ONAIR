@@ -13,6 +13,10 @@ void AvatarPreviewItem::setAvatarController(QObject* controller) {
     if (controller_) {
         connect(controller_, &AvatarSceneController::stateChanged, this,
                 [this] { refreshMailbox(); });
+        // Repaint on every produced frame so the live avatar actually moves;
+        // stateChanged alone fires far too rarely for ~30 fps animation.
+        connect(controller_, &AvatarSceneController::previewFrameReady, this,
+                [this] { update(); });
         connect(controller_, &QObject::destroyed, this, [this] {
             setMailbox(nullptr);
             update();

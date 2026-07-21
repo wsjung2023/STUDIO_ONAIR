@@ -4,6 +4,8 @@
 #include "avatar/AvatarRenderFrame.h"
 #include "core/AppError.h"
 
+#include <QVariantMap>
+
 #if defined(CS_APP_ENABLE_FFMPEG)
 #include "ffmpeg_adapter/BgraFrameMappers.h"
 #endif
@@ -19,7 +21,8 @@ AvatarSceneController::AvatarSceneController(
     avatar::AvatarParameterMapper mapper,
     std::unique_ptr<avatar::IAvatarRenderer> renderer, std::uint32_t width,
     std::uint32_t height, std::function<bool()> cameraLive, bool usingRealModel,
-    bool usingRealTracking, QObject* parent)
+    bool usingRealTracking, avatar::CharacterAvatarRenderer* characterControl,
+    QObject* parent)
     : QObject(parent),
       provider_(std::move(provider)),
       mapper_(std::move(mapper)),
@@ -28,12 +31,29 @@ AvatarSceneController::AvatarSceneController(
       width_(width),
       height_(height),
       cameraLive_(std::move(cameraLive)),
+      characterControl_(characterControl),
       sourceId_(creator::domain::SourceId::create("avatar").value()) {
+    if (characterControl_ != nullptr) {
+        const auto catalog = avatar::avatarCharacterCatalog();
+        const auto current = characterControl_->character();
+        for (std::size_t i = 0; i < catalog.size(); ++i) {
+            if (catalog[i].id == current) {
+                characterIndex_ = static_cast<int>(i);
+                break;
+            }
+        }
+        const auto placement = characterControl_->placement();
+        placementMode_ =
+            placement.mode == avatar::AvatarPlacementMode::Corner ? 1 : 0;
+        corner_ = static_cast<int>(placement.corner);
+    }
     const QString trackingKind = usingRealTracking
                                      ? tr("live face tracking")
                                      : tr("synthetic (fake) tracking");
-    const QString modelKind = usingRealModel ? tr("Inochi2D model")
-                                             : tr("placeholder avatar");
+    const QString modelKind =
+        usingRealModel ? tr("Inochi2D model")
+                       : (characterControl_ != nullptr ? tr("built-in character")
+                                                       : tr("placeholder avatar"));
     trackingLabel_ = tr("%1 · %2").arg(trackingKind, modelKind);
     status_ = tr("Avatar idle");
     timer_.setInterval(33);  // ~30 fps
@@ -75,6 +95,50 @@ void AvatarSceneController::setAvatarEnabled(bool enabled) {
 
 void AvatarSceneController::publishStatus(QString message) {
     status_ = std::move(message);
+}
+
+QVariantList AvatarSceneController::avatarCharacters() const {
+    QVariantList list;
+    for (const auto& info : avatar::avatarCharacterCatalog()) {
+        QVariantMap m;
+        m.insert(QStringLiteral("key"), QString::fromStdString(info.key));
+        m.insert(QStringLiteral("label"), QString::fromStdString(info.labelKo));
+        list.append(m);
+    }
+    return list;
+}
+
+void AvatarSceneController::setAvatarCharacterIndex(int index) {
+    const auto catalog = avatar::avatarCharacterCatalog();
+    if (index < 0 || index >= static_cast<int>(catalog.size())) return;
+    if (index == characterIndex_) return;
+    characterIndex_ = index;
+    if (characterControl_ != nullptr) {
+        characterControl_->setCharacter(catalog[static_cast<std::size_t>(index)].id);
+    }
+    emit styleChanged();
+}
+
+void AvatarSceneController::setAvatarPlacementMode(int mode) {
+    const int clamped = mode == 1 ? 1 : 0;
+    if (clamped == placementMode_) return;
+    placementMode_ = clamped;
+    if (characterControl_ != nullptr) {
+        characterControl_->setPlacementMode(
+            clamped == 1 ? avatar::AvatarPlacementMode::Corner
+                         : avatar::AvatarPlacementMode::Front);
+    }
+    emit styleChanged();
+}
+
+void AvatarSceneController::setAvatarCorner(int corner) {
+    if (corner < 0 || corner > 3 || corner == corner_) return;
+    corner_ = corner;
+    if (characterControl_ != nullptr) {
+        characterControl_->setPlacementCorner(
+            static_cast<avatar::AvatarCorner>(corner));
+    }
+    emit styleChanged();
 }
 
 QImage AvatarSceneController::renderDiagnosticImage(double extraSeconds) {
@@ -170,6 +234,7 @@ void AvatarSceneController::tick() {
     out.platformHandle = std::move(storage);
     fanout_->onVideoFrame(std::move(out));
     ++producedFrames_;
+    emit previewFrameReady();
 #else
     auto out = frame.toVideoFrame();
     if (!out.hasValue()) {
@@ -181,6 +246,7 @@ void AvatarSceneController::tick() {
     outFrame.timestamp = now;
     fanout_->onVideoFrame(std::move(outFrame));
     ++producedFrames_;
+    emit previewFrameReady();
 #endif
 }
 

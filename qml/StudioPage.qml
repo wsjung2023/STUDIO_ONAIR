@@ -588,6 +588,90 @@ Item {
                         font.pixelSize: 11
                     }
 
+                    // Character picker: choose the built-in VTuber character.
+                    // Selecting one swaps the live avatar immediately.
+                    Label {
+                        visible: avatarSceneController.avatarStyleSelectable
+                        text: qsTr("캐릭터")
+                        color: theme.textMuted; font.family: theme.fontFamily
+                        font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold
+                        font.capitalization: Font.AllUppercase; font.letterSpacing: 1
+                    }
+                    Flow {
+                        objectName: "studioAvatarCharacterPicker"
+                        visible: avatarSceneController.avatarStyleSelectable
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Repeater {
+                            model: avatarSceneController.avatarCharacters
+                            delegate: Button {
+                                required property int index
+                                required property var modelData
+                                objectName: "studioAvatarCharacter_" + modelData.key
+                                text: modelData.label
+                                checkable: true
+                                checked: avatarSceneController.avatarCharacterIndex === index
+                                Accessible.name: qsTr("Select avatar character %1").arg(modelData.label)
+                                onClicked: avatarSceneController.avatarCharacterIndex = index
+                            }
+                        }
+                    }
+
+                    // Placement: front (full) vs corner (picture-in-picture).
+                    Label {
+                        visible: avatarSceneController.avatarStyleSelectable
+                        text: qsTr("배치")
+                        color: theme.textMuted; font.family: theme.fontFamily
+                        font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold
+                        font.capitalization: Font.AllUppercase; font.letterSpacing: 1
+                    }
+                    RowLayout {
+                        visible: avatarSceneController.avatarStyleSelectable
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Button {
+                            objectName: "studioAvatarPlacementFront"
+                            Layout.fillWidth: true
+                            text: qsTr("정면")
+                            checkable: true
+                            checked: avatarSceneController.avatarPlacementMode === 0
+                            onClicked: avatarSceneController.avatarPlacementMode = 0
+                        }
+                        Button {
+                            objectName: "studioAvatarPlacementCorner"
+                            Layout.fillWidth: true
+                            text: qsTr("코너")
+                            checkable: true
+                            checked: avatarSceneController.avatarPlacementMode === 1
+                            onClicked: avatarSceneController.avatarPlacementMode = 1
+                        }
+                    }
+                    GridLayout {
+                        objectName: "studioAvatarCornerPicker"
+                        visible: avatarSceneController.avatarStyleSelectable
+                                 && avatarSceneController.avatarPlacementMode === 1
+                        Layout.fillWidth: true
+                        columns: 2
+                        columnSpacing: 6
+                        rowSpacing: 6
+                        Repeater {
+                            model: [
+                                { label: qsTr("좌상"), value: 2 },
+                                { label: qsTr("우상"), value: 3 },
+                                { label: qsTr("좌하"), value: 0 },
+                                { label: qsTr("우하"), value: 1 }
+                            ]
+                            delegate: Button {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                text: modelData.label
+                                checkable: true
+                                checked: avatarSceneController.avatarCorner === modelData.value
+                                onClicked: avatarSceneController.avatarCorner = modelData.value
+                            }
+                        }
+                    }
+
                     Label { text: qsTr("Microphone"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
 
                     ComboBox {
@@ -831,31 +915,19 @@ Item {
                         }
                     }
 
-                    // Live avatar source. Rendered from (synthetic) tracking and
-                    // composited as a picture-in-picture overlay whenever the
-                    // avatar source is capturing, mirroring the camera source. The
-                    // banner keeps it clearly marked as synthetic/placeholder.
+                    // Live avatar source. The CharacterAvatarRenderer bakes the
+                    // chosen placement (front / corner) straight into its frame,
+                    // so the preview fills the stage and shows exactly what
+                    // records: an opaque full character in 정면 mode, or a
+                    // transparent frame with the character in a corner over the
+                    // screen in 코너 mode.
                     Item {
                         id: avatarComposition
                         objectName: "studioAvatarCompositionPreview"
-                        width: parent.width * 0.34
-                        height: avatarSceneController.avatarWidth > 0
-                                ? width * (avatarSceneController.avatarHeight
-                                           / avatarSceneController.avatarWidth)
-                                : width * 0.75
-                        x: parent.width * 0.03
-                        y: parent.height * 0.12
+                        anchors.fill: parent
                         visible: avatarSceneController.avatarCapturing
                         z: 50
-                        clip: true
                         Accessible.name: qsTr("Avatar composition preview")
-
-                        Rectangle {
-                            anchors.fill: parent
-                            color: "#0d1b2a"
-                            border.color: "#1e88e5"
-                            border.width: 2
-                        }
 
                         AvatarPreviewItem {
                             objectName: "studioAvatarNativePreview"
@@ -865,19 +937,19 @@ Item {
 
                         Rectangle {
                             anchors.left: parent.left
-                            anchors.right: parent.right
                             anchors.top: parent.top
+                            anchors.margins: 8
+                            width: avatarBannerLabel.implicitWidth + 16
                             height: 22
-                            color: "#e61e88e5"
+                            radius: 6
+                            color: "#cc1e88e5"
                             Label {
+                                id: avatarBannerLabel
                                 anchors.centerIn: parent
                                 text: avatarSceneController.trackingLabel
                                 color: "white"
                                 font.pixelSize: 11
                                 font.bold: true
-                                elide: Text.ElideRight
-                                width: parent.width - 8
-                                horizontalAlignment: Text.AlignHCenter
                             }
                         }
                     }

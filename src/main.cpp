@@ -7,9 +7,11 @@
 #include "app/AvatarSceneController.h"
 #include "app/DeviceCaptureController.h"
 #include "avatar/AvatarParameterMapper.h"
+#include "avatar/CharacterAvatarRenderer.h"
 #include "avatar/IAvatarRenderer.h"
 #include "avatar/PlaceholderAvatarRenderer.h"
 #include "avatar/SyntheticFaceTrackingProvider.h"
+#include "avatar/openseeface/OpenSeeFaceTrackingProvider.h"
 #include "avatar/inochi2d/Inochi2dAvatarRenderer.h"
 #include "app/LiveRecordingController.h"
 #include "app/LiveRecordingEngineFactory.h"
@@ -201,10 +203,14 @@ int main(int argc, char* argv[]) {
     // instead; both facts are surfaced in the UI (avatarSceneController.trackingLabel).
     constexpr std::uint32_t kAvatarWidth = 640;
     constexpr std::uint32_t kAvatarHeight = 480;
-    auto avatarBindings = creator::avatar::placeholderAvatarBindings();
+    auto avatarBindings = creator::avatar::characterAvatarBindings();
     auto avatarMapper =
         creator::avatar::AvatarParameterMapper::create(std::move(avatarBindings));
     std::unique_ptr<creator::avatar::IAvatarRenderer> avatarRenderer;
+    // Non-owning alias to the built-in character renderer (when active), so the
+    // Studio avatar picker and front/corner placement controls can retune it
+    // live. Null if a real Inochi2D model is loaded instead.
+    creator::avatar::CharacterAvatarRenderer* avatarCharacterControl = nullptr;
     bool avatarRealModel = false;
     {
         const std::filesystem::path appDir{
@@ -228,17 +234,58 @@ int main(int argc, char* argv[]) {
         }
     }
     if (!avatarRenderer) {
-        avatarRenderer = std::make_unique<creator::avatar::PlaceholderAvatarRenderer>(
-            kAvatarWidth, kAvatarHeight);
+        // Default to a bottom-right corner overlay so the live avatar behaves
+        // like a picture-in-picture over the screen; 정면(front) is opt-in via
+        // the placement toggle.
+        auto characterRenderer =
+            std::make_unique<creator::avatar::CharacterAvatarRenderer>(
+                kAvatarWidth, kAvatarHeight,
+                creator::avatar::AvatarCharacterId::Human,
+                creator::avatar::AvatarPlacement{
+                    creator::avatar::AvatarPlacementMode::Corner,
+                    creator::avatar::AvatarCorner::RightBottom});
+        avatarCharacterControl = characterRenderer.get();
+        avatarRenderer = std::move(characterRenderer);
+    }
+    // Real face tracking: when CS_OPENSEEFACE_UDP is set, an external
+    // OpenSeeFace process (facetracker.py) owns the webcam and streams tracking
+    // over UDP; this app only receives it. OpenSeeFaceTrackingProvider adapts
+    // that UDP feed to ITrackingProvider so the exact same avatar chain is
+    // driven by a REAL face instead of the synthetic generator. OpenSeeFace
+    // owns the camera in this mode, so the app must not also open it — leave the
+    // device camera closed and drive the avatar continuously (cameraLive=true).
+    std::unique_ptr<creator::avatar::ITrackingProvider> avatarProvider;
+    bool avatarRealTracking = false;
+    std::function<bool()> avatarCameraLive;
+    if (qEnvironmentVariableIsSet("CS_OPENSEEFACE_UDP")) {
+        auto port = static_cast<std::uint16_t>(
+            qEnvironmentVariableIntValue("CS_OPENSEEFACE_UDP"));
+        if (port == 0) port = creator::avatar::openseeface::kDefaultUdpPort;
+        if (auto real =
+                creator::avatar::openseeface::OpenSeeFaceTrackingProvider::create(port);
+            real.hasValue()) {
+            avatarProvider = std::move(real).value();
+            avatarRealTracking = true;
+            avatarCameraLive = [] { return true; };
+            qInfo().noquote() << "Avatar: real OpenSeeFace UDP tracking on port"
+                              << port << "(app camera left closed)";
+        } else {
+            qWarning().noquote()
+                << "OpenSeeFace UDP tracking unavailable, using synthetic:"
+                << QString::fromStdString(real.error().message());
+        }
+    }
+    if (!avatarProvider) {
+        avatarProvider = std::make_unique<creator::avatar::SyntheticFaceTrackingProvider>();
+        avatarCameraLive = [&deviceCaptureController] {
+            return deviceCaptureController.cameraCapturing();
+        };
     }
     creator::app::AvatarSceneController avatarSceneController{
-        std::make_unique<creator::avatar::SyntheticFaceTrackingProvider>(),
+        std::move(avatarProvider),
         std::move(avatarMapper).value(), std::move(avatarRenderer), kAvatarWidth,
-        kAvatarHeight,
-        [&deviceCaptureController] {
-            return deviceCaptureController.cameraCapturing();
-        },
-        avatarRealModel, /*usingRealTracking=*/false, &app};
+        kAvatarHeight, std::move(avatarCameraLive),
+        avatarRealModel, avatarRealTracking, avatarCharacterControl, &app};
 
     auto recordingStore =
         std::make_shared<creator::project_store::ProjectPackageStore>();

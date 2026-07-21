@@ -2,6 +2,7 @@
 
 #include "avatar/AvatarParameterMapper.h"
 #include "avatar/AvatarRenderPipeline.h"
+#include "avatar/CharacterAvatarRenderer.h"
 #include "avatar/IAvatarRenderer.h"
 #include "avatar/ITrackingProvider.h"
 #include "capture/CaptureFanoutSinks.h"
@@ -14,6 +15,7 @@
 #include <QObject>
 #include <QString>
 #include <QTimer>
+#include <QVariantList>
 
 #include <functional>
 #include <memory>
@@ -43,6 +45,16 @@ class AvatarSceneController final : public QObject {
     Q_PROPERTY(QString trackingLabel READ trackingLabel CONSTANT)
     Q_PROPERTY(quint32 avatarWidth READ avatarWidth CONSTANT)
     Q_PROPERTY(quint32 avatarHeight READ avatarHeight CONSTANT)
+    // Selectable characters and live placement. `avatarCharacters` is a list of
+    // {key, label} objects for the picker; the others are the current selection.
+    Q_PROPERTY(QVariantList avatarCharacters READ avatarCharacters CONSTANT)
+    Q_PROPERTY(int avatarCharacterIndex READ avatarCharacterIndex WRITE
+                   setAvatarCharacterIndex NOTIFY styleChanged)
+    Q_PROPERTY(bool avatarStyleSelectable READ avatarStyleSelectable CONSTANT)
+    Q_PROPERTY(int avatarPlacementMode READ avatarPlacementMode WRITE
+                   setAvatarPlacementMode NOTIFY styleChanged)
+    Q_PROPERTY(int avatarCorner READ avatarCorner WRITE setAvatarCorner NOTIFY
+                   styleChanged)
 
 public:
     /// `cameraLive` reports whether the webcam is currently capturing; the
@@ -56,6 +68,7 @@ public:
                           std::uint32_t width, std::uint32_t height,
                           std::function<bool()> cameraLive,
                           bool usingRealModel, bool usingRealTracking,
+                          avatar::CharacterAvatarRenderer* characterControl = nullptr,
                           QObject* parent = nullptr);
     ~AvatarSceneController() override;
 
@@ -66,6 +79,17 @@ public:
     [[nodiscard]] quint32 avatarWidth() const noexcept { return width_; }
     [[nodiscard]] quint32 avatarHeight() const noexcept { return height_; }
     [[nodiscard]] quint64 producedFrames() const noexcept { return producedFrames_; }
+
+    [[nodiscard]] QVariantList avatarCharacters() const;
+    [[nodiscard]] bool avatarStyleSelectable() const noexcept {
+        return characterControl_ != nullptr;
+    }
+    [[nodiscard]] int avatarCharacterIndex() const noexcept { return characterIndex_; }
+    void setAvatarCharacterIndex(int index);
+    [[nodiscard]] int avatarPlacementMode() const noexcept { return placementMode_; }
+    void setAvatarPlacementMode(int mode);
+    [[nodiscard]] int avatarCorner() const noexcept { return corner_; }
+    void setAvatarCorner(int corner);
 
     /// Renders one avatar frame (at the current animation phase plus
     /// `extraSeconds`) straight to a QImage, using the exact tracking -> map ->
@@ -90,6 +114,11 @@ public:
 
 signals:
     void stateChanged();
+    void styleChanged();
+    /// Emitted once per produced frame (~30 fps) so the live preview surface can
+    /// repaint. stateChanged fires only on status transitions, which is too rare
+    /// to drive a moving avatar, so this is the per-frame repaint trigger.
+    void previewFrameReady();
 
 private:
     void tick();
@@ -102,6 +131,13 @@ private:
     std::uint32_t width_;
     std::uint32_t height_;
     std::function<bool()> cameraLive_;
+    // Non-owning: aliases renderer_ when it is a CharacterAvatarRenderer, so the
+    // picker/placement controls can retune it live. Null when a different
+    // renderer (e.g. Inochi2D) is active, and the style controls are disabled.
+    avatar::CharacterAvatarRenderer* characterControl_{nullptr};
+    int characterIndex_{0};
+    int placementMode_{0};
+    int corner_{1};
 
     creator::domain::SourceId sourceId_;
     std::shared_ptr<creator::capture::LatestVideoFrameMailbox> previewMailbox_;

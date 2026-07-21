@@ -30,6 +30,35 @@ set_target_properties(cs_crash_recovery_fixture PROPERTIES
 )
 cs_apply_warnings(cs_crash_recovery_fixture)
 
+# Human-in-the-loop harness: proves the live avatar render path is driven by a
+# REAL face tracked by an external OpenSeeFace process over UDP (not the
+# synthetic provider). Qt-free; links only cs_avatar. Run manually with a
+# facetracker.py process sending UDP; not a gtest.
+add_executable(cs_openseeface_live_avatar_harness
+    avatar/OpenSeeFaceLiveAvatarHarness.cpp
+)
+target_link_libraries(cs_openseeface_live_avatar_harness PRIVATE cs_avatar)
+set_target_properties(cs_openseeface_live_avatar_harness PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+cs_apply_warnings(cs_openseeface_live_avatar_harness)
+
+# Visual proof harness for the built-in VTuber characters: renders every
+# CharacterAvatarRenderer character under sample expression sweeps and a corner
+# overlay, writing PNGs. Qt-free; links only cs_avatar. Not a gtest.
+add_executable(cs_avatar_character_shots
+    avatar/AvatarCharacterShots.cpp
+)
+target_link_libraries(cs_avatar_character_shots PRIVATE cs_avatar)
+set_target_properties(cs_avatar_character_shots PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+cs_apply_warnings(cs_avatar_character_shots)
+
 add_executable(cs_tests
     ${PROJECT_SOURCE_DIR}/src/app/TimelineEditService.cpp
     core/ResultTest.cpp
@@ -89,6 +118,7 @@ add_executable(cs_tests
     avatar/FakeTrackingProviderTest.cpp
     avatar/SyntheticFaceTrackingProviderTest.cpp
     avatar/PlaceholderAvatarRendererTest.cpp
+    avatar/CharacterAvatarRendererTest.cpp
     avatar/PipelineTest.cpp
     avatar/PrimaryFaceSelectorTest.cpp
     avatar/openseeface/OpenSeeFaceParserTest.cpp

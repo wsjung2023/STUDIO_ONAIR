@@ -14,6 +14,8 @@ cs_add_qtfree_library(cs_avatar
         IAvatarRenderer.h
         PlaceholderAvatarRenderer.h
         PlaceholderAvatarRenderer.cpp
+        CharacterAvatarRenderer.h
+        CharacterAvatarRenderer.cpp
         SyntheticFaceTrackingProvider.h
         SyntheticFaceTrackingProvider.cpp
         AvatarRenderPipeline.h
@@ -48,6 +50,8 @@ cs_add_qtfree_library(cs_avatar
         openseeface/OpenSeeFaceParser.cpp
         openseeface/OpenSeeFaceUdpSource.h
         openseeface/OpenSeeFaceUdpSource.cpp
+        openseeface/OpenSeeFaceTrackingProvider.h
+        openseeface/OpenSeeFaceTrackingProvider.cpp
         openseeface/OpenSeeFaceProcessSupervisor.h
         openseeface/OpenSeeFaceProcessSupervisor.cpp
         inochi2d/Inochi2dModelRuntime.h
