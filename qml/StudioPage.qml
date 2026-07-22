@@ -130,35 +130,36 @@ Item {
         property int tries: 0
         onTriggered: {
             tries += 1
-            // Screen: prefer a non-primary monitor (studio usually on primary),
-            // then start the preview so the screen actually records.
+            // Screen: start the preview on the currently selected monitor so the
+            // screen actually records. The Studio window is excluded from screen
+            // capture (WDA_EXCLUDEFROMCAPTURE) so capturing the monitor it lives
+            // on does not feed back into itself; the creator can switch monitors
+            // or pick a region from the source controls above.
             if (!screenCaptureController.previewing
                     && !screenCaptureController.canStopPreview
                     && !screenCaptureController.busy
-                    && screenCaptureController.targets.length > 0) {
+                    && screenCaptureController.selectedTargetId.length > 0) {
                 if (screenCaptureController.permissionRequired) {
                     screenCaptureController.requestPermission()
-                } else if (screenCaptureController.targets.length > 1
-                        && screenCaptureController.selectedTargetId
-                            === screenCaptureController.targets[0].id) {
-                    screenCaptureController.selectTarget(
-                        screenCaptureController.targets[1].id)
                 } else {
                     screenCaptureController.startPreview()
                 }
             }
-            // Microphone: so the recording has the creator's voice. (The concat
-            // "Unsafe file name" issue that previously broke finalize is fixed in
-            // RecordingTimelineReconciler, so audio is safe to arm again.)
+            // Microphone: pick a default device if none is selected yet, then arm
+            // it so the recording captures the creator's voice.
             if (!deviceCaptureController.microphoneCanStop
                     && !deviceCaptureController.microphoneBusy) {
                 if (deviceCaptureController.microphonePermissionRequired) {
                     deviceCaptureController.requestMicrophonePermission()
+                } else if (deviceCaptureController.selectedMicrophoneId.length === 0
+                           && deviceCaptureController.microphones.length > 0) {
+                    deviceCaptureController.selectMicrophone(
+                        deviceCaptureController.microphones[0].id)
                 } else if (deviceCaptureController.selectedMicrophoneId.length > 0) {
                     deviceCaptureController.setMicrophoneEnabled(true)
                 }
             }
-            // System audio: so game/video/app sound is captured too.
+            // System audio (WASAPI loopback): captures game/video/app sound.
             if (!deviceCaptureController.systemAudioCanStop
                     && !deviceCaptureController.systemAudioBusy) {
                 deviceCaptureController.setSystemAudioEnabled(true)
@@ -167,7 +168,7 @@ Item {
                     || screenCaptureController.canStopPreview
             if ((screenOn && deviceCaptureController.microphoneCanStop
                     && deviceCaptureController.systemAudioCanStop)
-                    || tries > 16) {
+                    || tries > 20) {
                 stop()
             }
         }
