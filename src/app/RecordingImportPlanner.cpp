@@ -210,7 +210,21 @@ SourceState stateInScene(const domain::StudioScene& scene,
                 return source.role() == role;
             });
     }
-    if (found == scene.sources().end()) return {};
+    if (found == scene.sources().end()) {
+        // Scenes do not enumerate the avatar (the scene_sources role set excludes
+        // it), yet the recorded avatar is a transparent full-frame image with the
+        // character baked into a corner. Composite it full-frame above the other
+        // video (high z-order) so the exported program actually shows the avatar.
+        if (role == StudioSourceRole::Avatar) {
+            auto transform = domain::VisualTransform::create(
+                0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 20);
+            if (transform.hasValue()) {
+                return SourceState{.enabled = true,
+                                   .transform = std::move(transform).value()};
+            }
+        }
+        return {};
+    }
     return SourceState{.enabled = found->enabled(),
                        .transform = found->transform()};
 }
