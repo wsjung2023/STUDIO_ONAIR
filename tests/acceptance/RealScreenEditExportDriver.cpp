@@ -18,6 +18,8 @@
 #include "domain/Timeline.h"
 #include "edit_engine/EditEngineTypes.h"
 #include "ffmpeg_adapter/FfmpegMediaProbe.h"
+#include "mlt_adapter/MltEditEngine.h"
+#include "media/MediaTypes.h"
 #include "project_store/ProjectPackageStore.h"
 
 #include <QGuiApplication>
@@ -27,6 +29,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -223,6 +226,45 @@ int main(int argc, char** argv) {
     if (!durable.has_value()) return fail("durable", "reopen failed");
     if (timelineDurationNs(durable->snapshot.timeline) != afterDuration)
         return fail("durable", "cut did not survive reopen");
+
+    // ---- PREVIEW PROOF: render exactly what the editor preview shows --------
+    // The editor preview (MltEditEngine::requestFrame) is a SEPARATE render path
+    // from the export consumer; this dumps one preview frame so the avatar's
+    // presence in the editor can be verified independently of the exported MP4.
+    {
+        creator::mlt_adapter::MltEditEngineConfig previewConfig{};
+        previewConfig.runtimeRoot = fs::path{CS_DRIVER_MLT_ROOT};
+        previewConfig.previewWidth = 1280;
+        previewConfig.previewHeight = 720;
+        creator::mlt_adapter::MltEditEngine previewEngine{std::move(previewConfig)};
+        auto previewLoaded = previewEngine.load(durable->snapshot);
+        if (!previewLoaded.hasValue()) {
+            std::cout << "[ REAL-SCREEN PROOF ] preview-load FAILED: "
+                      << previewLoaded.error().message() << "\n";
+        } else {
+            auto previewFrame = previewEngine.requestFrame(at(afterDuration / 2));
+            if (!previewFrame.hasValue()) {
+                std::cout << "[ REAL-SCREEN PROOF ] preview-render FAILED: "
+                          << previewFrame.error().message() << "\n";
+            } else {
+                const auto& vf = previewFrame.value().frame();
+                const auto* pixels =
+                    static_cast<const std::uint8_t*>(vf.platformHandle.get());
+                if (pixels != nullptr) {
+                    const auto previewPath =
+                        destination.parent_path() / "editor_preview_bgra.bin";
+                    std::ofstream out{previewPath, std::ios::binary};
+                    out.write(reinterpret_cast<const char*>(pixels),
+                              static_cast<std::streamsize>(
+                                  static_cast<std::size_t>(vf.width) * vf.height *
+                                  4U));
+                    std::cout << "[ REAL-SCREEN PROOF ] preview: " << vf.width
+                              << "x" << vf.height << " -> " << previewPath.string()
+                              << "\n";
+                }
+            }
+        }
+    }
 
     // ---- STEP 3: EXPORT the edited timeline to a real H.264/AAC MP4 ---------
     ProjectExportEngine exportEngine{fs::path{CS_DRIVER_MLT_ROOT}};

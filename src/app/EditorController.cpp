@@ -1266,7 +1266,10 @@ void EditorController::queueAudio(core::TimestampNs position,
     audioRequestInFlight_ = true;
     QueuedCommand command{generation_,   commandId, EditorEngineOperation::Audio,
                           position,       std::nullopt, std::nullopt, samples};
-    queuedCommands_.push_back(std::move(command));
+    // Editing to sound needs continuous audio: jump the queue ahead of any
+    // pending video frames so the single-threaded MLT worker refills the sink
+    // before it renders the next (much heavier) preview frame.
+    queuedCommands_.push_front(std::move(command));
     dispatchNext();
 }
 
@@ -1280,7 +1283,7 @@ void EditorController::scheduleAudioPull() {
     // multi-frame block below keeps the sink from underrunning (audible stutter)
     // even when a worker round-trip is momentarily delayed.
     constexpr std::uint32_t kTargetBufferedSamples =
-        EditorPreviewAudioOutput::kSampleRate * 2 / 3;
+        EditorPreviewAudioOutput::kSampleRate * 2;
     if (audioOutput_->queuedSamples() >= kTargetBufferedSamples) return;
 
     const auto rate = snapshot_->timeline.frameRate();
@@ -1295,7 +1298,7 @@ void EditorController::scheduleAudioPull() {
     // round-trips than a one-frame-at-a-time pull. handleAudioCompleted advances
     // the read position by the samples actually returned, so contiguity holds.
     constexpr std::uint32_t kPullBlockSamples =
-        EditorPreviewAudioOutput::kSampleRate / 4;
+        EditorPreviewAudioOutput::kSampleRate / 2;
     queueAudio(audioPullPosition_, kPullBlockSamples);
 }
 
@@ -1587,6 +1590,15 @@ void EditorController::requestPlaybackFrame() {
     scheduleAudioPull();
     if (!playing_ || !snapshot_.has_value() || previewStale_ ||
         frameRequestInFlight_) {
+        return;
+    }
+    // Audio smoothness beats video smoothness while editing to sound: when the
+    // sink's buffered lookahead is running low, skip this preview frame so the
+    // single-threaded MLT worker's next slot goes to refilling audio instead of
+    // a heavy full-frame render. Video simply holds the current frame briefly.
+    if (audioOutput_ && audioOutput_->active() &&
+        audioOutput_->queuedSamples() <
+            EditorPreviewAudioOutput::kSampleRate / 2) {
         return;
     }
     const auto elapsed = core::DurationNs{playbackClock_.nsecsElapsed()};

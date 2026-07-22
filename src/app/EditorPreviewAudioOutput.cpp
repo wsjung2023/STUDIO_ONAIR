@@ -97,7 +97,7 @@ namespace {
 // fully in steady state and stays a hard bound on latency and memory. The
 // headroom above the pull target absorbs momentary worker-round-trip delays so
 // the sink does not underrun (audible stutter).
-constexpr qint64 kRingCapacityMicroseconds = 1'000'000;
+constexpr qint64 kRingCapacityMicroseconds = 3'000'000;
 
 }  // namespace
 
