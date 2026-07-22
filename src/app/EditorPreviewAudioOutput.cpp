@@ -92,10 +92,12 @@ private:
 
 namespace {
 
-// The ring buffers roughly half a second of preview audio; the controller only
-// tops it up when it drains below its pull target, so it never fills fully in
-// steady state and stays a hard bound on latency and memory.
-constexpr qint64 kRingCapacityMicroseconds = 500'000;
+// The ring buffers roughly one second of preview audio; the controller only
+// tops it up when it drains below its ~2/3 s pull target, so it never fills
+// fully in steady state and stays a hard bound on latency and memory. The
+// headroom above the pull target absorbs momentary worker-round-trip delays so
+// the sink does not underrun (audible stutter).
+constexpr qint64 kRingCapacityMicroseconds = 1'000'000;
 
 }  // namespace
 

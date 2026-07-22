@@ -1275,10 +1275,12 @@ void EditorController::scheduleAudioPull() {
         audioRequestInFlight_ || !audioOutput_ || !audioOutput_->active()) {
         return;
     }
-    // Keep the sink's bounded ring topped up but not full: pull only while it is
-    // below roughly a third of a second of lookahead.
+    // Keep the sink's bounded ring topped up but not full: pull whenever the
+    // buffered lookahead falls below ~2/3 s. A generous target plus the
+    // multi-frame block below keeps the sink from underrunning (audible stutter)
+    // even when a worker round-trip is momentarily delayed.
     constexpr std::uint32_t kTargetBufferedSamples =
-        EditorPreviewAudioOutput::kSampleRate / 3;
+        EditorPreviewAudioOutput::kSampleRate * 2 / 3;
     if (audioOutput_->queuedSamples() >= kTargetBufferedSamples) return;
 
     const auto rate = snapshot_->timeline.frameRate();
@@ -1287,23 +1289,14 @@ void EditorController::scheduleAudioPull() {
     const auto endPosition = core::frameToTimestamp(frameCount, rate);
     if (audioPullPosition_ >= endPosition) return;
 
-    // Request a comfortably-whole frame of audio (ceil samples-per-frame plus a
-    // small margin) so MLT's actual per-frame count never exceeds the request;
-    // handleAudioCompleted advances the read position by however many samples
-    // actually came back, so contiguity holds even at fractional frame rates.
-    const std::int64_t num = rate.numerator();
-    const std::int64_t den = rate.denominator();
-    const std::int64_t samplesPerFrame =
-        num > 0 ? (static_cast<std::int64_t>(
-                       EditorPreviewAudioOutput::kSampleRate) *
-                       den +
-                   num - 1) /
-                      num
-                : static_cast<std::int64_t>(
-                      EditorPreviewAudioOutput::kSampleRate) /
-                      30;
-    const auto samples = static_cast<std::uint32_t>(samplesPerFrame + 32);
-    queueAudio(audioPullPosition_, samples);
+    // Pull ~1/4 s of audio per round-trip. The worker accumulates that many
+    // samples across however many timeline frames it takes and returns them as
+    // one block, so the per-frame MLT cost is amortised over far fewer UI-thread
+    // round-trips than a one-frame-at-a-time pull. handleAudioCompleted advances
+    // the read position by the samples actually returned, so contiguity holds.
+    constexpr std::uint32_t kPullBlockSamples =
+        EditorPreviewAudioOutput::kSampleRate / 4;
+    queueAudio(audioPullPosition_, kPullBlockSamples);
 }
 
 void EditorController::restartAudioPull(core::TimestampNs from) {

@@ -3,8 +3,10 @@
 #include "core/AppError.h"
 #include "media/MediaTypes.h"
 
+#include <algorithm>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace creator::app {
 
@@ -89,21 +91,51 @@ void EditorEngineWorker::requestAudio(quint64 generation, quint64 commandId,
                                       core::TimestampNs position,
                                       quint32 frequency, quint32 channels,
                                       quint32 samples) {
-    auto result = engine_->requestMixedAudio(position, frequency, channels,
-                                             samples);
-    if (!result.hasValue()) {
-        emit audioCompleted(generation, commandId, false,
-                            QString::fromStdString(result.error().message()),
-                            position.time_since_epoch().count(), {});
+    // The MLT mixer returns exactly one timeline frame of audio per call, so a
+    // per-frame round-trip to the UI thread only just keeps up at 30 fps and
+    // any hiccup starves the sink (audible stutter). Accumulate several frames
+    // into one block here, off the UI thread, so each round-trip delivers a
+    // comfortable chunk of lookahead and the sink never underruns in steady
+    // state. `samples` is the total per-channel target for this pull.
+    const std::int64_t startNs = position.time_since_epoch().count();
+    const auto target = static_cast<std::size_t>(samples) *
+                        static_cast<std::size_t>(channels);
+    const int perCall = static_cast<int>(
+        std::min<quint32>(frequency, std::max<quint32>(samples, 1U)));
+    std::vector<float> accumulated;
+    accumulated.reserve(target);
+    core::TimestampNs cursor = position;
+    QString lastError;
+    int guard = 0;
+    while (accumulated.size() < target && guard++ < 1024) {
+        auto result = engine_->requestMixedAudio(cursor, static_cast<int>(frequency),
+                                                 static_cast<int>(channels), perCall);
+        if (!result.hasValue()) {
+            lastError = QString::fromStdString(result.error().message());
+            break;  // e.g. reached end of timeline; emit what we already have
+        }
+        const auto& block = result.value();
+        if (block.interleaved.empty()) break;
+        accumulated.insert(accumulated.end(), block.interleaved.begin(),
+                           block.interleaved.end());
+        const std::int64_t frameSamples =
+            static_cast<std::int64_t>(block.interleaved.size() / channels);
+        if (frameSamples <= 0) break;
+        cursor = cursor + core::DurationNs{frameSamples * 1'000'000'000LL /
+                                           static_cast<std::int64_t>(frequency)};
+    }
+    if (accumulated.empty()) {
+        emit audioCompleted(
+            generation, commandId, false,
+            lastError.isEmpty() ? QStringLiteral("no mixed audio produced")
+                                : lastError,
+            startNs, {});
         return;
     }
-    const auto& block = result.value();
-    const auto byteCount = static_cast<qsizetype>(block.interleaved.size() *
-                                                  sizeof(float));
-    QByteArray pcm{reinterpret_cast<const char*>(block.interleaved.data()),
-                   byteCount};
-    emit audioCompleted(generation, commandId, true, {},
-                        block.position.time_since_epoch().count(),
+    const auto byteCount =
+        static_cast<qsizetype>(accumulated.size() * sizeof(float));
+    QByteArray pcm{reinterpret_cast<const char*>(accumulated.data()), byteCount};
+    emit audioCompleted(generation, commandId, true, {}, startNs,
                         std::move(pcm));
 }
 
