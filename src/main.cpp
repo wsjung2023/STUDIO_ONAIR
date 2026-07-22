@@ -464,7 +464,13 @@ int main(int argc, char* argv[]) {
     // Applied on window creation and re-applied whenever a native window appears
     // (winId() is only valid once the platform window exists). A failure is
     // surfaced via qWarning rather than hidden (CLAUDE.md 9).
-    {
+    //
+    // OPT-IN: this also hides the window from ALL screen capture tools, so it is
+    // gated behind CS_EXCLUDE_SELF_FROM_CAPTURE and OFF by default. The general
+    // mirror fix for real use is to record a region/window/other monitor that is
+    // not the studio itself; self-exclusion is offered only for full-screen
+    // corner-overlay capture where the studio shares the recorded monitor.
+    if (qEnvironmentVariableIsSet("CS_EXCLUDE_SELF_FROM_CAPTURE")) {
         auto excludeFromCapture = [](QQuickWindow* window) {
             if (window == nullptr) return;
             const auto handle = reinterpret_cast<HWND>(window->winId());

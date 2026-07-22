@@ -113,6 +113,51 @@ Item {
                 && !avatarSceneController.avatarCanStop) {
             avatarSceneController.setAvatarEnabled(true)
         }
+        // The screen source only produces frames (for preview AND recording)
+        // once a preview is started. Avatar auto-starts, so if the creator just
+        // presses 녹화 without pressing 미리보기 시작 the recording captured only
+        // the avatar and NOT the screen. Auto-arm the screen preview on entry so
+        // 녹화 records the screen too. On a multi-monitor setup, prefer a monitor
+        // other than the primary (where the Studio window usually sits) so
+        // full-screen capture does not feed back into itself (the "무한거울").
+        screenAutoStart.tries = 0
+        screenAutoStart.start()
+    }
+    Timer {
+        id: screenAutoStart
+        interval: 400
+        repeat: true
+        property int tries: 0
+        onTriggered: {
+            tries += 1
+            // Screen: prefer a non-primary monitor (studio usually on primary),
+            // then start the preview so the screen actually records.
+            if (!screenCaptureController.previewing
+                    && !screenCaptureController.canStopPreview
+                    && !screenCaptureController.busy
+                    && screenCaptureController.targets.length > 0) {
+                if (screenCaptureController.permissionRequired) {
+                    screenCaptureController.requestPermission()
+                } else if (screenCaptureController.targets.length > 1
+                        && screenCaptureController.selectedTargetId
+                            === screenCaptureController.targets[0].id) {
+                    screenCaptureController.selectTarget(
+                        screenCaptureController.targets[1].id)
+                } else {
+                    screenCaptureController.startPreview()
+                }
+            }
+            // NOTE: microphone/system-audio auto-start is intentionally NOT done
+            // here yet — the recorded audio segments trip an ffmpeg concat
+            // "Unsafe file name" error during finalize (URL-encoded segment
+            // paths). Re-enable only after that concat path is fixed so audio
+            // does not break the whole recording.
+            var screenOn = screenCaptureController.previewing
+                    || screenCaptureController.canStopPreview
+            if (screenOn || tries > 16) {
+                stop()
+            }
+        }
     }
     Connections {
         target: studioWorkflowController
