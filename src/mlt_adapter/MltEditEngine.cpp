@@ -4,6 +4,7 @@
 #include "core/Uuid.h"
 #include "audio_dsp/AudioBuffer.h"
 #include "audio_dsp/AudioFormat.h"
+#include "ffmpeg_adapter/FfmpegContainerRemux.h"
 #include "ffmpeg_adapter/FfmpegMediaProbe.h"
 #include "mlt_adapter/ExportEncoderProbe.h"
 #include "mlt_adapter/FrameEffects.h"
@@ -378,6 +379,12 @@ struct AudioProcessingFilterContext final : CreatorFilterContext {
     std::atomic<int> lastErrorStage{};
 };
 
+// Stateless context for the final audio sanitize filter (NaN/Inf -> silence,
+// clamp to [-1, 1]); kept as its own type so closeCreatorFilter can delete it.
+struct SanitizeAudioFilterContext final : CreatorFilterContext {
+    std::atomic<int> lastErrorStage{};
+};
+
 void closeCreatorFilter(mlt_filter filter) {
     delete static_cast<CreatorFilterContext*>(filter->child);
     filter->child = nullptr;
@@ -390,6 +397,7 @@ mlt_frame processVisualFrame(mlt_filter filter, mlt_frame frame);
 mlt_frame processCursorVisualFrame(mlt_filter filter, mlt_frame frame);
 mlt_frame processAudioFrame(mlt_filter filter, mlt_frame frame);
 mlt_frame processAudioProcessingFrame(mlt_filter filter, mlt_frame frame);
+mlt_frame processSanitizeAudioFrame(mlt_filter filter, mlt_frame frame);
 
 core::Result<std::unique_ptr<Mlt::Filter>> makeCreatorFilter(
     std::unique_ptr<CreatorFilterContext> context,
@@ -750,6 +758,49 @@ mlt_frame processAudioProcessingFrame(mlt_filter filter, mlt_frame frame) {
     return frame;
 }
 
+// Replaces non-finite (NaN/+-Inf) samples in the fully-mixed program with
+// silence and clamps to the valid [-1, 1] float range, right before the AAC
+// encoder. FFmpeg's aac encoder aborts the whole render on non-finite input
+// ("Input contains (near) NaN/+-Inf"); real recordings can produce a few such
+// samples (e.g. at segment/concat boundaries), so this guarantees an encodable
+// program without discarding otherwise-valid audio.
+int getSanitizedAudio(mlt_frame frame, void** buffer, mlt_audio_format* format,
+                      int* frequency, int* channels, int* samples) noexcept {
+    static_cast<void>(mlt_frame_pop_audio(frame));  // discard the filter handle
+    if (!buffer || !format || !frequency || !channels || !samples) return 1;
+    try {
+        *format = mlt_audio_f32le;
+        const int result = mlt_frame_get_audio(frame, buffer, format, frequency,
+                                               channels, samples);
+        if (result != 0 || !*buffer || *format != mlt_audio_f32le ||
+            *frequency <= 0 || *channels <= 0 || *samples < 0) {
+            return 1;
+        }
+        const auto count = static_cast<std::size_t>(*samples) *
+                           static_cast<std::size_t>(*channels);
+        auto* data = static_cast<float*>(*buffer);
+        for (std::size_t index = 0; index < count; ++index) {
+            const float value = data[index];
+            if (!std::isfinite(value)) {
+                data[index] = 0.0F;
+            } else if (value > 1.0F) {
+                data[index] = 1.0F;
+            } else if (value < -1.0F) {
+                data[index] = -1.0F;
+            }
+        }
+        return 0;
+    } catch (...) {
+        return 1;
+    }
+}
+
+mlt_frame processSanitizeAudioFrame(mlt_filter filter, mlt_frame frame) {
+    mlt_frame_push_audio(frame, filter);
+    mlt_frame_push_audio(frame, reinterpret_cast<void*>(getSanitizedAudio));
+    return frame;
+}
+
 bool isIdentityTransform(const domain::VisualTransform& transform) noexcept {
     return transform.x() == 0.0 && transform.y() == 0.0 &&
            transform.width() == 1.0 && transform.height() == 1.0 &&
@@ -902,6 +953,22 @@ class MltEditEngine::Impl final {
                             "MLT could not attach the audio format converter");
                     }
                     graph->filters.push_back(std::move(converter));
+                    // Clean NaN/+-Inf out of THIS source's audio right after
+                    // decode/convert (attached to the producer, the same proven
+                    // attachment point as the envelope filter). A few non-finite
+                    // samples from a decoder/concat boundary would otherwise make
+                    // the AAC encoder abort the whole export.
+                    {
+                        auto sanitize = makeCreatorFilter(
+                            std::make_unique<SanitizeAudioFilterContext>(),
+                            processSanitizeAudioFrame);
+                        if (!sanitize.hasValue()) return sanitize.error();
+                        if (producer->attach(*sanitize.value()) != 0) {
+                            return stateError(
+                                "MLT could not attach the audio sanitize filter");
+                        }
+                        graph->filters.push_back(std::move(sanitize).value());
+                    }
                     if (clip.audioEnvelope.has_value()) {
                         auto context = std::make_unique<AudioFilterContext>(
                             *clip.audioEnvelope, plan.frameRate,
@@ -1148,6 +1215,20 @@ class MltEditEngine::Impl final {
             }
             graph->filters.push_back(std::move(creatorFilter).value());
             graph->audioProcessingFilterContexts.push_back(contextObserver);
+        }
+        // Final safety net over the fully-mixed program audio: strip NaN/+-Inf
+        // and clamp to [-1, 1] before the AAC encoder (which aborts the render
+        // on non-finite input). Attached last so it runs outermost, after any
+        // envelope/processing filters.
+        {
+            auto sanitizeFilter = makeCreatorFilter(
+                std::make_unique<SanitizeAudioFilterContext>(),
+                processSanitizeAudioFrame);
+            if (!sanitizeFilter.hasValue()) return sanitizeFilter.error();
+            if (graph->tractor->attach(*sanitizeFilter.value()) != 0) {
+                return stateError("MLT could not attach the audio sanitize filter");
+            }
+            graph->filters.push_back(std::move(sanitizeFilter).value());
         }
         graph->tractor->refresh();
         // Playlist::append retains the producer service.  The extra owning
@@ -1514,9 +1595,27 @@ core::Result<void> MltEditEngine::renderFrozen(
         return stateError("independent export graph was not constructed");
     }
 
+    // Always render to an audio-safe Matroska partial. The aac_mf audio encoder
+    // muxes cleanly into Matroska but not MP4 (the mp4 muxer rejects it for not
+    // exposing a frame_size), while FFmpeg's native "aac" encoder spuriously
+    // rejects the mixed program as "NaN/+-Inf". When the caller asks for .mp4,
+    // the already-encoded H.264/AAC streams are stream-copied into MP4 by a
+    // remux after rendering, so the final file keeps its audio without a lossy,
+    // failure-prone re-encode.
+    const char* const containerFormat = "matroska";
+    const auto lowerExtension = [](const std::filesystem::path& path) {
+        auto extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char value) {
+                           return static_cast<char>(std::tolower(value));
+                       });
+        return extension;
+    };
+    const bool destinationIsMatroska =
+        lowerExtension(request.destination()) == ".mkv";
     const auto partial = request.destination().parent_path() /
                          (".creator-studio-" + request.jobId().value() +
-                          ".partial.mp4");
+                          ".partial.mkv");
     PartialArtifact artifact{partial};
     const auto encodedPartial = utf8Path(partial);
     {
@@ -1528,7 +1627,7 @@ core::Result<void> MltEditEngine::renderFrozen(
         const auto& selected = encoder.value().selected;
         consumer.set("real_time", -1);
         consumer.set("terminate_on_pause", 1);
-        consumer.set("f", "mp4");
+        consumer.set("f", containerFormat);
         consumer.set("vcodec", selected.videoCodec.c_str());
         consumer.set("acodec", encoder.value().audioCodec.c_str());
         consumer.set("pix_fmt",
@@ -1546,7 +1645,8 @@ core::Result<void> MltEditEngine::renderFrozen(
         consumer.set("frame_rate_den",
                      static_cast<int>(request.preset().frameRate().denominator()));
         consumer.set("progressive", 1);
-        consumer.set("movflags", "+faststart");
+        // The partial is always Matroska here; +faststart is applied to the MP4
+        // by the post-render remux, not by this consumer.
         if (selected.videoCodec == "h264_mf") {
             consumer.set("hw_encoding",
                          selected.forceMediaFoundationHardware ? 1 : 0);
@@ -1667,10 +1767,25 @@ core::Result<void> MltEditEngine::renderFrozen(
     if (stopToken.stop_requested()) {
         return stateError("export cancelled at publication boundary");
     }
-    auto published = publishAtomically(partial, request.destination(),
+    if (destinationIsMatroska) {
+        auto published = publishAtomically(partial, request.destination(),
+                                           request.overwritePolicy());
+        if (!published.hasValue()) return published;
+        artifact.published();
+        return core::ok();
+    }
+    // Remux the audio-safe Matroska partial into the requested MP4 (stream copy,
+    // no re-encode), then atomically publish the MP4. The Matroska partial is
+    // deleted by `artifact` on scope exit (it is not marked published()).
+    const auto remuxTarget = partial.parent_path() /
+                             (partial.stem().string() + ".mp4");
+    PartialArtifact remuxArtifact{remuxTarget};
+    auto remuxed = ffmpeg_adapter::remuxToMp4(partial, remuxTarget);
+    if (!remuxed.hasValue()) return remuxed.error();
+    auto published = publishAtomically(remuxTarget, request.destination(),
                                        request.overwritePolicy());
     if (!published.hasValue()) return published;
-    artifact.published();
+    remuxArtifact.published();
     return core::ok();
 }
 
@@ -1681,7 +1796,7 @@ core::Result<std::unique_ptr<edit_engine::IRenderJob>> MltEditEngine::render(
     config.previewHeight = request.preset().height();
     const auto partial = request.destination().parent_path() /
                          (".creator-studio-" + request.jobId().value() +
-                          ".partial.mp4");
+                          ".partial.mkv");
     const auto duration = renderDuration(request.snapshot());
     if (config.renderLifecycle) {
         auto begun = config.renderLifecycle->begin(request, partial, duration);

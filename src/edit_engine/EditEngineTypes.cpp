@@ -46,7 +46,10 @@ bool isMp4Extension(const std::filesystem::path& path) {
                    [](unsigned char value) {
                        return static_cast<char>(std::tolower(value));
                    });
-    return extension == ".mp4";
+    // Accept Matroska (.mkv) in addition to .mp4: the audio-safe export path
+    // writes an .mkv (aac_mf muxes cleanly there) and it is remuxed to the
+    // requested container afterwards.
+    return extension == ".mp4" || extension == ".mkv";
 }
 
 bool isDevicePath(const std::filesystem::path& path) {

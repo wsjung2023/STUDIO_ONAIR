@@ -147,14 +147,27 @@ Item {
                     screenCaptureController.startPreview()
                 }
             }
-            // NOTE: microphone/system-audio auto-start is intentionally NOT done
-            // here yet — the recorded audio segments trip an ffmpeg concat
-            // "Unsafe file name" error during finalize (URL-encoded segment
-            // paths). Re-enable only after that concat path is fixed so audio
-            // does not break the whole recording.
+            // Microphone: so the recording has the creator's voice. (The concat
+            // "Unsafe file name" issue that previously broke finalize is fixed in
+            // RecordingTimelineReconciler, so audio is safe to arm again.)
+            if (!deviceCaptureController.microphoneCanStop
+                    && !deviceCaptureController.microphoneBusy) {
+                if (deviceCaptureController.microphonePermissionRequired) {
+                    deviceCaptureController.requestMicrophonePermission()
+                } else if (deviceCaptureController.selectedMicrophoneId.length > 0) {
+                    deviceCaptureController.setMicrophoneEnabled(true)
+                }
+            }
+            // System audio: so game/video/app sound is captured too.
+            if (!deviceCaptureController.systemAudioCanStop
+                    && !deviceCaptureController.systemAudioBusy) {
+                deviceCaptureController.setSystemAudioEnabled(true)
+            }
             var screenOn = screenCaptureController.previewing
                     || screenCaptureController.canStopPreview
-            if (screenOn || tries > 16) {
+            if ((screenOn && deviceCaptureController.microphoneCanStop
+                    && deviceCaptureController.systemAudioCanStop)
+                    || tries > 16) {
                 stop()
             }
         }

@@ -262,9 +262,17 @@ private:
         }
         codecContext_->codec_type = AVMEDIA_TYPE_AUDIO;
         codecContext_->codec_id = codec->id;
-        codecContext_->sample_rate = static_cast<int>(sampleRate);
+        // Always encode recorded audio at the project's 48 kHz timebase, even
+        // when the capture device runs at a different rate (e.g. a 44.1 kHz
+        // microphone). The resampler configured below converts the input rate
+        // -> 48 kHz right here, so every audio segment already matches the
+        // editor/export profile. Without this, a 44.1 kHz segment forced MLT to
+        // resample 44.1 -> 48 kHz at export time, which produced NaN/Inf samples
+        // that made the AAC encoder abort the whole render.
+        constexpr int kProjectAudioSampleRate = 48'000;
+        codecContext_->sample_rate = kProjectAudioSampleRate;
         codecContext_->sample_fmt = AV_SAMPLE_FMT_FLTP;
-        codecContext_->time_base = AVRational{1, static_cast<int>(sampleRate)};
+        codecContext_->time_base = AVRational{1, kProjectAudioSampleRate};
         codecContext_->bit_rate = options_.bitRate;
         av_channel_layout_default(&codecContext_->ch_layout, static_cast<int>(channels));
         if ((formatContext_->oformat->flags & AVFMT_GLOBALHEADER) != 0) {

@@ -692,8 +692,11 @@ int main(int argc, char* argv[]) {
                     screenCaptureController.startPreview();
                 }
                 if (!state->systemAudioRequested) {
-                    qInfo("[autodrive] starting system audio");
+                    qInfo("[autodrive] starting system audio + microphone");
                     deviceCaptureController.setSystemAudioEnabled(true);
+                    if (!deviceCaptureController.selectedMicrophoneId().isEmpty()) {
+                        deviceCaptureController.setMicrophoneEnabled(true);
+                    }
                     state->systemAudioRequested = true;
                 }
                 if (!state->cameraRequested &&
@@ -713,7 +716,8 @@ int main(int argc, char* argv[]) {
                     state->avatarRequested = true;
                 }
                 const bool audioReady =
-                    deviceCaptureController.systemAudioCapturing();
+                    deviceCaptureController.systemAudioCapturing() ||
+                    deviceCaptureController.microphoneCapturing();
                 const bool cameraReady =
                     deviceCaptureController.cameraCapturing() &&
                     deviceCaptureController.cameraWidth() > 0;
