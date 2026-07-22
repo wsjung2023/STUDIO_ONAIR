@@ -126,6 +126,22 @@ bool requiresPackedAlphaExtraction(const MltVisualBranch& branch) {
     return extension == ".png";
 }
 
+// True when the decoded source carries a real alpha channel (e.g. the avatar
+// overlay recorded as FFV1 BGRA). Such branches must run through the packed
+// alpha extraction filter so their transparent background composites over the
+// screen instead of appearing as an opaque black box.
+bool sourceHasAlphaChannel(Mlt::Producer& producer) {
+    const char* pix = producer.get("meta.media.0.codec.pix_fmt");
+    if (pix == nullptr) return false;
+    const std::string fmt(pix);
+    return fmt.find("rgba") != std::string::npos ||
+           fmt.find("bgra") != std::string::npos ||
+           fmt.find("argb") != std::string::npos ||
+           fmt.find("abgr") != std::string::npos ||
+           fmt.find("yuva") != std::string::npos ||
+           fmt.find("gbrap") != std::string::npos;
+}
+
 core::DurationNs renderDuration(
     const edit_engine::TimelineSnapshot& snapshot) noexcept {
     core::TimestampNs timelineEnd{};
@@ -348,6 +364,8 @@ struct VisualFilterContext final : CreatorFilterContext {
     std::atomic<int> lastErrorStage{};
 };
 
+bool isIdentityTransform(const domain::VisualTransform& transform) noexcept;
+
 struct CursorVisualFilterContext final : CreatorFilterContext {
     CursorVisualFilterContext(std::shared_ptr<const CursorVisualEffectsPlan> value,
                               std::uint32_t width, std::uint32_t height,
@@ -444,6 +462,50 @@ int getTransformedImage(mlt_frame frame, std::uint8_t** image,
             *width > static_cast<int>(kMaximumPreviewDimension) ||
             *height > static_cast<int>(kMaximumPreviewDimension)) {
             return fail(2);
+        }
+        // Fast path: with no geometric transform (e.g. the alpha avatar overlay
+        // composited at native frame), skip the full-canvas software rasterizer
+        // and just split the source RGBA into the RGB image + alpha plane the
+        // composite transition needs. The transition scales it onto the canvas.
+        // This keeps alpha compositing real-time instead of per-frame full-frame
+        // CPU work, which otherwise overruns the export timeout.
+        if (isIdentityTransform(context->transform)) {
+            const auto srcPixels = static_cast<std::size_t>(*width) *
+                                   static_cast<std::size_t>(*height);
+            const auto rgbBytes = srcPixels * 3U;
+            auto* rgb = static_cast<std::uint8_t*>(
+                mlt_pool_alloc(static_cast<int>(rgbBytes)));
+            auto* alphaPlane = static_cast<std::uint8_t*>(
+                mlt_pool_alloc(static_cast<int>(srcPixels)));
+            if (!rgb || !alphaPlane) {
+                if (rgb) mlt_pool_release(rgb);
+                if (alphaPlane) mlt_pool_release(alphaPlane);
+                return fail(6);
+            }
+            const std::uint8_t* src = *image;
+            for (std::size_t pixel = 0; pixel < srcPixels; ++pixel) {
+                const auto s = pixel * 4U;
+                const auto d = pixel * 3U;
+                alphaPlane[pixel] = src[s + 3U];
+                rgb[d] = src[s];
+                rgb[d + 1U] = src[s + 1U];
+                rgb[d + 2U] = src[s + 2U];
+            }
+            if (mlt_frame_set_image(frame, rgb, static_cast<int>(rgbBytes),
+                                    mlt_pool_release) != 0) {
+                mlt_pool_release(rgb);
+                mlt_pool_release(alphaPlane);
+                return fail(7);
+            }
+            if (mlt_frame_set_alpha(frame, alphaPlane,
+                                    static_cast<int>(srcPixels),
+                                    mlt_pool_release) != 0) {
+                mlt_pool_release(alphaPlane);
+                return fail(8);
+            }
+            *image = rgb;
+            *format = mlt_image_rgb;
+            return 0;
         }
         const auto pixelCount = static_cast<std::uint64_t>(*width) *
                                 static_cast<std::uint64_t>(*height);
@@ -1090,7 +1152,8 @@ class MltEditEngine::Impl final {
                 const bool transformed =
                     !isIdentityTransform(branch.transform);
                 const bool extractsPackedAlpha =
-                    requiresPackedAlphaExtraction(branch);
+                    requiresPackedAlphaExtraction(branch) ||
+                    sourceHasAlphaChannel(*producer);
                 if (transformed || extractsPackedAlpha) {
                     auto converter = std::make_unique<Mlt::Filter>(
                         *graph->profile, "imageconvert");

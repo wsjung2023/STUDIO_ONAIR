@@ -87,6 +87,13 @@ core::Result<std::unique_ptr<AsyncTrackRecorder>> makeTrackRecorder(
     std::unique_ptr<recorder::ITrackSegmentEncoder> encoder;
     if (track.mediaKind() == TrackMediaKind::Video) {
         ffmpeg_adapter::VideoEncoderOptions options;
+        if (track.role() == TrackRole::Avatar) {
+            // The avatar overlay is a transparent frame with the character baked
+            // into a corner. Record it with a real alpha channel (lossless FFV1
+            // RGBA) so its background does not occlude the screen on composite.
+            options.preserveAlpha = true;
+            options.preferredEncoderNames = {"ffv1"};
+        }
         if (concurrentVideoSources && track.role() == TrackRole::Camera) {
             // Keep the camera on the audited software path when two video
             // sources are active.  The screen track may use the platform H.264

@@ -222,9 +222,11 @@ private:
             return ffmpegError("Could not create Matroska video output", allocated);
         }
 
-        const auto candidates = options_.preferredEncoderNames.empty()
-                                    ? defaultEncoders()
-                                    : options_.preferredEncoderNames;
+        const auto candidates =
+            !options_.preferredEncoderNames.empty()
+                ? options_.preferredEncoderNames
+                : (options_.preserveAlpha ? std::vector<std::string>{"ffv1"}
+                                          : defaultEncoders());
         std::string lastOpenError = "No requested FFmpeg video encoder is installed";
         for (const auto& name : candidates) {
             const AVCodec* codec = avcodec_find_encoder_by_name(name.c_str());
@@ -239,16 +241,24 @@ private:
             candidate->codec_id = codec->id;
             candidate->width = static_cast<int>(width);
             candidate->height = static_cast<int>(height);
-            candidate->pix_fmt = AV_PIX_FMT_YUV420P;
+            // Alpha-preserving tracks encode BGRA (FFV1 is lossless and carries
+            // the alpha plane; BGRA is also the mapper's native format so the
+            // scaler is a straight copy). Everything else stays opaque YUV420P.
+            candidate->pix_fmt =
+                options_.preserveAlpha ? AV_PIX_FMT_BGRA : AV_PIX_FMT_YUV420P;
             candidate->time_base = AVRational{1, 60'000};
             candidate->framerate = AVRational{
                 static_cast<int>(options_.frameRateNumerator),
                 static_cast<int>(options_.frameRateDenominator)};
-            candidate->bit_rate = options_.bitRate;
-            candidate->gop_size = std::max(
-                1, static_cast<int>((options_.frameRateNumerator * 2) /
-                                    options_.frameRateDenominator));
-            candidate->max_b_frames = 0;
+            if (!options_.preserveAlpha) {
+                // Rate control / GOP tuning is meaningful only for the lossy
+                // delivery encoders; FFV1 is intra-only lossless.
+                candidate->bit_rate = options_.bitRate;
+                candidate->gop_size = std::max(
+                    1, static_cast<int>((options_.frameRateNumerator * 2) /
+                                        options_.frameRateDenominator));
+                candidate->max_b_frames = 0;
+            }
             if ((formatContext_->oformat->flags & AVFMT_GLOBALHEADER) != 0) {
                 candidate->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
             }
