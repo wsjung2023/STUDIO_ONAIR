@@ -76,6 +76,8 @@ add_library(cs_app STATIC
     TimelineTrackModel.cpp
     EditorEngineWorker.h
     EditorEngineWorker.cpp
+    EditorPreviewAudioOutput.h
+    EditorPreviewAudioOutput.cpp
     EditorController.h
     EditorController.cpp
     EditorPreviewItem.h
@@ -141,6 +143,10 @@ target_link_libraries(cs_app
         cs_edit_engine
         cs_transcription
     PRIVATE
+        # Qt Multimedia is confined to the application layer (CLAUDE.md 3/5) and
+        # kept PRIVATE: only EditorPreviewAudioOutput.cpp includes QAudioSink, and
+        # no cs_app public header exposes a Qt Multimedia type.
+        Qt6::Multimedia
         cs_project_store
 )
 

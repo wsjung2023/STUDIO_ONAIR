@@ -85,6 +85,28 @@ void EditorEngineWorker::requestFrame(quint64 generation, quint64 commandId,
                         std::move(detached));
 }
 
+void EditorEngineWorker::requestAudio(quint64 generation, quint64 commandId,
+                                      core::TimestampNs position,
+                                      quint32 frequency, quint32 channels,
+                                      quint32 samples) {
+    auto result = engine_->requestMixedAudio(position, frequency, channels,
+                                             samples);
+    if (!result.hasValue()) {
+        emit audioCompleted(generation, commandId, false,
+                            QString::fromStdString(result.error().message()),
+                            position.time_since_epoch().count(), {});
+        return;
+    }
+    const auto& block = result.value();
+    const auto byteCount = static_cast<qsizetype>(block.interleaved.size() *
+                                                  sizeof(float));
+    QByteArray pcm{reinterpret_cast<const char*>(block.interleaved.data()),
+                   byteCount};
+    emit audioCompleted(generation, commandId, true, {},
+                        block.position.time_since_epoch().count(),
+                        std::move(pcm));
+}
+
 void EditorEngineWorker::publish(quint64 generation, quint64 commandId,
                                  EditorEngineOperation operation,
                                  const core::Result<void>& result) {

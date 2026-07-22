@@ -2,6 +2,7 @@
 
 #include "edit_engine/IEditEngine.h"
 
+#include <cstdint>
 #include <filesystem>
 
 namespace creator::app {
@@ -22,6 +23,9 @@ public:
     [[nodiscard]] core::Result<void> seek(core::TimestampNs) override;
     [[nodiscard]] core::Result<edit_engine::PreviewFrame> requestFrame(
         core::TimestampNs) override;
+    [[nodiscard]] core::Result<edit_engine::PreviewAudioBlock> requestMixedAudio(
+        core::TimestampNs, std::uint32_t frequency, std::uint32_t channels,
+        std::uint32_t samples) override;
     [[nodiscard]] core::Result<std::unique_ptr<edit_engine::IRenderJob>> render(
         const edit_engine::RenderRequest& request) override;
 

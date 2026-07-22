@@ -1625,6 +1625,25 @@ core::Result<std::vector<float>> MltEditEngine::requestMixedAudio(
     return converted;
 }
 
+core::Result<edit_engine::PreviewAudioBlock> MltEditEngine::requestMixedAudio(
+    core::TimestampNs position, std::uint32_t frequency, std::uint32_t channels,
+    std::uint32_t samples) {
+    constexpr auto kMaxInt =
+        static_cast<std::uint32_t>(std::numeric_limits<int>::max());
+    if (frequency > kMaxInt || channels > kMaxInt || samples > kMaxInt) {
+        return core::AppError{core::ErrorCode::InvalidArgument,
+                              "MLT audio request is outside supported limits"};
+    }
+    auto pcm = requestMixedAudio(position, static_cast<int>(frequency),
+                                 static_cast<int>(channels),
+                                 static_cast<int>(samples));
+    if (!pcm.hasValue()) return pcm.error();
+    return edit_engine::PreviewAudioBlock{.position = position,
+                                          .frequency = frequency,
+                                          .channels = channels,
+                                          .interleaved = std::move(pcm).value()};
+}
+
 core::Result<void> MltEditEngine::renderFrozen(
     const edit_engine::RenderRequest& request, std::stop_token stopToken,
     const std::function<bool(edit_engine::RenderJobState, double,

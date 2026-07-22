@@ -33,6 +33,11 @@ core::Result<PreviewFrame> UnavailableEditEngine::requestFrame(
     return unavailable();
 }
 
+core::Result<PreviewAudioBlock> UnavailableEditEngine::requestMixedAudio(
+    core::TimestampNs, std::uint32_t, std::uint32_t, std::uint32_t) {
+    return unavailable();
+}
+
 core::Result<std::unique_ptr<IRenderJob>> UnavailableEditEngine::render(
     const RenderRequest&) {
     return unavailable();

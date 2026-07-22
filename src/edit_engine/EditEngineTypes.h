@@ -136,6 +136,21 @@ private:
     media::VideoFrame frame_;
 };
 
+/// Fully-mixed interleaved preview audio pulled from the edit engine at a
+/// timeline position. `interleaved` holds `frequency`-rate 32-bit float samples
+/// in [channels]-interleaved order, so its size is samples * channels.
+///
+/// This is the application-facing audio-pull payload. It is deliberately a plain
+/// POD of primitive/std types: the domain and edit_engine layers never see Qt
+/// Multimedia (CLAUDE.md 3/5), so the application layer converts this block into
+/// a QAudioSink write on its own side of the port boundary.
+struct PreviewAudioBlock final {
+    core::TimestampNs position{};
+    std::uint32_t frequency{};
+    std::uint32_t channels{};
+    std::vector<float> interleaved{};
+};
+
 enum class RenderFallbackPolicy { HardwareThenSoftware, SoftwareOnly };
 
 class RenderPreset final {

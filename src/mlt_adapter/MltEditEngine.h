@@ -69,6 +69,12 @@ public:
     [[nodiscard]] core::Result<MltEditEngineDiagnostics> diagnostics() const;
     [[nodiscard]] core::Result<std::vector<float>> requestMixedAudio(
         core::TimestampNs position, int frequency, int channels, int samples);
+    /// Port overload: wraps the concrete PCM puller above into a
+    /// PreviewAudioBlock so the application can feed it to a QAudioSink without
+    /// depending on MLT types.
+    [[nodiscard]] core::Result<edit_engine::PreviewAudioBlock> requestMixedAudio(
+        core::TimestampNs position, std::uint32_t frequency,
+        std::uint32_t channels, std::uint32_t samples) override;
     [[nodiscard]] core::Result<std::unique_ptr<edit_engine::IRenderJob>> render(
         const edit_engine::RenderRequest& request) override;
 

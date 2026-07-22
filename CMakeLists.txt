@@ -76,7 +76,7 @@ if(CS_ENABLE_WHISPER)
     find_package(whisper CONFIG REQUIRED)
 endif()
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Test LinguistTools)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Multimedia Test LinguistTools)
 qt_standard_project_setup(REQUIRES 6.8)
 
 include(FetchContent)

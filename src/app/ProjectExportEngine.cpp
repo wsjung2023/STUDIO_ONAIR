@@ -41,6 +41,11 @@ core::Result<edit_engine::PreviewFrame> ProjectExportEngine::requestFrame(
     core::TimestampNs) {
     return unsupported();
 }
+core::Result<edit_engine::PreviewAudioBlock>
+ProjectExportEngine::requestMixedAudio(core::TimestampNs, std::uint32_t,
+                                       std::uint32_t, std::uint32_t) {
+    return unsupported();
+}
 
 core::Result<std::unique_ptr<edit_engine::IRenderJob>>
 ProjectExportEngine::render(const edit_engine::RenderRequest& request) {

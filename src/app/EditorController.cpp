@@ -1,6 +1,7 @@
 #include "app/EditorController.h"
 
 #include "app/EditorEngineWorker.h"
+#include "app/EditorPreviewAudioOutput.h"
 #include "app/EditorSessionWorker.h"
 #include "app/RecentProjectRegistry.h"
 #include "transcription/TranscriptStore.h"
@@ -8,6 +9,7 @@
 #include <QMetaObject>
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <utility>
 
@@ -120,6 +122,11 @@ EditorController::EditorController(
             &EditorController::handleCompleted);
     connect(worker_, &EditorEngineWorker::frameCompleted, this,
             &EditorController::handleFrameCompleted);
+    connect(worker_, &EditorEngineWorker::audioCompleted, this,
+            &EditorController::handleAudioCompleted);
+    audioOutput_ = std::make_unique<EditorPreviewAudioOutput>();
+    connect(audioOutput_.get(), &EditorPreviewAudioOutput::errorOccurred, this,
+            [this](const QString& message) { setStatus(message); });
     sessionWorker_->moveToThread(&sessionThread_);
     connect(&sessionThread_, &QThread::finished, sessionWorker_,
             &QObject::deleteLater);
@@ -136,6 +143,7 @@ EditorController::EditorController(
 
 EditorController::~EditorController() {
     playbackTimer_.stop();
+    if (audioOutput_) audioOutput_->stop();
     QMetaObject::invokeMethod(sessionWorker_, [] {},
                               Qt::BlockingQueuedConnection);
     disconnect(sessionWorker_, nullptr, this, nullptr);
@@ -381,6 +389,7 @@ void EditorController::pause() {
         return;
     }
     playbackTimer_.stop();
+    if (audioOutput_) audioOutput_->stop();
     queueSimple(EditorEngineOperation::Pause);
 }
 
@@ -1245,6 +1254,67 @@ void EditorController::queueFrame(core::TimestampNs position) {
     dispatchNext();
 }
 
+void EditorController::queueAudio(core::TimestampNs position,
+                                  std::uint32_t samples) {
+    if (!snapshot_.has_value() || previewStale_ || audioRequestInFlight_ ||
+        samples == 0U || !audioOutput_ || !audioOutput_->active()) {
+        return;
+    }
+    const quint64 commandId =
+        beginCommand(EditorEngineOperation::Audio, position, false,
+                     snapshot_->revision.value());
+    audioRequestInFlight_ = true;
+    QueuedCommand command{generation_,   commandId, EditorEngineOperation::Audio,
+                          position,       std::nullopt, std::nullopt, samples};
+    queuedCommands_.push_back(std::move(command));
+    dispatchNext();
+}
+
+void EditorController::scheduleAudioPull() {
+    if (!playing_ || !snapshot_.has_value() || previewStale_ ||
+        audioRequestInFlight_ || !audioOutput_ || !audioOutput_->active()) {
+        return;
+    }
+    // Keep the sink's bounded ring topped up but not full: pull only while it is
+    // below roughly a third of a second of lookahead.
+    constexpr std::uint32_t kTargetBufferedSamples =
+        EditorPreviewAudioOutput::kSampleRate / 3;
+    if (audioOutput_->queuedSamples() >= kTargetBufferedSamples) return;
+
+    const auto rate = snapshot_->timeline.frameRate();
+    const auto frameCount = timelineFrameCount(snapshot_->timeline);
+    if (frameCount <= 0) return;
+    const auto endPosition = core::frameToTimestamp(frameCount, rate);
+    if (audioPullPosition_ >= endPosition) return;
+
+    // Request a comfortably-whole frame of audio (ceil samples-per-frame plus a
+    // small margin) so MLT's actual per-frame count never exceeds the request;
+    // handleAudioCompleted advances the read position by however many samples
+    // actually came back, so contiguity holds even at fractional frame rates.
+    const std::int64_t num = rate.numerator();
+    const std::int64_t den = rate.denominator();
+    const std::int64_t samplesPerFrame =
+        num > 0 ? (static_cast<std::int64_t>(
+                       EditorPreviewAudioOutput::kSampleRate) *
+                       den +
+                   num - 1) /
+                      num
+                : static_cast<std::int64_t>(
+                      EditorPreviewAudioOutput::kSampleRate) /
+                      30;
+    const auto samples = static_cast<std::uint32_t>(samplesPerFrame + 32);
+    queueAudio(audioPullPosition_, samples);
+}
+
+void EditorController::restartAudioPull(core::TimestampNs from) {
+    audioPullPosition_ = from;
+    if (audioOutput_) audioOutput_->flush();
+    // Any pull already in flight was requested for the old position; mark it so
+    // its completion neither plays nor advances past the new position.
+    if (audioRequestInFlight_) audioPullInvalidated_ = true;
+    scheduleAudioPull();
+}
+
 void EditorController::dispatchNext() {
     if (workerCommandActive_ || queuedCommands_.empty()) return;
     workerCommandActive_ = true;
@@ -1289,6 +1359,21 @@ void EditorController::postToWorker(QueuedCommand command) {
                 worker_,
                 [worker = worker_, generation, commandId, position] {
                     worker->requestFrame(generation, commandId, position);
+                },
+                Qt::QueuedConnection);
+            break;
+        }
+        case EditorEngineOperation::Audio: {
+            const core::TimestampNs position = *command.position;
+            const quint32 frequency = EditorPreviewAudioOutput::kSampleRate;
+            const quint32 channels = EditorPreviewAudioOutput::kChannels;
+            const quint32 samples = command.audioSamples;
+            QMetaObject::invokeMethod(
+                worker_,
+                [worker = worker_, generation, commandId, position, frequency,
+                 channels, samples] {
+                    worker->requestAudio(generation, commandId, position,
+                                         frequency, channels, samples);
                 },
                 Qt::QueuedConnection);
             break;
@@ -1386,6 +1471,7 @@ void EditorController::handleCompleted(quint64 generation, quint64 commandId,
                     if (playing_) {
                         playbackStart_ = playhead_;
                         playbackClock_.restart();
+                        restartAudioPull(playhead_);
                     }
                     queueFrame(playhead_);
                     break;
@@ -1451,7 +1537,61 @@ void EditorController::handleFrameCompleted(
     dispatchNext();
 }
 
+void EditorController::handleAudioCompleted(
+    quint64 generation, quint64 commandId, bool success,
+    const QString& errorMessage, qlonglong positionNs, QByteArray pcm) {
+    const auto found = commands_.find(commandId);
+    if (found == commands_.end()) return;
+    const PendingCommand command = found->second;
+    const bool current = generation == generation_ &&
+                         command.generation == generation_ &&
+                         command.operation == EditorEngineOperation::Audio;
+    commands_.erase(found);
+    audioRequestInFlight_ = false;
+    workerCommandActive_ = false;
+    // A seek/flush that landed while this pull was in flight retargeted the read
+    // position; that stale audio must neither play nor advance the position.
+    const bool invalidated = audioPullInvalidated_;
+    audioPullInvalidated_ = false;
+
+    if (current && !invalidated) {
+        if (!success) {
+            setStatus(errorMessage);
+        } else if (audioOutput_ && audioOutput_->active() && !pcm.isEmpty()) {
+            constexpr auto kBytesPerFrame =
+                static_cast<qint64>(EditorPreviewAudioOutput::kChannels) *
+                static_cast<qint64>(sizeof(float));
+            const std::int64_t returnedSamples =
+                kBytesPerFrame > 0 ? pcm.size() / kBytesPerFrame : 0;
+            if (returnedSamples > 0) {
+                edit_engine::PreviewAudioBlock block{
+                    .position = core::TimestampNs{core::DurationNs{positionNs}},
+                    .frequency = EditorPreviewAudioOutput::kSampleRate,
+                    .channels = EditorPreviewAudioOutput::kChannels,
+                    .interleaved = {}};
+                block.interleaved.resize(
+                    static_cast<std::size_t>(returnedSamples) *
+                    EditorPreviewAudioOutput::kChannels);
+                std::memcpy(block.interleaved.data(), pcm.constData(),
+                            static_cast<std::size_t>(returnedSamples) *
+                                static_cast<std::size_t>(kBytesPerFrame));
+                audioOutput_->pushBlock(block);
+                audioPullPosition_ =
+                    core::TimestampNs{core::DurationNs{positionNs}} +
+                    core::DurationNs{returnedSamples * 1'000'000'000LL /
+                                     EditorPreviewAudioOutput::kSampleRate};
+            }
+        }
+    }
+
+    scheduleAudioPull();
+    dispatchNext();
+}
+
 void EditorController::requestPlaybackFrame() {
+    // Keep audio flowing independently of the video-frame gating below so a
+    // frame still in flight never starves the sink.
+    scheduleAudioPull();
     if (!playing_ || !snapshot_.has_value() || previewStale_ ||
         frameRequestInFlight_) {
         return;
@@ -1494,8 +1634,16 @@ void EditorController::setPlaying(bool value) {
         const auto interval = std::max<std::int64_t>(
             1, (1000 * rate.denominator()) / rate.numerator());
         playbackTimer_.start(static_cast<int>(interval));
+        if (audioOutput_) {
+            // start() surfaces device/format failure through errorOccurred ->
+            // setStatus; video playback continues either way, so a missing audio
+            // device never blocks editing.
+            audioOutput_->start();
+            restartAudioPull(playhead_);
+        }
     } else {
         playbackTimer_.stop();
+        if (audioOutput_) audioOutput_->stop();
     }
     emit playingChanged();
 }

@@ -852,6 +852,12 @@ public:
     return result;
   }
 
+  core::Result<edit_engine::PreviewAudioBlock>
+  requestMixedAudio(core::TimestampNs position, std::uint32_t frequency,
+                    std::uint32_t channels, std::uint32_t samples) override {
+    return engine_.requestMixedAudio(position, frequency, channels, samples);
+  }
+
   core::Result<std::unique_ptr<edit_engine::IRenderJob>>
   render(const edit_engine::RenderRequest &request) override {
     return engine_.render(request);
