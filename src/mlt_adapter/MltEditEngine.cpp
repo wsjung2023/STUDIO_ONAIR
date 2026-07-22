@@ -1121,6 +1121,12 @@ class MltEditEngine::Impl final {
 
         std::vector<int> visualTrackIndices;
         visualTrackIndices.reserve(plan.visualBranches.size());
+        // Parallel to visualTrackIndices: true where the branch is a transparent
+        // avatar overlay (alpha-carrying video). Those composite as a small,
+        // fully-visible corner PiP rather than the source frame's arbitrary
+        // native placement.
+        std::vector<char> visualTrackIsAvatar;
+        visualTrackIsAvatar.reserve(plan.visualBranches.size());
         for (const auto& branch : plan.visualBranches) {
             auto playlist = std::make_unique<Mlt::Playlist>(*graph->profile);
             playlist->set("hide", 2);
@@ -1128,6 +1134,7 @@ class MltEditEngine::Impl final {
             const int timelineIn = static_cast<int>(branch.timelineIn);
             const int length = static_cast<int>(
                 branch.timelineOut - branch.timelineIn + 1);
+            bool avatarOverlay = false;
             if (timelineIn > 0) playlist->blank(timelineIn - 1);
             if (!branch.enabled || !branch.available) {
                 playlist->blank(length - 1);
@@ -1151,9 +1158,10 @@ class MltEditEngine::Impl final {
                 ++graph->mediaProducerCount;
                 const bool transformed =
                     !isIdentityTransform(branch.transform);
+                const bool sourceAlpha = sourceHasAlphaChannel(*producer);
+                avatarOverlay = sourceAlpha;
                 const bool extractsPackedAlpha =
-                    requiresPackedAlphaExtraction(branch) ||
-                    sourceHasAlphaChannel(*producer);
+                    requiresPackedAlphaExtraction(branch) || sourceAlpha;
                 if (transformed || extractsPackedAlpha) {
                     auto converter = std::make_unique<Mlt::Filter>(
                         *graph->profile, "imageconvert");
@@ -1207,6 +1215,7 @@ class MltEditEngine::Impl final {
             }
             graph->playlists.push_back(std::move(playlist));
             visualTrackIndices.push_back(nativeTrackIndex);
+            visualTrackIsAvatar.push_back(avatarOverlay ? 1 : 0);
         }
 
         for (const auto& [track, nativeTrackIndex] : nativeAudioTracks) {
@@ -1229,7 +1238,9 @@ class MltEditEngine::Impl final {
                 graph->transitions.push_back(std::move(mix));
             }
         }
-        for (const int nativeTrackIndex : visualTrackIndices) {
+        for (std::size_t visualIndex = 0;
+             visualIndex < visualTrackIndices.size(); ++visualIndex) {
+            const int nativeTrackIndex = visualTrackIndices[visualIndex];
             auto composite = std::make_unique<Mlt::Transition>(
                 *graph->profile, "composite");
             if (!composite->is_valid()) {
@@ -1238,6 +1249,14 @@ class MltEditEngine::Impl final {
             composite->set("always_active", 1);
             composite->set("progressive", 1);
             composite->set("distort", 1);
+            if (visualIndex < visualTrackIsAvatar.size() &&
+                visualTrackIsAvatar[visualIndex] != 0) {
+                // Place the transparent avatar overlay as a fully-visible
+                // bottom-right corner picture-in-picture (16:9 region, so no
+                // distortion) instead of its arbitrary source-native placement,
+                // which otherwise pushed the character off the top of the frame.
+                composite->set("geometry", "68%/66%:30%x30%");
+            }
             if (mlt_field_plant_transition(
                     mlt_tractor_field(graph->tractor->get_tractor()),
                     composite->get_transition(), backgroundTrackIndex,
