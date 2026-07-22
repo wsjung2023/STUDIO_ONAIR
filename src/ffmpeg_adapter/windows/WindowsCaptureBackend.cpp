@@ -901,18 +901,40 @@ private:
                 fail(ioFailure("audited FFmpeg dshow input is unavailable"));
                 return;
             }
-            AVFormatContext* rawFormat = avformat_alloc_context();
-            if (!rawFormat) {
-                fail(ioFailure("microphone demuxer allocation failed"));
-                return;
-            }
-            rawFormat->interrupt_callback = {interrupt, this};
             const auto url = dshowUrl("audio=", deviceName_);
-            const int opened = avformat_open_input(
-                &rawFormat, url.c_str(), input, nullptr);
-            if (opened < 0) {
-                if (rawFormat) avformat_free_context(rawFormat);
-                fail(ioFailure("microphone input open failed: " +
+            // Negotiate a full-bandwidth capture format. Opened with no options,
+            // FFmpeg's dshow demuxer accepts the device's default AM_MEDIA_TYPE,
+            // which for most microphones is a telephone-grade low-rate/mono format
+            // (8k/11k/16k) -- the "hollow/distant/faint" quality users hear. Ask
+            // for 48 kHz stereo 16-bit and fall back progressively so unusual
+            // devices still start (mirrors CameraSource::open's cascade).
+            const auto tryOpen = [&](const char* sampleRate,
+                                     const char* channels)
+                -> std::pair<AVFormatContext*, int> {
+                AVFormatContext* raw = avformat_alloc_context();
+                if (!raw) return {nullptr, AVERROR(ENOMEM)};
+                raw->interrupt_callback = {interrupt, this};
+                AVDictionary* options = nullptr;
+                if (sampleRate != nullptr) {
+                    av_dict_set(&options, "sample_rate", sampleRate, 0);
+                    av_dict_set(&options, "channels", channels, 0);
+                    av_dict_set(&options, "sample_size", "16", 0);
+                    av_dict_set(&options, "audio_buffer_size", "50", 0);
+                }
+                const int ret =
+                    avformat_open_input(&raw, url.c_str(), input, &options);
+                av_dict_free(&options);
+                if (ret < 0 && raw) avformat_free_context(raw);
+                return {raw, ret};
+            };
+            auto [rawFormat, opened] = tryOpen("48000", "2");
+            if (opened < 0) std::tie(rawFormat, opened) = tryOpen("48000", "1");
+            if (opened < 0) std::tie(rawFormat, opened) = tryOpen("44100", "2");
+            if (opened < 0)
+                std::tie(rawFormat, opened) = tryOpen(nullptr, nullptr);
+            if (opened < 0 || !rawFormat) {
+                fail(ioFailure("microphone input open failed after format "
+                               "negotiation: " +
                                ffmpegError(opened)));
                 return;
             }
@@ -1215,6 +1237,11 @@ private:
             return;
         }
         ComHandle<IMMDevice> endpoint;
+        // Capture the system default playback endpoint (the device Windows shows
+        // as Default). eConsole is that device on normal single-output systems;
+        // switching to eMultimedia was verified to point at an idle endpoint on
+        // this hardware (loopback delivered zero packets), so keep eConsole. The
+        // near-silence bug is fixed by the timer-driven drain below, not here.
         result = enumerator->GetDefaultAudioEndpoint(eRender, eConsole,
                                                       endpoint.put());
         if (FAILED(result)) {
@@ -1275,8 +1302,12 @@ private:
         wakeEvent_.store(static_cast<HANDLE>(event.get()),
                          std::memory_order_release);
         if (sink_) sink_->onCaptureStarted();
+        // Keep event-driven wakeups but cap the wait at 10 ms so we still drain
+        // periodically if the loopback event goes dormant (WASAPI loopback does
+        // not reliably signal its event when the render endpoint was idle at
+        // capture start, which would otherwise strand later audio in the buffer).
         while (!stopRequested_.load(std::memory_order_acquire)) {
-            const DWORD waited = WaitForSingleObject(event.get(), 250);
+            const DWORD waited = WaitForSingleObject(event.get(), 10);
             if (waited != WAIT_OBJECT_0 && waited != WAIT_TIMEOUT) {
                 fail(ioFailure("WASAPI loopback wait failed"));
                 break;
