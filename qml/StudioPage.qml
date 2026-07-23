@@ -15,6 +15,29 @@ Item {
     // Design tokens for this page (see qml/Theme.qml).
     Theme { id: theme }
 
+    // Pause the live capture/composite when the Studio page is not on screen.
+    // The StackLayout keeps every page alive, so without this the screen grab,
+    // camera and avatar renderer keep burning CPU while the creator is on the
+    // Editor/Export/Home pages -- pure waste, since nothing shows that preview.
+    // Never pause mid-recording. Re-arm on return via the existing auto-start.
+    onVisibleChanged: {
+        if (visible) {
+            screenAutoStart.tries = 0
+            screenAutoStart.start()
+            if (avatarSceneController.avatarStyleSelectable
+                    && !avatarSceneController.avatarCanStop)
+                avatarSceneController.setAvatarEnabled(true)
+        } else if (!studioController.recording) {
+            screenAutoStart.stop()
+            if (screenCaptureController.canStopPreview)
+                screenCaptureController.stopPreview()
+            if (avatarSceneController.avatarCanStop)
+                avatarSceneController.setAvatarEnabled(false)
+            if (deviceCaptureController.cameraCanStop)
+                deviceCaptureController.setCameraEnabled(false)
+        }
+    }
+
     // Phone layout below 600px. All automated smoke tests run at width >= 720, so
     // `compact` is always false under test and the desktop tree is what they see;
     // the phone tree lives in a Loader that only instantiates on real phones.
