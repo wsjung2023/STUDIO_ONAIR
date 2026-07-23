@@ -574,6 +574,11 @@ Item {
                             Accessible.name: qsTr("Resolved PIP preset")
                         }
                         GridLayout {
+                            // Raw normalized transform fields (X/Y/W/H/scale/crop/
+                            // opacity/z) -- advanced only. The PIP preset buttons
+                            // below are the creator-facing control; this grid is for
+                            // fine numeric tweaks behind the 고급 편집 toggle.
+                            visible: root.advancedExpanded
                             Layout.fillWidth: true
                             columns: 2
                             enabled: root.editingReady

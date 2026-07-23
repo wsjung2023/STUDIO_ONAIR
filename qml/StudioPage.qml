@@ -43,6 +43,11 @@ Item {
     // and only reveals the full transform grid when the creator asks for it.
     property bool detailExpanded: false
 
+    // Advanced/power-user surface (scene hotkey grid, engineering telemetry).
+    // Hidden by default so a first-time creator sees a calm page; the controls
+    // still exist, one toggle away, so no capability is lost.
+    property bool showAdvanced: false
+
     readonly property bool workflowEditable: !studioController.recording
                                              && !studioWorkflowController.recording
                                              && !studioController.busy
@@ -434,6 +439,9 @@ Item {
                     }
 
                     GridLayout {
+                        // Scene hotkey grid (1-9) duplicates the scene list + prev/next;
+                        // advanced-only so it does not clutter the default page.
+                        visible: root.showAdvanced
                         Layout.fillWidth: true
                         columns: 5
                         ToolButton { objectName: "studioSceneButton1"; action: scene1Action }
@@ -1602,10 +1610,22 @@ Item {
                     }
                 }
 
+                // Advanced toggle for the engineering telemetry below. A creator
+                // does not need drift/ppm/queue/session numbers; keep them one
+                // click away instead of on screen by default.
+                Switch {
+                    objectName: "studioAdvancedToggle"
+                    text: qsTr("고급 정보")
+                    checked: root.showAdvanced
+                    onToggled: root.showAdvanced = checked
+                    font.family: theme.fontFamily
+                }
+
                 // Recording telemetry chips. Each keeps the full descriptive text
                 // (the smoke test and logs rely on these exact strings) but reads
                 // as a single calm line with a status dot.
                 Flow {
+                    visible: root.showAdvanced
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     spacing: theme.spaceSm
