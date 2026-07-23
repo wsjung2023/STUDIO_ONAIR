@@ -145,6 +145,7 @@ target_link_libraries(cs_tests
 
 target_compile_definitions(cs_tests PRIVATE
     CS_CRASH_FIXTURE_PATH="$<TARGET_FILE:cs_crash_recovery_fixture>"
+    CS_AVATAR_SPEC_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/avatar-spec.schema.json"
     # Read directly rather than embedded at compile time (unlike
     # cs_project_store's ProjectSchema.h.in): this schema only needs to be
     # loaded by this test binary, not shipped in a production library, so a

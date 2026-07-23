@@ -7,6 +7,8 @@
 #include <iterator>
 #include <limits>
 #include <string>
+#include <string_view>
+#include <unordered_set>
 #include <utility>
 
 #ifdef _WIN32
@@ -69,11 +71,125 @@ std::size_t temporarySiblingCount(const std::filesystem::path& target) {
     return count;
 }
 
+class RawJsonDuplicateMemberDetector final {
+public:
+    explicit RawJsonDuplicateMemberDetector(std::string_view document) : document_(document) {}
+
+    [[nodiscard]] bool hasNoDuplicateMemberNames() {
+        if (!parseValue()) return false;
+        skipWhitespace();
+        return position_ == document_.size();
+    }
+
+    [[nodiscard]] const std::string& duplicateName() const noexcept { return duplicateName_; }
+
+private:
+    void skipWhitespace() {
+        while (position_ < document_.size() &&
+               (document_[position_] == ' ' || document_[position_] == '\n' ||
+                document_[position_] == '\r' || document_[position_] == '\t')) {
+            ++position_;
+        }
+    }
+
+    [[nodiscard]] bool consume(char expected) {
+        skipWhitespace();
+        if (position_ == document_.size() || document_[position_] != expected) return false;
+        ++position_;
+        return true;
+    }
+
+    [[nodiscard]] bool parseString(std::string& value) {
+        if (!consume('"')) return false;
+        while (position_ < document_.size()) {
+            const char character = document_[position_++];
+            if (character == '"') return true;
+            if (character == '\\' && position_ < document_.size()) {
+                value += character;
+                value += document_[position_++];
+                continue;
+            }
+            value += character;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool parseObject() {
+        if (!consume('{')) return false;
+        std::unordered_set<std::string> names;
+        skipWhitespace();
+        if (position_ < document_.size() && document_[position_] == '}') {
+            ++position_;
+            return true;
+        }
+        while (true) {
+            std::string name;
+            if (!parseString(name) || !names.insert(name).second) {
+                duplicateName_ = std::move(name);
+                return false;
+            }
+            if (!consume(':') || !parseValue()) return false;
+            skipWhitespace();
+            if (position_ < document_.size() && document_[position_] == '}') {
+                ++position_;
+                return true;
+            }
+            if (!consume(',')) return false;
+        }
+    }
+
+    [[nodiscard]] bool parseArray() {
+        if (!consume('[')) return false;
+        skipWhitespace();
+        if (position_ < document_.size() && document_[position_] == ']') {
+            ++position_;
+            return true;
+        }
+        while (true) {
+            if (!parseValue()) return false;
+            skipWhitespace();
+            if (position_ < document_.size() && document_[position_] == ']') {
+                ++position_;
+                return true;
+            }
+            if (!consume(',')) return false;
+        }
+    }
+
+    [[nodiscard]] bool parseValue() {
+        skipWhitespace();
+        if (position_ == document_.size()) return false;
+        if (document_[position_] == '{') return parseObject();
+        if (document_[position_] == '[') return parseArray();
+        if (document_[position_] == '"') {
+            std::string ignored;
+            return parseString(ignored);
+        }
+        while (position_ < document_.size() && document_[position_] != ',' &&
+               document_[position_] != ']' && document_[position_] != '}') {
+            ++position_;
+        }
+        return true;
+    }
+
+    std::string_view document_;
+    std::size_t position_{0};
+    std::string duplicateName_;
+};
+
 TEST(AvatarSpecCodecTest, RoundTripIsCanonicalAndStable) {
     const auto first = AvatarSpecCodec{}.toJson(validSpec());
     const auto decoded = AvatarSpecCodec{}.fromJson(first);
     ASSERT_TRUE(decoded.hasValue()) << decoded.error().message();
     EXPECT_EQ(AvatarSpecCodec{}.toJson(decoded.value()), first);
+}
+
+TEST(AvatarSpecCodecTest, RawSchemaHasNoDuplicateObjectMemberNames) {
+    std::ifstream stream{CS_AVATAR_SPEC_SCHEMA_PATH, std::ios::binary};
+    ASSERT_TRUE(stream);
+    const std::string schema{std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+    RawJsonDuplicateMemberDetector detector{schema};
+    EXPECT_TRUE(detector.hasNoDuplicateMemberNames()) << detector.duplicateName();
 }
 
 TEST(AvatarSpecCodecTest, RejectsUnknownFieldAndFutureVersion) {

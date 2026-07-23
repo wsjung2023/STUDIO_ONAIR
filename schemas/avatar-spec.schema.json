@@ -23,7 +23,6 @@
     "animalMorphs": { "$ref": "#/definitions/namedScalars" },
     "slots": {
       "type": "object",
-      "additionalProperties": false,
       "propertyNames": {
         "enum": ["body", "head", "face", "skin", "hair-front", "hair-side-left", "hair-side-right", "hair-back", "hair-tie", "brows", "eyes", "nose", "mouth", "teeth", "ear-left", "ear-right", "muzzle", "horn-left", "horn-right", "wing-left", "wing-right", "tail", "inner", "top", "bottom", "outerwear", "hands", "footwear", "headwear", "face-accessory", "body-accessory"]
       },
