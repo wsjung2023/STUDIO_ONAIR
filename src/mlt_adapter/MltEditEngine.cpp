@@ -1272,11 +1272,13 @@ class MltEditEngine::Impl final {
             composite->set("distort", 1);
             if (visualIndex < visualTrackIsAvatar.size() &&
                 visualTrackIsAvatar[visualIndex] != 0) {
-                // Place the transparent avatar overlay as a clearly-visible
-                // bottom-right picture-in-picture (16:9 region, so no distortion;
-                // the box bottom sits above the frame edge so the character is
-                // not clipped) instead of its arbitrary source-native placement.
-                composite->set("geometry", "56%/50%:42%x42%");
+                // Map the transparent avatar frame onto the FULL canvas. The
+                // character's position/scale are already baked into its own
+                // frame by the renderer (that is what the live Studio preview
+                // shows), so a 1:1 stretch (same 16:9 aspect) reproduces the
+                // live placement exactly. Offsetting it again here compounded
+                // the placement and pushed the character off the frame edge.
+                composite->set("geometry", "0%/0%:100%x100%");
             }
             if (mlt_field_plant_transition(
                     mlt_tractor_field(graph->tractor->get_tractor()),
