@@ -114,7 +114,13 @@ core::Result<std::unique_ptr<AsyncTrackRecorder>> makeTrackRecorder(
         .track = std::move(track),
         .packageRoot = start.packagePath,
         .recordingStartTime = start.startedAt,
-        .segmentDuration = std::chrono::seconds{2},
+        // 30 s segments, not 2 s. Two-second rotation exploded a short take into
+        // dozens of tiny files per track and forced the editor/MLT to stitch
+        // dozens of producers back together (slow reconcile, heavy graph). A
+        // crash still loses at most the current 30 s segment -- the resilience
+        // the segmentation exists for -- while the on-disk file count drops ~15x
+        // and the timeline graph shrinks accordingly. No quality change.
+        .segmentDuration = std::chrono::seconds{30},
         // Keep several seconds of video available while the software encoder
         // catches up.  Thirty frames (0.5 s at 60 fps) was routinely exhausted
         // during a long physical run with screen + camera enabled, turning a

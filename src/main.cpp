@@ -272,12 +272,7 @@ int main(int argc, char* argv[]) {
                 creator::avatar::AvatarCharacterId::Human,
                 creator::avatar::AvatarPlacement{
                     creator::avatar::AvatarPlacementMode::Corner,
-                    creator::avatar::AvatarCorner::RightBottom},
-                // supersample=1: the avatar re-renders in software every 33 ms;
-                // 2x supersampling quadrupled that cost (a 1280x720 rasterise
-                // per frame) and was a large share of the app's CPU. 1x keeps
-                // playback light; the vector art still anti-aliases acceptably.
-                1U);
+                    creator::avatar::AvatarCorner::RightBottom});
         avatarCharacterControl = characterRenderer.get();
         avatarRenderer = std::move(characterRenderer);
     }
