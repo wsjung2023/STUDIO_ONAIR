@@ -22,11 +22,7 @@ Item {
     // Never pause mid-recording. Re-arm on return via the existing auto-start.
     onVisibleChanged: {
         if (visible) {
-            screenAutoStart.tries = 0
-            screenAutoStart.start()
-            if (avatarSceneController.avatarStyleSelectable
-                    && !avatarSceneController.avatarCanStop)
-                avatarSceneController.setAvatarEnabled(true)
+            armLiveCapture()
         } else if (!studioController.recording) {
             screenAutoStart.stop()
             if (screenCaptureController.canStopPreview)
@@ -127,6 +123,15 @@ Item {
 
     Component.onCompleted: {
         syncTransformFields()
+        // Only arm the live capture when the Studio page is actually on screen.
+        // The StackLayout instantiates every page at startup, so an unguarded
+        // onCompleted armed the screen grab + avatar even while Home was showing
+        // -- burning ~1 core before the creator ever entered the Studio. When
+        // Studio does become visible, onVisibleChanged arms it.
+        if (visible) armLiveCapture()
+    }
+
+    function armLiveCapture() {
         // Avatar discoverability: the VTuber avatar starts automatically on
         // entering Studio so creators see it immediately, instead of having to
         // scroll to the bottom of the left panel to find "Start Avatar" and
