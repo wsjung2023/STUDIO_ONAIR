@@ -46,6 +46,9 @@
 #ifndef WDA_EXCLUDEFROMCAPTURE
 #define WDA_EXCLUDEFROMCAPTURE 0x00000011
 #endif
+#ifndef WDA_NONE
+#define WDA_NONE 0x00000000
+#endif
 #endif
 #include "project_store/ProjectPackageStore.h"
 #include "project_store/SqliteStudioStore.h"
@@ -487,28 +490,42 @@ int main(int argc, char* argv[]) {
     // The window stays fully visible to the user; only screen-capture sees it as
     // excluded. Set CS_INCLUDE_SELF_IN_CAPTURE to opt out.
     if (!qEnvironmentVariableIsSet("CS_INCLUDE_SELF_IN_CAPTURE")) {
-        auto excludeFromCapture = [](QQuickWindow* window) {
-            if (window == nullptr) return;
-            const auto handle = reinterpret_cast<HWND>(window->winId());
-            if (handle == nullptr) return;
-            if (!SetWindowDisplayAffinity(handle, WDA_EXCLUDEFROMCAPTURE)) {
-                qWarning("[capture] SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) "
-                         "failed (error %lu); the app window may appear in screen "
-                         "recordings on this Windows version",
-                         static_cast<unsigned long>(GetLastError()));
-            }
-        };
-        auto applyToAllRoots = [&engine, excludeFromCapture]() {
+        // DYNAMIC exclusion: hidden from capture only while the screen preview
+        // or a recording is actually running (that is when the mirror feedback
+        // exists). Excluding the window permanently also made the creator's own
+        // screenshots/캡처 of the app impossible, which read as "the app
+        // disappears when I try to capture it".
+        auto applyCaptureAffinity = [&engine, &screenCaptureController,
+                                     &studioController]() {
+            const bool capturing = screenCaptureController.previewing() ||
+                                   screenCaptureController.canStopPreview() ||
+                                   studioController.isRecording();
             for (auto* object : engine.rootObjects()) {
-                if (auto* window = qobject_cast<QQuickWindow*>(object)) {
-                    excludeFromCapture(window);
+                auto* window = qobject_cast<QQuickWindow*>(object);
+                if (window == nullptr) continue;
+                const auto handle = reinterpret_cast<HWND>(window->winId());
+                if (handle == nullptr) continue;
+                if (!SetWindowDisplayAffinity(
+                        handle,
+                        capturing ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE)) {
+                    qWarning(
+                        "[capture] SetWindowDisplayAffinity failed (error %lu); "
+                        "the app window may appear in screen recordings",
+                        static_cast<unsigned long>(GetLastError()));
                 }
             }
         };
-        applyToAllRoots();
+        QObject::connect(&screenCaptureController,
+                         &creator::app::ScreenCaptureController::captureStateChanged,
+                         &app, applyCaptureAffinity);
+        QObject::connect(
+            &studioController,
+            &creator::app::LiveRecordingController::recordingChanged, &app,
+            applyCaptureAffinity);
+        applyCaptureAffinity();
         // Re-apply once the event loop has created native windows, covering the
         // case where winId() was not yet valid at load time.
-        QTimer::singleShot(0, &app, applyToAllRoots);
+        QTimer::singleShot(0, &app, applyCaptureAffinity);
     }
 #endif
 

@@ -1162,6 +1162,27 @@ class MltEditEngine::Impl final {
                 avatarOverlay = sourceAlpha;
                 const bool extractsPackedAlpha =
                     requiresPackedAlphaExtraction(branch) || sourceAlpha;
+                // Raw "avformat" producers carry frames at their NATIVE size;
+                // only a consumer attaches MLT's normalisers. The preview path
+                // pulls frames without a consumer, so a 1920x1080 screen clip
+                // landed unscaled in the (smaller) preview profile and showed
+                // only its top-left corner. Attach the rescale normaliser to
+                // PLAIN branches only -- transformed/alpha branches size their
+                // frames themselves in the creator filter, and stacking rescale
+                // under that chain corrupts the image and can crash the export
+                // consumer.
+                if (!transformed && !extractsPackedAlpha) {
+                    auto rescale = std::make_unique<Mlt::Filter>(
+                        *graph->profile, "rescale");
+                    if (rescale->is_valid() &&
+                        producer->attach(*rescale) == 0) {
+                        graph->filters.push_back(std::move(rescale));
+                    } else {
+                        std::fprintf(stderr,
+                                     "[mlt] rescale normaliser unavailable; "
+                                     "preview may show unscaled frames\n");
+                    }
+                }
                 if (transformed || extractsPackedAlpha) {
                     auto converter = std::make_unique<Mlt::Filter>(
                         *graph->profile, "imageconvert");
