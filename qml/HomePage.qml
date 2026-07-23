@@ -22,12 +22,16 @@ Pane {
         fileMode: FileDialog.SaveFile
         nameFilters: [qsTr("Creator Studio Project (*.cstudio)")]
         defaultSuffix: "cstudio"
+        // Start in a stable local folder, not OneDrive-synced Downloads/문서
+        // where saving fails at random ("이 위치에 저장할 권한이 없습니다").
+        currentFolder: projectController.defaultProjectFolder
         onAccepted: projectController.createProject(selectedFile, projectName.text)
     }
 
     FolderDialog {
         id: openProjectDialog
         title: qsTr("Open a Creator Studio project folder")
+        currentFolder: projectController.defaultProjectFolder
         onAccepted: projectController.openProject(selectedFolder)
     }
 

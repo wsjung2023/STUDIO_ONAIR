@@ -18,6 +18,12 @@ constexpr capture::CaptureConfig kPreviewConfig{};
 
 capture::CaptureConfig previewConfigFor(const capture::ScreenCaptureTarget& target) {
     auto config = kPreviewConfig;
+    // Capture the live preview at 30 fps, not the 60 fps default. Full-desktop
+    // gdigrab + BGRA conversion + software composite at 60 fps was a dominant
+    // CPU cost and made the whole app feel heavy/stuttery; 30 fps halves that
+    // work and is smooth for a preview. (Recording keeps its own cadence.)
+    config.frameRateNumerator = 30;
+    config.frameRateDenominator = 1;
     const auto widthScale = static_cast<double>(config.targetWidth) /
                             static_cast<double>(target.width());
     const auto heightScale = static_cast<double>(config.targetHeight) /

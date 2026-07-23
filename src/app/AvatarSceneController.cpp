@@ -70,10 +70,18 @@ AvatarSceneController::AvatarSceneController(
                 settings.value(QStringLiteral("avatar/posX"), posX_).toDouble(),
                 settings.value(QStringLiteral("avatar/posY"), posY_).toDouble());
         } else {
-            // First run: a small corner overlay suits a screen recording far
-            // better than the large centred character.
-            setAvatarPlacementMode(1);
-            setAvatarCorner(1);  // bottom-right
+            // First run: snap to a small bottom-right corner overlay. The
+            // renderer already starts in Corner MODE, so setAvatarPlacementMode
+            // would early-return without ever applying the corner PRESET that
+            // moves/sizes the avatar -- which is why it appeared centred and
+            // large. Apply the preset directly.
+            placementMode_ = 1;
+            corner_ = 1;
+            characterControl_->setPlacementMode(avatar::AvatarPlacementMode::Corner);
+            characterControl_->setPlacementCorner(avatar::AvatarCorner::RightBottom);
+            characterControl_->applyCornerPreset(avatar::AvatarCorner::RightBottom);
+            syncTransformFromRenderer();
+            persistStyle();
         }
     }
     const QString trackingKind = usingRealTracking

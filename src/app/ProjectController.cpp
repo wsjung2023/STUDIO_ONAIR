@@ -24,6 +24,17 @@ std::filesystem::path productionRegistryPath() {
 
 }  // namespace
 
+QUrl ProjectController::defaultProjectFolder() const {
+    // "<home>/Creator Studio Projects" -- a plain local folder. Downloads and
+    // Documents are frequently redirected into OneDrive, whose files-on-demand
+    // sync intermittently strips local write permission, so saving there fails
+    // at random. The home root is not redirected.
+    QDir home{QDir::homePath()};
+    const QString folder = QStringLiteral("Creator Studio Projects");
+    home.mkpath(folder);
+    return QUrl::fromLocalFile(home.filePath(folder));
+}
+
 ProjectController::ProjectController(QObject* parent)
     : ProjectController(std::make_unique<project_store::ProjectPackageStore>(),
                         productionRegistryPath(), true, parent) {}

@@ -28,6 +28,11 @@ class ProjectController final : public QObject, public IRecordingPersistence {
     Q_PROPERTY(QVariantList recentProjects READ recentProjects NOTIFY recentProjectsChanged)
     Q_PROPERTY(QVariantList recoveries READ recoveries NOTIFY recoveriesChanged)
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
+    // A stable, always-writable default folder for new projects. Avoids the
+    // Downloads/Documents folders when they are redirected into OneDrive, whose
+    // on-demand sync intermittently revokes local write access ("이 위치에
+    // 저장할 권한이 없습니다").
+    Q_PROPERTY(QUrl defaultProjectFolder READ defaultProjectFolder CONSTANT)
 
 public:
     explicit ProjectController(QObject* parent = nullptr);
@@ -46,6 +51,7 @@ public:
     [[nodiscard]] QVariantList recentProjects() const { return recentProjects_; }
     [[nodiscard]] QVariantList recoveries() const { return recoveries_; }
     [[nodiscard]] QString statusMessage() const { return statusMessage_; }
+    [[nodiscard]] QUrl defaultProjectFolder() const;
     [[nodiscard]] std::optional<std::filesystem::path> recordingPackagePath() const;
 
     Q_INVOKABLE void createProject(const QUrl& packageUrl, const QString& displayName);
