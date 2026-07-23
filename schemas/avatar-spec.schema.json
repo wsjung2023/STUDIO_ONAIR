@@ -1,0 +1,97 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://creator-studio.local/schemas/avatar-spec.schema.json",
+  "title": "Creator Studio Avatar Specification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "avatarId", "displayName", "rigFamily", "speciesFamily",
+    "styleTheme", "preferredRepresentation", "bodyMorphs", "faceMorphs",
+    "animalMorphs", "slots", "palette", "materials", "expressions", "physics",
+    "trackingProfileId"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "avatarId": { "$ref": "#/definitions/identifier" },
+    "displayName": { "$ref": "#/definitions/name" },
+    "rigFamily": { "enum": ["humanoid", "kemonomimi", "anthro-biped", "mascot", "quadruped", "avian"] },
+    "speciesFamily": { "$ref": "#/definitions/name" },
+    "styleTheme": { "$ref": "#/definitions/name" },
+    "preferredRepresentation": { "enum": ["inochi2d", "vrm-1.0", "gltf-rig"] },
+    "bodyMorphs": { "$ref": "#/definitions/namedScalars" },
+    "faceMorphs": { "$ref": "#/definitions/namedScalars" },
+    "animalMorphs": { "$ref": "#/definitions/namedScalars" },
+    "slots": {
+      "type": "object",
+      "additionalProperties": false,
+      "propertyNames": {
+        "enum": ["body", "head", "face", "skin", "hair-front", "hair-side-left", "hair-side-right", "hair-back", "hair-tie", "brows", "eyes", "nose", "mouth", "teeth", "ear-left", "ear-right", "muzzle", "horn-left", "horn-right", "wing-left", "wing-right", "tail", "inner", "top", "bottom", "outerwear", "hands", "footwear", "headwear", "face-accessory", "body-accessory"]
+      },
+      "additionalProperties": { "$ref": "#/definitions/assetRef" }
+    },
+    "palette": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/definitions/name" },
+      "additionalProperties": { "$ref": "#/definitions/color" }
+    },
+    "materials": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/material" }
+    },
+    "expressions": { "$ref": "#/definitions/namedScalars" },
+    "physics": { "$ref": "#/definitions/namedScalars" },
+    "trackingProfileId": { "$ref": "#/definitions/name" }
+  },
+  "definitions": {
+    "identifier": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "normalized": { "type": "number", "minimum": -1, "maximum": 1 },
+    "color": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["red", "green", "blue", "alpha"],
+      "properties": {
+        "red": { "type": "number", "minimum": 0, "maximum": 1 },
+        "green": { "type": "number", "minimum": 0, "maximum": 1 },
+        "blue": { "type": "number", "minimum": 0, "maximum": 1 },
+        "alpha": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "namedScalar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": { "$ref": "#/definitions/name" },
+        "value": { "$ref": "#/definitions/normalized" }
+      }
+    },
+    "namedScalars": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/namedScalar" }
+    },
+    "assetRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetId", "version", "variantId"],
+      "properties": {
+        "assetId": { "$ref": "#/definitions/identifier" },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "variantId": { "type": "string", "maxLength": 200 }
+      }
+    },
+    "material": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel", "baseColor", "metallic", "roughness", "emission", "opacity"],
+      "properties": {
+        "channel": { "$ref": "#/definitions/name" },
+        "baseColor": { "$ref": "#/definitions/color" },
+        "metallic": { "type": "number", "minimum": 0, "maximum": 1 },
+        "roughness": { "type": "number", "minimum": 0, "maximum": 1 },
+        "emission": { "type": "number", "minimum": 0, "maximum": 1 },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  }
+}

@@ -4,6 +4,8 @@ cs_add_qtfree_library(cs_avatar
         AvatarTypes.h
         AvatarSpec.h
         AvatarSpec.cpp
+        AvatarSpecCodec.h
+        AvatarSpecCodec.cpp
         ExpressionParameters.h
         AvatarParameterMapper.h
         AvatarParameterMapper.cpp
@@ -59,7 +61,10 @@ cs_add_qtfree_library(cs_avatar
         cs_media
         cs_domain
         nlohmann_json::nlohmann_json
+        nlohmann_json_schema_validator::validator
 )
+
+target_include_directories(cs_avatar PRIVATE ${PROJECT_BINARY_DIR}/generated)
 
 if(WIN32)
     target_link_libraries(cs_avatar PUBLIC ws2_32)

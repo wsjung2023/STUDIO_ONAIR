@@ -74,6 +74,7 @@ add_executable(cs_tests
     capture/AvatarRenderCaptureSourceTest.cpp
     avatar/ExpressionParametersTest.cpp
     avatar/AvatarSpecTest.cpp
+    avatar/AvatarSpecCodecTest.cpp
     avatar/AvatarParameterMapperTest.cpp
     avatar/AvatarModelDescriptorTest.cpp
     avatar/AvatarRenderPipelineTest.cpp
