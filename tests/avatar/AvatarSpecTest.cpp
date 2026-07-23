@@ -163,6 +163,59 @@ TEST(AvatarSpecTest, RequiresNamedFamilyThemeAndTrackingFieldsWithinTwoHundredCo
     EXPECT_TRUE(AvatarSpec::create(std::move(draft)).hasValue());
 }
 
+TEST(AvatarSpecTest, AcceptsAllNamedValuesAtTwoHundredCodePoints) {
+    const std::string name(200, 'n');
+    auto draft = validDraft();
+    draft.displayName = name;
+    draft.speciesFamily = name;
+    draft.styleTheme = name;
+    draft.trackingProfileId = name;
+    draft.bodyMorphs.front().name = name;
+    draft.faceMorphs.front().name = name;
+    draft.animalMorphs = {{name, 0.0F}};
+    draft.expressions.front().name = name;
+    draft.physics.front().name = name;
+    draft.slots.at(AvatarSlot::Body).variantId = name;
+    draft.palette = {{name, {0.9F, 0.7F, 0.6F, 1.0F}}};
+    draft.materials.front().channel = name;
+
+    EXPECT_TRUE(AvatarSpec::create(std::move(draft)).hasValue());
+}
+
+TEST(AvatarSpecTest, RejectsNamedValuesAboveTwoHundredCodePoints) {
+    const std::string name(201, 'n');
+    auto draft = validDraft();
+    draft.displayName = name;
+    auto result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.display-name", "avatar.validation.display-name");
+
+    draft = validDraft();
+    draft.bodyMorphs.front().name = name;
+    result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.named-scalar", "avatar.validation.named-scalar");
+
+    draft = validDraft();
+    draft.slots.at(AvatarSlot::Body).variantId = name;
+    result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.asset-reference",
+                   "avatar.validation.asset-reference");
+
+    draft = validDraft();
+    draft.palette = {{name, {0.9F, 0.7F, 0.6F, 1.0F}}};
+    result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.palette", "avatar.validation.palette");
+
+    draft = validDraft();
+    draft.materials.front().channel = name;
+    result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.material", "avatar.validation.material");
+}
+
 TEST(AvatarSpecTest, RequiresGltfRigForNonHumanoidAnimalFamilies) {
     auto draft = validDraft();
     draft.rigFamily = RigFamily::Avian;

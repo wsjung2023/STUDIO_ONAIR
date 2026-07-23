@@ -70,7 +70,7 @@ namespace {
     return count;
 }
 
-[[nodiscard]] bool isValidName(std::string_view value, std::size_t maximumLength = 100U) noexcept {
+[[nodiscard]] bool isValidName(std::string_view value, std::size_t maximumLength = 200U) noexcept {
     const auto length = utf8CodePointCount(value);
     return length.has_value() && *length >= 1U && *length <= maximumLength;
 }
@@ -156,7 +156,7 @@ AvatarSpec::AvatarSpec(AvatarSpecDraft values) : values_(std::move(values)) {}
 
 core::Result<AvatarSpec> AvatarSpec::create(AvatarSpecDraft draft) {
     if (!isValidName(draft.displayName)) {
-        return invalid("avatar display name must be valid UTF-8 with 1 to 100 code points",
+        return invalid("avatar display name must be valid UTF-8 with 1 to 200 code points",
                        "avatar.spec.display-name", "avatar.validation.display-name");
     }
     if (!isValidName(draft.speciesFamily, 200U) || !isValidName(draft.styleTheme, 200U) ||
