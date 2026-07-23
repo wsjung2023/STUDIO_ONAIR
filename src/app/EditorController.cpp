@@ -1597,16 +1597,11 @@ void EditorController::requestPlaybackFrame() {
         frameRequestInFlight_) {
         return;
     }
-    // Audio smoothness beats video smoothness while editing to sound -- but
-    // only yield when an underrun is IMMINENT (<~150 ms buffered). A higher
-    // threshold starved video whenever the mixer ran near real-time, freezing
-    // the preview; audio commands already jump the queue, so this gate is just
-    // the last-resort brake.
-    if (audioOutput_ && audioOutput_->active() &&
-        audioOutput_->queuedSamples() <
-            EditorPreviewAudioOutput::kSampleRate * 3 / 20) {
-        return;
-    }
+    // NOTE: no skip-video-when-audio-low gate here. Audio commands already
+    // jump the worker queue; a gate at any threshold starved the preview into
+    // a frozen frame whenever the mixer ran near real-time. Video always
+    // renders; if the machine cannot keep both real-time, audio pads silence
+    // briefly rather than the picture freezing.
     const auto elapsed = core::DurationNs{playbackClock_.nsecsElapsed()};
     const auto unquantized = playbackStart_ + elapsed;
     const auto rate = snapshot_->timeline.frameRate();
