@@ -910,8 +910,10 @@ Item {
                         Layout.fillWidth: true
                         model: screenCaptureController.targets
                         textRole: "name"
+                        // Switchable even while previewing — the controller
+                        // restarts the preview on the chosen monitor.
                         enabled: !screenCaptureController.busy
-                                 && !screenCaptureController.previewing
+                                 || screenCaptureController.previewing
                         currentIndex: {
                             for (let i = 0; i < screenCaptureController.targets.length; ++i) {
                                 if (screenCaptureController.targets[i].id
@@ -937,7 +939,7 @@ Item {
                     Button {
                         text: qsTr("Refresh")
                         enabled: !screenCaptureController.busy
-                                 && !screenCaptureController.previewing
+                                 || screenCaptureController.previewing
                         onClicked: screenCaptureController.refreshTargets()
                     }
 
@@ -960,8 +962,10 @@ Item {
                     id: regionControls
                     Layout.fillWidth: true
                     spacing: theme.spaceSm
+                    // Region can be changed live; the controller re-applies it to
+                    // the running preview.
                     enabled: !screenCaptureController.busy
-                             && !screenCaptureController.previewing
+                             || screenCaptureController.previewing
 
                     RowLayout {
                         Layout.fillWidth: true

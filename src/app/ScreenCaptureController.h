@@ -175,6 +175,9 @@ private:
     QTimer pollTimer_;
     ScreenCaptureState state_{ScreenCaptureState::Idle};
     std::uint64_t generation_{0};
+    // Set when a monitor/region change stops the preview only to restart it on
+    // the new configuration (see handleStopResult).
+    bool restartPreviewAfterStop_{false};
     quint32 actualWidth_{0};
     quint32 actualHeight_{0};
     qulonglong receivedFrames_{0};

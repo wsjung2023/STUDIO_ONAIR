@@ -105,9 +105,12 @@ void ScreenCaptureController::requestPermission() {
 }
 
 void ScreenCaptureController::refreshTargets() {
+    // Re-enumerating monitors/windows does not touch the active capture source,
+    // so it is safe (and useful) while previewing -- the button used to no-op
+    // the moment the preview auto-started.
     if (!permission_ || permission_->status() !=
                             capture::ScreenCapturePermissionStatus::Granted ||
-        busy() || previewing()) {
+        busy()) {
         return;
     }
     beginDiscovery();
@@ -181,7 +184,11 @@ void ScreenCaptureController::handleDiscoveryResult(
 }
 
 void ScreenCaptureController::selectTarget(const QString& targetId) {
-    if (busy() || previewing()) return;
+    // Allow changing the monitor while a preview is running: the picker used to
+    // be disabled the instant the preview auto-started, so a creator could never
+    // switch monitors. Apply the choice and, if previewing, seamlessly restart
+    // the preview on the new target.
+    if (busy() && !previewing()) return;
     const auto found = std::find_if(targetSnapshot_.begin(), targetSnapshot_.end(),
                                     [&targetId](const auto& target) {
                                         return fromUtf8(target.id().value()) == targetId;
@@ -194,15 +201,17 @@ void ScreenCaptureController::selectTarget(const QString& targetId) {
         selectedTargetId_ = targetId;
         emit selectedTargetChanged();
     }
+    if (previewing()) {
+        restartPreviewAfterStop_ = true;
+        stopPreview();
+        return;
+    }
     if (state_ == ScreenCaptureState::Error) setState(ScreenCaptureState::Ready);
     setStatusMessage(tr("Ready to preview"));
 }
 
 void ScreenCaptureController::setRegion(int x, int y, int width, int height) {
-    if (busy() || previewing()) {
-        setStatusMessage(tr("Stop the preview before changing the capture region"));
-        return;
-    }
+    if (busy() && !previewing()) return;
     auto region = capture::makeScreenCaptureRegion(x, y, width, height);
     if (!region.hasValue()) {
         setStatusMessage(fromUtf8(region.error().message()));
@@ -221,17 +230,27 @@ void ScreenCaptureController::setRegion(int x, int y, int width, int height) {
     setStatusMessage(tr("Region capture set to %1×%2")
                          .arg(region_->width)
                          .arg(region_->height));
+    // Apply the new region live if a preview is running.
+    if (previewing()) {
+        restartPreviewAfterStop_ = true;
+        stopPreview();
+    }
 }
 
 void ScreenCaptureController::clearRegion() {
-    if (busy() || previewing()) {
-        setStatusMessage(tr("Stop the preview before changing the capture region"));
-        return;
+    if (busy() && !previewing()) return;
+    const bool wasPreviewing = previewing();
+    if (!region_.has_value()) {
+        if (!wasPreviewing) return;
+    } else {
+        region_.reset();
+        emit regionChanged();
+        setStatusMessage(tr("Capturing the full screen"));
     }
-    if (!region_.has_value()) return;
-    region_.reset();
-    emit regionChanged();
-    setStatusMessage(tr("Capturing the full screen"));
+    if (wasPreviewing) {
+        restartPreviewAfterStop_ = true;
+        stopPreview();
+    }
 }
 
 void ScreenCaptureController::startPreview() {
@@ -347,6 +366,12 @@ void ScreenCaptureController::handleStopResult(std::uint64_t generation,
     }
     setState(targetSnapshot_.empty() ? ScreenCaptureState::Idle : ScreenCaptureState::Ready);
     setStatusMessage(tr("Preview stopped"));
+    // A monitor/region change requested this stop purely to re-apply itself;
+    // bring the preview back up on the new configuration.
+    if (restartPreviewAfterStop_) {
+        restartPreviewAfterStop_ = false;
+        startPreview();
+    }
 }
 
 void ScreenCaptureController::pollCapture() {

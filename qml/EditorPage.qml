@@ -1344,10 +1344,19 @@ Item {
                                             required property var modelData
                                             x: modelData.timelineStartNs / root.nanosecondsPerPixel
                                             y: 6
-                                            width: Math.max(3, modelData.timelineDurationNs / root.nanosecondsPerPixel)
+                                            width: Math.max(6, modelData.timelineDurationNs / root.nanosecondsPerPixel)
                                             height: mClipLane.height - 12
                                             radius: 3
                                             color: modelData.enabled ? theme.accent : theme.surfaceHigh
+                                            // Tap to select — without this the mobile editor could
+                                            // never select a clip, so Split/Trim/inspector were all
+                                            // permanently disabled on a phone.
+                                            border.width: root.controller.selectedClipId === modelData.id ? 2 : 0
+                                            border.color: theme.textPrimary
+                                            TapHandler {
+                                                onTapped: root.controller.selectClip(
+                                                              mTrackRow.trackId, modelData.id)
+                                            }
                                         }
                                     }
                                 }
