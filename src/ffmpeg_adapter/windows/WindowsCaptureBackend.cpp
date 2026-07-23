@@ -23,13 +23,16 @@ extern "C" {
 #define NOMINMAX
 #include <Windows.h>
 #include <audioclient.h>
+#include <endpointvolume.h>
 #include <ksmedia.h>
 #include <mmdeviceapi.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -1248,6 +1251,19 @@ private:
             failHresult("WASAPI default speaker lookup", result);
             return;
         }
+        // The loopback tap sits AFTER the master volume: a creator listening at
+        // e.g. 40% Windows volume would otherwise record system audio ~20 dB
+        // quieter than the content itself (the recurring "PC sound is silent in
+        // my recording" failure). Track the endpoint volume so capture can undo
+        // exactly that attenuation.
+        if (SUCCEEDED(endpoint->Activate(
+                __uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
+                reinterpret_cast<void**>(volumeControl_.put())))) {
+            refreshVolumeCompensation();
+            std::fprintf(stderr,
+                         "[sysaudio] master-volume compensation x%.2f\n",
+                         static_cast<double>(volumeCompensation_));
+        }
         ComHandle<IAudioClient> client;
         result = endpoint->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
                                     reinterpret_cast<void**>(client.put()));
@@ -1306,6 +1322,7 @@ private:
         // periodically if the loopback event goes dormant (WASAPI loopback does
         // not reliably signal its event when the render endpoint was idle at
         // capture start, which would otherwise strand later audio in the buffer).
+        int volumeRefreshCountdown = 0;
         while (!stopRequested_.load(std::memory_order_acquire)) {
             const DWORD waited = WaitForSingleObject(event.get(), 10);
             if (waited != WAIT_OBJECT_0 && waited != WAIT_TIMEOUT) {
@@ -1313,6 +1330,10 @@ private:
                 break;
             }
             if (stopRequested_.load(std::memory_order_acquire)) break;
+            if (--volumeRefreshCountdown <= 0) {
+                refreshVolumeCompensation();  // tracks live volume changes
+                volumeRefreshCountdown = 100;  // ~1 s at the 10 ms poll
+            }
             if (!drain(*captureClient.get(), *format)) break;
         }
         wakeEvent_.store(nullptr, std::memory_order_release);
@@ -1368,8 +1389,11 @@ private:
         const auto sampleCount = static_cast<std::size_t>(frameCount) * channels;
         auto samples = std::shared_ptr<float[]>{new float[sampleCount]};
         const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0 || !data;
+        const float gain = volumeCompensation_;
         for (std::size_t index = 0; index < sampleCount; ++index) {
-            samples[index] = silent ? 0.0F : sample(data, index, format);
+            const float value =
+                silent ? 0.0F : sample(data, index, format) * gain;
+            samples[index] = std::clamp(value, -1.0F, 1.0F);
         }
         auto assembled = assembler_.assemble(capture::NativeAudioBlock{
             .timestamp = {static_cast<std::int64_t>(qpcPosition), 10'000'000},
@@ -1391,6 +1415,16 @@ private:
             sink = sink_;
         }
         if (sink) sink->onAudioBlock(std::move(assembled).value());
+    }
+
+    void refreshVolumeCompensation() noexcept {
+        if (!volumeControl_.get()) return;
+        float levelDb = 0.0F;
+        if (FAILED(volumeControl_->GetMasterVolumeLevel(&levelDb))) return;
+        // Undo exactly the master attenuation (bounded to +30 dB) so recordings
+        // carry the content's own level however quiet the speakers are set.
+        const float gainDb = std::clamp(-levelDb, 0.0F, 30.0F);
+        volumeCompensation_ = std::pow(10.0F, gainDb / 20.0F);
     }
 
     static float sample(const BYTE* data, std::size_t index,
@@ -1434,6 +1468,10 @@ private:
     std::atomic_bool started_{};
     std::atomic_bool stopRequested_{};
     std::atomic<HANDLE> wakeEvent_{};
+    // Live master-volume tracking so loopback capture can undo the endpoint
+    // attenuation (both touched only on the capture worker thread).
+    ComHandle<IAudioEndpointVolume> volumeControl_;
+    float volumeCompensation_{1.0F};
     std::jthread worker_;
     std::thread stopThread_;
     mutable std::mutex mutex_;

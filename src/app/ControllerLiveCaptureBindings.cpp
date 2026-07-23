@@ -9,6 +9,7 @@
 #include <QPointer>
 #include <QThread>
 
+#include <cstdio>
 #include <utility>
 
 namespace creator::app {
@@ -35,6 +36,10 @@ ControllerLiveCaptureBindings::activeSources() const {
         }
         if (auto id = devices_->activeSystemAudioSourceId()) {
             sources.push_back({std::move(*id), recorder::TrackRole::SystemAudio});
+        } else {
+            std::fprintf(stderr,
+                         "[capture-bind] system audio NOT active at record "
+                         "start; track will be missing\n");
         }
     }
     if (avatar_) {
@@ -66,8 +71,17 @@ core::Result<void> ControllerLiveCaptureBindings::attach(
         return core::ok();
     case recorder::TrackRole::SystemAudio:
         if (!devices_ || !audioSink ||
-            devices_->activeSystemAudioSourceId() != source.sourceId) break;
+            devices_->activeSystemAudioSourceId() != source.sourceId) {
+            std::fprintf(stderr,
+                         "[capture-bind] system audio attach REFUSED: "
+                         "devices=%d sink=%d idMatch=%d\n",
+                         devices_ != nullptr, audioSink != nullptr,
+                         devices_ && devices_->activeSystemAudioSourceId() ==
+                                         source.sourceId);
+            break;
+        }
         devices_->setSystemAudioRecordingSink(std::move(audioSink));
+        std::fprintf(stderr, "[capture-bind] system audio recording sink attached\n");
         return core::ok();
     case recorder::TrackRole::Avatar:
         if (!avatar_ || !videoSink ||

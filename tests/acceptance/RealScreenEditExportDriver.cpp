@@ -242,6 +242,40 @@ int main(int argc, char** argv) {
             std::cout << "[ REAL-SCREEN PROOF ] preview-load FAILED: "
                       << previewLoaded.error().message() << "\n";
         } else {
+            // Real-time capability proof: average per-frame preview render cost
+            // and the cost of mixing 0.5 s of preview audio. Playback is smooth
+            // by construction when frame < 33 ms and 0.5 s of audio mixes in
+            // well under 500 ms.
+            {
+                const auto renderStart = std::chrono::steady_clock::now();
+                constexpr int kTimedFrames = 30;
+                int rendered = 0;
+                for (int i = 0; i < kTimedFrames; ++i) {
+                    auto timed = previewEngine.requestFrame(
+                        at(afterDuration / 4 +
+                           (afterDuration / 2 / kTimedFrames) * i));
+                    if (timed.hasValue()) ++rendered;
+                }
+                const auto renderMs =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - renderStart)
+                        .count();
+                const auto audioStart = std::chrono::steady_clock::now();
+                auto mixed = previewEngine.requestMixedAudio(
+                    at(afterDuration / 4), 48'000, 2, 24'000);
+                const auto audioMs =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - audioStart)
+                        .count();
+                std::cout << "[ REAL-SCREEN PROOF ] preview-perf: "
+                          << rendered << "/" << kTimedFrames << " frames in "
+                          << renderMs << " ms (avg "
+                          << (rendered > 0 ? renderMs / rendered : -1)
+                          << " ms/frame); 0.5s audio mix "
+                          << (mixed.hasValue() ? std::to_string(audioMs)
+                                               : std::string{"FAILED"})
+                          << " ms\n";
+            }
             auto previewFrame = previewEngine.requestFrame(at(afterDuration / 2));
             if (!previewFrame.hasValue()) {
                 std::cout << "[ REAL-SCREEN PROOF ] preview-render FAILED: "

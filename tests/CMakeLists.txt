@@ -719,7 +719,11 @@ if(CS_ENABLE_FFMPEG AND CS_ENABLE_MLT AND CS_ENABLE_WHISPER)
         gtest_discover_tests(cs_onetool_e2e_acceptance_tests
             PROPERTIES TIMEOUT 300 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     endif()
+endif()
 
+# The real-screen driver links only ffmpeg + MLT (no whisper), so it stays
+# available when transcription is disabled.
+if(CS_ENABLE_FFMPEG AND CS_ENABLE_MLT)
     # Headless driver that feeds a REAL recorded .cstudio package (actual desktop
     # captured by the app) through reconcile -> cut -> MP4 export. Not a gtest;
     # run manually with <package> <sessionId> <output.mp4>.
