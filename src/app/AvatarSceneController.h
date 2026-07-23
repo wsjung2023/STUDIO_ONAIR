@@ -145,6 +145,7 @@ signals:
 private:
     void tick();
     void publishStatus(QString message);
+    void persistStyle();
     void syncTransformFromRenderer();
 
     std::unique_ptr<avatar::ITrackingProvider> provider_;

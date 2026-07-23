@@ -4,6 +4,7 @@
 #include "avatar/AvatarRenderFrame.h"
 #include "core/AppError.h"
 
+#include <QSettings>
 #include <QVariantMap>
 
 #if defined(CS_APP_ENABLE_FFMPEG)
@@ -49,6 +50,31 @@ AvatarSceneController::AvatarSceneController(
         scale_ = characterControl_->userScale();
         posX_ = characterControl_->posX();
         posY_ = characterControl_->posY();
+        // Restore the creator's persisted avatar style so character, position
+        // and size survive app restarts. Without this every launch snapped the
+        // avatar back to the centred, large default and recordings no longer
+        // matched where the creator had placed it. Placement/corner are applied
+        // BEFORE scale/position because the presets snap the free transform.
+        QSettings settings;
+        if (settings.contains(QStringLiteral("avatar/characterIndex"))) {
+            setAvatarCharacterIndex(
+                settings.value(QStringLiteral("avatar/characterIndex")).toInt());
+            setAvatarPlacementMode(
+                settings.value(QStringLiteral("avatar/placementMode"),
+                               placementMode_).toInt());
+            setAvatarCorner(
+                settings.value(QStringLiteral("avatar/corner"), corner_).toInt());
+            setAvatarScale(
+                settings.value(QStringLiteral("avatar/scale"), scale_).toDouble());
+            setAvatarPosition(
+                settings.value(QStringLiteral("avatar/posX"), posX_).toDouble(),
+                settings.value(QStringLiteral("avatar/posY"), posY_).toDouble());
+        } else {
+            // First run: a small corner overlay suits a screen recording far
+            // better than the large centred character.
+            setAvatarPlacementMode(1);
+            setAvatarCorner(1);  // bottom-right
+        }
     }
     const QString trackingKind = usingRealTracking
                                      ? tr("live face tracking")
@@ -119,6 +145,7 @@ void AvatarSceneController::setAvatarCharacterIndex(int index) {
     if (characterControl_ != nullptr) {
         characterControl_->setCharacter(catalog[static_cast<std::size_t>(index)].id);
     }
+    persistStyle();
     emit styleChanged();
 }
 
@@ -139,6 +166,7 @@ void AvatarSceneController::setAvatarPlacementMode(int mode) {
         }
         syncTransformFromRenderer();
     }
+    persistStyle();
     emit styleChanged();
 }
 
@@ -153,6 +181,7 @@ void AvatarSceneController::setAvatarCorner(int corner) {
             static_cast<avatar::AvatarCorner>(corner));
         syncTransformFromRenderer();
     }
+    persistStyle();
     emit styleChanged();
 }
 
@@ -170,6 +199,7 @@ void AvatarSceneController::setAvatarScale(double scale) {
     const double applied = static_cast<double>(characterControl_->userScale());
     if (applied == scale_) return;
     scale_ = applied;
+    persistStyle();
     emit transformChanged();
 }
 
@@ -182,7 +212,18 @@ void AvatarSceneController::setAvatarPosition(double nx, double ny) {
     if (ax == posX_ && ay == posY_) return;
     posX_ = ax;
     posY_ = ay;
+    persistStyle();
     emit transformChanged();
+}
+
+void AvatarSceneController::persistStyle() {
+    QSettings settings;
+    settings.setValue(QStringLiteral("avatar/characterIndex"), characterIndex_);
+    settings.setValue(QStringLiteral("avatar/placementMode"), placementMode_);
+    settings.setValue(QStringLiteral("avatar/corner"), corner_);
+    settings.setValue(QStringLiteral("avatar/scale"), scale_);
+    settings.setValue(QStringLiteral("avatar/posX"), posX_);
+    settings.setValue(QStringLiteral("avatar/posY"), posY_);
 }
 
 void AvatarSceneController::syncTransformFromRenderer() {
