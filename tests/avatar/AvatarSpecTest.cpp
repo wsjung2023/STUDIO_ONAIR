@@ -3,6 +3,8 @@
 #include <gtest/gtest.h>
 
 #include <limits>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace {
@@ -18,7 +20,16 @@ using creator::avatar::ColorRgba;
 using creator::avatar::MaterialOverride;
 using creator::avatar::NamedScalar;
 using creator::avatar::RigFamily;
+using creator::core::AppError;
 using creator::core::ErrorCode;
+
+void expectMetadata(const AppError& error, std::string_view issueCode,
+                    std::string_view messageKey) {
+    ASSERT_TRUE(error.issueCode().has_value());
+    EXPECT_EQ(*error.issueCode(), issueCode);
+    ASSERT_TRUE(error.messageKey().has_value());
+    EXPECT_EQ(*error.messageKey(), messageKey);
+}
 
 AvatarSpecDraft validDraft() {
     AvatarSpecDraft draft{
@@ -64,53 +75,92 @@ TEST(AvatarSpecTest, AcceptsDeterministicallyOrderedSlotsAndMorphs) {
 TEST(AvatarSpecTest, RejectsNonFiniteOrOutOfRangeMorphs) {
     auto draft = validDraft();
     draft.bodyMorphs = {{"height", 1.01F}};
-    EXPECT_EQ(AvatarSpec::create(std::move(draft)).error().code(),
-              ErrorCode::InvalidArgument);
+    auto result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.named-scalar", "avatar.validation.named-scalar");
 
     draft = validDraft();
     draft.faceMorphs = {{"eye-width", std::numeric_limits<float>::quiet_NaN()}};
-    EXPECT_EQ(AvatarSpec::create(std::move(draft)).error().code(),
-              ErrorCode::InvalidArgument);
+    result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.named-scalar", "avatar.validation.named-scalar");
 }
 
 TEST(AvatarSpecTest, RejectsDuplicateNamedValuesAndIncompatibleRepresentation) {
     auto draft = validDraft();
     draft.faceMorphs = {{"eye-width", 0.2F}, {"eye-width", 0.3F}};
-    EXPECT_FALSE(AvatarSpec::create(std::move(draft)).hasValue());
+    auto result = AvatarSpec::create(std::move(draft));
+    EXPECT_FALSE(result.hasValue());
+    expectMetadata(result.error(), "avatar.spec.named-scalar", "avatar.validation.named-scalar");
 
     draft = validDraft();
     draft.rigFamily = RigFamily::Quadruped;
     draft.preferredRepresentation = AvatarRepresentation::Vrm1;
-    EXPECT_FALSE(AvatarSpec::create(std::move(draft)).hasValue());
+    result = AvatarSpec::create(std::move(draft));
+    EXPECT_FALSE(result.hasValue());
+    expectMetadata(result.error(), "avatar.spec.representation", "avatar.validation.representation");
 }
 
 TEST(AvatarSpecTest, RejectsInvalidTextSemanticVersionsAndMissingRequiredSlots) {
     auto draft = validDraft();
     draft.displayName = "\xFF";
-    EXPECT_EQ(AvatarSpec::create(std::move(draft)).error().code(),
-              ErrorCode::InvalidArgument);
+    auto result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.display-name", "avatar.validation.display-name");
 
     draft = validDraft();
     draft.slots.at(AvatarSlot::Body).version = "1.0";
-    EXPECT_EQ(AvatarSpec::create(std::move(draft)).error().code(),
-              ErrorCode::InvalidArgument);
+    result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.asset-reference",
+                   "avatar.validation.asset-reference");
 
     draft = validDraft();
     draft.slots.erase(AvatarSlot::Mouth);
-    EXPECT_EQ(AvatarSpec::create(std::move(draft)).error().code(),
-              ErrorCode::InvalidArgument);
+    result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.required-slots",
+                   "avatar.validation.required-slots");
 }
 
 TEST(AvatarSpecTest, RejectsInvalidColorsAndMaterialValues) {
     auto draft = validDraft();
     draft.palette.at("skin").alpha = 1.1F;
-    EXPECT_EQ(AvatarSpec::create(std::move(draft)).error().code(),
-              ErrorCode::InvalidArgument);
+    auto result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.palette", "avatar.validation.palette");
 
     draft = validDraft();
     draft.materials.front().roughness = std::numeric_limits<float>::infinity();
-    EXPECT_EQ(AvatarSpec::create(std::move(draft)).error().code(),
-              ErrorCode::InvalidArgument);
+    result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.material", "avatar.validation.material");
+}
+
+TEST(AvatarSpecTest, RequiresNamedFamilyThemeAndTrackingFieldsWithinTwoHundredCodePoints) {
+    auto draft = validDraft();
+    draft.speciesFamily.clear();
+    auto result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.named-field", "avatar.validation.named-field");
+
+    draft = validDraft();
+    draft.styleTheme = "\xFF";
+    result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.named-field", "avatar.validation.named-field");
+
+    draft = validDraft();
+    draft.trackingProfileId = std::string(201, 'x');
+    result = AvatarSpec::create(std::move(draft));
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    expectMetadata(result.error(), "avatar.spec.named-field", "avatar.validation.named-field");
+
+    draft = validDraft();
+    draft.speciesFamily = std::string(200, 's');
+    draft.styleTheme = std::string(200, 't');
+    draft.trackingProfileId = std::string(200, 'p');
+    EXPECT_TRUE(AvatarSpec::create(std::move(draft)).hasValue());
 }
 
 TEST(AvatarSpecTest, RequiresGltfRigForNonHumanoidAnimalFamilies) {

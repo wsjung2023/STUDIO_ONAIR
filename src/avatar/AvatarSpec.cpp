@@ -13,8 +13,10 @@
 namespace creator::avatar {
 namespace {
 
-[[nodiscard]] core::AppError invalid(std::string message) {
-    return core::AppError{core::ErrorCode::InvalidArgument, std::move(message)};
+[[nodiscard]] core::AppError invalid(std::string message, std::string issueCode,
+                                      std::string messageKey) {
+    return core::AppError{core::ErrorCode::InvalidArgument, std::move(message),
+                          std::move(issueCode), std::move(messageKey)};
 }
 
 [[nodiscard]] bool isContinuationByte(unsigned char byte) noexcept {
@@ -68,9 +70,9 @@ namespace {
     return count;
 }
 
-[[nodiscard]] bool isValidName(std::string_view value) noexcept {
+[[nodiscard]] bool isValidName(std::string_view value, std::size_t maximumLength = 100U) noexcept {
     const auto length = utf8CodePointCount(value);
-    return length.has_value() && *length >= 1U && *length <= 100U;
+    return length.has_value() && *length >= 1U && *length <= maximumLength;
 }
 
 [[nodiscard]] bool isFiniteInRange(float value, float minimum, float maximum) noexcept {
@@ -84,7 +86,7 @@ namespace {
            isFiniteInRange(color.alpha, 0.0F, 1.0F);
 }
 
-[[nodiscard]] bool hasValidNamedScalars(const std::vector<NamedScalar>& values) noexcept {
+[[nodiscard]] bool hasValidNamedScalars(const std::vector<NamedScalar>& values) {
     std::unordered_set<std::string> names;
     for (const auto& value : values) {
         if (!isValidName(value.name) || !isFiniteInRange(value.value, -1.0F, 1.0F) ||
@@ -95,7 +97,7 @@ namespace {
     return true;
 }
 
-[[nodiscard]] bool hasValidMaterials(const std::vector<MaterialOverride>& materials) noexcept {
+[[nodiscard]] bool hasValidMaterials(const std::vector<MaterialOverride>& materials) {
     std::unordered_set<std::string> channels;
     for (const auto& material : materials) {
         if (!isValidName(material.channel) || !channels.insert(material.channel).second ||
@@ -154,27 +156,39 @@ AvatarSpec::AvatarSpec(AvatarSpecDraft values) : values_(std::move(values)) {}
 
 core::Result<AvatarSpec> AvatarSpec::create(AvatarSpecDraft draft) {
     if (!isValidName(draft.displayName)) {
-        return invalid("avatar display name must be valid UTF-8 with 1 to 100 code points");
+        return invalid("avatar display name must be valid UTF-8 with 1 to 100 code points",
+                       "avatar.spec.display-name", "avatar.validation.display-name");
+    }
+    if (!isValidName(draft.speciesFamily, 200U) || !isValidName(draft.styleTheme, 200U) ||
+        !isValidName(draft.trackingProfileId, 200U)) {
+        return invalid("avatar family, theme, and tracking profile must be valid UTF-8 with 1 to 200 code points",
+                       "avatar.spec.named-field", "avatar.validation.named-field");
     }
     if (!hasCompatibleRepresentation(draft.rigFamily, draft.preferredRepresentation)) {
-        return invalid("avatar representation is incompatible with rig family");
+        return invalid("avatar representation is incompatible with rig family",
+                       "avatar.spec.representation", "avatar.validation.representation");
     }
     if (!hasValidNamedScalars(draft.bodyMorphs) || !hasValidNamedScalars(draft.faceMorphs) ||
         !hasValidNamedScalars(draft.animalMorphs) ||
         !hasValidNamedScalars(draft.expressions) || !hasValidNamedScalars(draft.physics)) {
-        return invalid("avatar named scalars must have unique valid names and normalized values");
+        return invalid("avatar named scalars must have unique valid names and normalized values",
+                       "avatar.spec.named-scalar", "avatar.validation.named-scalar");
     }
     if (!hasValidAssetReferences(draft.slots)) {
-        return invalid("avatar asset references must have semantic versions and valid variants");
+        return invalid("avatar asset references must have semantic versions and valid variants",
+                       "avatar.spec.asset-reference", "avatar.validation.asset-reference");
     }
     if (!hasValidPalette(draft.palette)) {
-        return invalid("avatar palette names and colors must be valid");
+        return invalid("avatar palette names and colors must be valid", "avatar.spec.palette",
+                       "avatar.validation.palette");
     }
     if (!hasValidMaterials(draft.materials)) {
-        return invalid("avatar material overrides must have unique valid channels and normalized values");
+        return invalid("avatar material overrides must have unique valid channels and normalized values",
+                       "avatar.spec.material", "avatar.validation.material");
     }
     if (!hasRequiredSlots(draft.slots)) {
-        return invalid("avatar requires body, head, eyes, and mouth slots");
+        return invalid("avatar requires body, head, eyes, and mouth slots",
+                       "avatar.spec.required-slots", "avatar.validation.required-slots");
     }
     return AvatarSpec{std::move(draft)};
 }

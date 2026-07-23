@@ -27,6 +27,8 @@ TEST(ResultTest, CarriesErrorOnFailure) {
     EXPECT_FALSE(static_cast<bool>(result));
     EXPECT_EQ(result.error().code(), ErrorCode::NotFound);
     EXPECT_EQ(result.error().message(), "no such project");
+    EXPECT_FALSE(result.error().issueCode().has_value());
+    EXPECT_FALSE(result.error().messageKey().has_value());
 }
 
 TEST(ResultTest, ValueOrReturnsFallbackOnError) {
@@ -80,6 +82,16 @@ TEST(AppErrorTest, ComparesByCodeAndMessage) {
 
     EXPECT_EQ(a, b);
     EXPECT_NE(a, c);
+}
+
+TEST(AppErrorTest, CarriesOptionalIssueMetadata) {
+    const AppError error{ErrorCode::InvalidArgument, "invalid avatar", "avatar.spec.display-name",
+                         "avatar.validation.display-name"};
+
+    ASSERT_TRUE(error.issueCode().has_value());
+    EXPECT_EQ(*error.issueCode(), "avatar.spec.display-name");
+    ASSERT_TRUE(error.messageKey().has_value());
+    EXPECT_EQ(*error.messageKey(), "avatar.validation.display-name");
 }
 
 TEST(AppErrorTest, StringifiesEveryCode) {

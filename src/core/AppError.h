@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -30,17 +31,28 @@ enum class ErrorCode {
 /// speech (ARCHITECTURE.md 11).
 class AppError final {
 public:
-    AppError(ErrorCode code, std::string message)
-        : code_(code), message_(std::move(message)) {}
+    AppError(ErrorCode code, std::string message,
+             std::optional<std::string> issueCode = std::nullopt,
+             std::optional<std::string> messageKey = std::nullopt)
+        : code_(code), message_(std::move(message)), issueCode_(std::move(issueCode)),
+          messageKey_(std::move(messageKey)) {}
 
     [[nodiscard]] ErrorCode code() const noexcept { return code_; }
     [[nodiscard]] const std::string& message() const noexcept { return message_; }
+    [[nodiscard]] const std::optional<std::string>& issueCode() const noexcept {
+        return issueCode_;
+    }
+    [[nodiscard]] const std::optional<std::string>& messageKey() const noexcept {
+        return messageKey_;
+    }
 
     friend bool operator==(const AppError&, const AppError&) = default;
 
 private:
     ErrorCode code_;
     std::string message_;
+    std::optional<std::string> issueCode_;
+    std::optional<std::string> messageKey_;
 };
 
 }  // namespace creator::core
