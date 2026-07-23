@@ -9,9 +9,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -22,6 +27,9 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <Windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace creator::avatar {
@@ -215,6 +223,13 @@ void removeTemporary(const std::filesystem::path& temporary) noexcept {
     std::filesystem::remove(temporary, ignored);
 }
 
+AppError durableError(std::string_view operation, std::uint64_t code) {
+    return codecError(ErrorCode::IoFailure,
+                      "avatar spec durable file " + std::string{operation} + " failed (code " +
+                          std::to_string(code) + ")",
+                      "avatar.spec.codec.save", "avatar.validation.io");
+}
+
 Result<void> writeAtomically(const std::filesystem::path& target, std::string_view contents) {
     std::filesystem::path temporary;
     try {
@@ -224,40 +239,90 @@ Result<void> writeAtomically(const std::filesystem::path& target, std::string_vi
                           "avatar.spec.codec.save", "avatar.validation.io");
     }
 
-    std::ofstream stream{temporary, std::ios::binary | std::ios::trunc};
-    if (!stream) {
-        return codecError(ErrorCode::IoFailure, "avatar spec temporary file could not be created",
-                          "avatar.spec.codec.save", "avatar.validation.io");
-    }
-    stream.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-    stream.flush();
-    if (!stream) {
-        stream.close();
-        removeTemporary(temporary);
-        return codecError(ErrorCode::IoFailure, "avatar spec temporary file could not be written",
-                          "avatar.spec.codec.save", "avatar.validation.io");
-    }
-    stream.close();
-    if (!stream) {
-        removeTemporary(temporary);
-        return codecError(ErrorCode::IoFailure, "avatar spec temporary file could not be closed",
-                          "avatar.spec.codec.save", "avatar.validation.io");
-    }
-
 #ifdef _WIN32
+    HANDLE handle = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return durableError("create temporary", GetLastError());
+    std::size_t written = 0;
+    while (written < contents.size()) {
+        const auto remaining = contents.size() - written;
+        const DWORD chunk = static_cast<DWORD>(
+            std::min<std::size_t>(remaining, std::numeric_limits<DWORD>::max()));
+        DWORD count = 0;
+        const BOOL succeeded = WriteFile(handle, contents.data() + written, chunk, &count, nullptr);
+        if (!succeeded || count == 0) {
+            const DWORD code = succeeded ? ERROR_WRITE_FAULT : GetLastError();
+            CloseHandle(handle);
+            removeTemporary(temporary);
+            return durableError("write temporary", code);
+        }
+        written += count;
+    }
+    if (!FlushFileBuffers(handle)) {
+        const DWORD code = GetLastError();
+        CloseHandle(handle);
+        removeTemporary(temporary);
+        return durableError("flush temporary", code);
+    }
+    if (!CloseHandle(handle)) {
+        const DWORD code = GetLastError();
+        removeTemporary(temporary);
+        return durableError("close temporary", code);
+    }
     if (!MoveFileExW(temporary.c_str(), target.c_str(),
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        const DWORD code = GetLastError();
         removeTemporary(temporary);
-        return codecError(ErrorCode::IoFailure, "avatar spec destination could not be replaced",
-                          "avatar.spec.codec.save", "avatar.validation.io");
+        return durableError("replace target", code);
     }
 #else
-    std::error_code error;
-    std::filesystem::rename(temporary, target, error);
-    if (error) {
+    const int descriptor = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0666);
+    if (descriptor < 0) return durableError("create temporary", static_cast<std::uint64_t>(errno));
+    std::size_t written = 0;
+    while (written < contents.size()) {
+        const auto remaining = contents.size() - written;
+        const auto chunk = std::min<std::size_t>(
+            remaining, static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+        const ssize_t count = ::write(descriptor, contents.data() + written, chunk);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) {
+            const int code = errno;
+            ::close(descriptor);
+            removeTemporary(temporary);
+            return durableError("write temporary", static_cast<std::uint64_t>(code));
+        }
+        written += static_cast<std::size_t>(count);
+    }
+    if (::fsync(descriptor) != 0) {
+        const int code = errno;
+        ::close(descriptor);
         removeTemporary(temporary);
-        return codecError(ErrorCode::IoFailure, "avatar spec destination could not be replaced",
-                          "avatar.spec.codec.save", "avatar.validation.io");
+        return durableError("flush temporary", static_cast<std::uint64_t>(code));
+    }
+    if (::close(descriptor) != 0) {
+        const int code = errno;
+        removeTemporary(temporary);
+        return durableError("close temporary", static_cast<std::uint64_t>(code));
+    }
+    if (::rename(temporary.c_str(), target.c_str()) != 0) {
+        const int code = errno;
+        removeTemporary(temporary);
+        return durableError("replace target", static_cast<std::uint64_t>(code));
+    }
+    const std::filesystem::path parent = target.parent_path().empty()
+                                             ? std::filesystem::path{"."}
+                                             : target.parent_path();
+    const int parentDescriptor = ::open(parent.c_str(), O_RDONLY | O_DIRECTORY);
+    if (parentDescriptor < 0) {
+        return durableError("open parent directory", static_cast<std::uint64_t>(errno));
+    }
+    if (::fsync(parentDescriptor) != 0) {
+        const int code = errno;
+        ::close(parentDescriptor);
+        return durableError("flush parent directory", static_cast<std::uint64_t>(code));
+    }
+    if (::close(parentDescriptor) != 0) {
+        return durableError("close parent directory", static_cast<std::uint64_t>(errno));
     }
 #endif
     return core::ok();
@@ -304,16 +369,27 @@ json AvatarSpecCodec::toJson(const AvatarSpec& spec) const {
 }
 
 Result<AvatarSpec> AvatarSpecCodec::fromJson(const json& document) const {
-    const auto schemaVersion = document.is_object() && document.contains("schemaVersion") &&
-                                       document.at("schemaVersion").is_number_integer()
-                                   ? document.at("schemaVersion").get<std::int32_t>()
-                                   : 0;
-    if (schemaVersion > AvatarSpec::kCurrentSchemaVersion) {
-        return codecError(ErrorCode::UnsupportedVersion, "avatar spec schema version is unsupported",
-                          "avatar.spec.codec.version", "avatar.validation.schema-version");
+    if (document.is_object() && document.contains("schemaVersion")) {
+        const json& version = document.at("schemaVersion");
+        if (version.is_number_unsigned() &&
+            version.get<std::uint64_t>() > static_cast<std::uint64_t>(AvatarSpec::kCurrentSchemaVersion)) {
+            return codecError(ErrorCode::UnsupportedVersion, "avatar spec schema version is unsupported",
+                              "avatar.spec.codec.version", "avatar.validation.schema-version");
+        }
+        if (version.is_number_integer() &&
+            version.get<std::int64_t>() > static_cast<std::int64_t>(AvatarSpec::kCurrentSchemaVersion)) {
+            return codecError(ErrorCode::UnsupportedVersion, "avatar spec schema version is unsupported",
+                              "avatar.spec.codec.version", "avatar.validation.schema-version");
+        }
     }
     if (auto valid = validate(document); !valid.hasValue()) return valid.error();
-    if (schemaVersion != AvatarSpec::kCurrentSchemaVersion) {
+    const json& version = document.at("schemaVersion");
+    const bool isCurrentVersion =
+        (version.is_number_unsigned() &&
+         version.get<std::uint64_t>() == static_cast<std::uint64_t>(AvatarSpec::kCurrentSchemaVersion)) ||
+        (version.is_number_integer() &&
+         version.get<std::int64_t>() == static_cast<std::int64_t>(AvatarSpec::kCurrentSchemaVersion));
+    if (!isCurrentVersion) {
         return codecError(ErrorCode::UnsupportedVersion, "avatar spec schema version is unsupported",
                           "avatar.spec.codec.version", "avatar.validation.schema-version");
     }
@@ -414,7 +490,13 @@ Result<AvatarSpec> AvatarSpecCodec::load(const std::filesystem::path& path) cons
 
 Result<void> AvatarSpecCodec::save(const std::filesystem::path& path, const AvatarSpec& spec) const {
     if (auto safe = ensureSafePath(path); !safe.hasValue()) return safe.error();
-    return writeAtomically(path, toJson(spec).dump(2));
+    try {
+        return writeAtomically(path, toJson(spec).dump(2));
+    } catch (const std::exception& error) {
+        return codecError(ErrorCode::ParseFailure,
+                          "avatar spec JSON could not be serialized: " + std::string{error.what()},
+                          "avatar.spec.codec.serialize", "avatar.validation.json");
+    }
 }
 
 }  // namespace creator::avatar
