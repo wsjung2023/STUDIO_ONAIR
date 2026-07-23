@@ -87,6 +87,13 @@ core::Result<std::unique_ptr<AsyncTrackRecorder>> makeTrackRecorder(
     std::unique_ptr<recorder::ITrackSegmentEncoder> encoder;
     if (track.mediaKind() == TrackMediaKind::Video) {
         ffmpeg_adapter::VideoEncoderOptions options;
+        // The recorded segment is the quality CEILING for everything downstream:
+        // the editor and the export can only preserve detail the recording
+        // captured, never add it. Record at 16 Mbps -- above the 12 Mbps export
+        // target -- so full-motion 1080p content (a video playing on screen) is
+        // not the bottleneck. It is a local intermediate, so the extra disk is
+        // cheap. (Avatar stays lossless FFV1 below; that ignores bitRate.)
+        options.bitRate = 16'000'000;
         if (track.role() == TrackRole::Avatar) {
             // The avatar overlay is a transparent frame with the character baked
             // into a corner. Record it with a real alpha channel (lossless FFV1

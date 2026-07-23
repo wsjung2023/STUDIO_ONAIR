@@ -271,6 +271,12 @@ private:
             // the much slower MPEG-4 encoder.
             if (name == "h264_mf") {
                 av_dict_set(&codecOptions, "hw_encoding", "0", 0);
+                // Media Foundation H.264 defaults to a quality-capped VBR that
+                // ignores the target bit_rate and starves full-motion 1080p
+                // content (a video playing on screen came out ~3 Mbps, blocky).
+                // u_vbr (unconstrained VBR) actually targets the requested
+                // average bitrate and lets it peak for motion.
+                av_dict_set(&codecOptions, "rate_control", "u_vbr", 0);
             }
             const int opened = avcodec_open2(candidate, codec, &codecOptions);
             av_dict_free(&codecOptions);
