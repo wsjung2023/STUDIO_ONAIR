@@ -121,6 +121,17 @@ std::filesystem::path stagedMltRuntimeRoot() {
 }  // namespace
 
 int main(int argc, char* argv[]) {
+#if defined(_WIN32)
+    // Editor-preview audio (QAudioSink) needs a QtMultimedia backend. Qt's
+    // default ffmpeg backend links avcodec-61, which clashes with the
+    // avcodec-62 this app ships on PATH and then fails to load ("No
+    // QtMultimedia backends found" -> silent editor). Force the native
+    // Windows backend, which has no FFmpeg dependency, unless the user
+    // explicitly chose one.
+    if (qEnvironmentVariableIsEmpty("QT_MEDIA_BACKEND")) {
+        qputenv("QT_MEDIA_BACKEND", "windows");
+    }
+#endif
     QGuiApplication app(argc, argv);
     QGuiApplication::setOrganizationName(QStringLiteral("CreatorStudio"));
     QGuiApplication::setApplicationName(QStringLiteral("Creator Studio"));

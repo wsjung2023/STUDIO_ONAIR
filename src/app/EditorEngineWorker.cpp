@@ -121,8 +121,14 @@ void EditorEngineWorker::requestAudio(quint64 generation, quint64 commandId,
         const std::int64_t frameSamples =
             static_cast<std::int64_t>(block.interleaved.size() / channels);
         if (frameSamples <= 0) break;
-        cursor = cursor + core::DurationNs{frameSamples * 1'000'000'000LL /
-                                           static_cast<std::int64_t>(frequency)};
+        // Round UP, matching frameToTimestamp's convention. Truncating would
+        // leave the cursor a fraction of a nanosecond inside the frame just
+        // pulled (timestampToFrame floors), re-pulling it as a duplicate and
+        // skipping the last frame of every block -- an audible ~one-frame
+        // glitch at each block boundary.
+        const std::int64_t rate = static_cast<std::int64_t>(frequency);
+        cursor = cursor + core::DurationNs{
+                              (frameSamples * 1'000'000'000LL + rate - 1) / rate};
     }
     if (accumulated.empty()) {
         emit audioCompleted(

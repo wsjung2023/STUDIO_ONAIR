@@ -1572,10 +1572,15 @@ void EditorController::handleAudioCompleted(
                             static_cast<std::size_t>(returnedSamples) *
                                 static_cast<std::size_t>(kBytesPerFrame));
                 audioOutput_->pushBlock(block);
+                // Round UP like frameToTimestamp so the next pull starts in the
+                // FOLLOWING frame; truncating would land a fraction of a
+                // nanosecond inside the last pulled frame and duplicate it.
+                constexpr std::int64_t kRate =
+                    EditorPreviewAudioOutput::kSampleRate;
                 audioPullPosition_ =
                     core::TimestampNs{core::DurationNs{positionNs}} +
-                    core::DurationNs{returnedSamples * 1'000'000'000LL /
-                                     EditorPreviewAudioOutput::kSampleRate};
+                    core::DurationNs{
+                        (returnedSamples * 1'000'000'000LL + kRate - 1) / kRate};
             }
         }
     }
@@ -1592,13 +1597,14 @@ void EditorController::requestPlaybackFrame() {
         frameRequestInFlight_) {
         return;
     }
-    // Audio smoothness beats video smoothness while editing to sound: when the
-    // sink's buffered lookahead is running low, skip this preview frame so the
-    // single-threaded MLT worker's next slot goes to refilling audio instead of
-    // a heavy full-frame render. Video simply holds the current frame briefly.
+    // Audio smoothness beats video smoothness while editing to sound -- but
+    // only yield when an underrun is IMMINENT (<~150 ms buffered). A higher
+    // threshold starved video whenever the mixer ran near real-time, freezing
+    // the preview; audio commands already jump the queue, so this gate is just
+    // the last-resort brake.
     if (audioOutput_ && audioOutput_->active() &&
         audioOutput_->queuedSamples() <
-            EditorPreviewAudioOutput::kSampleRate / 2) {
+            EditorPreviewAudioOutput::kSampleRate * 3 / 20) {
         return;
     }
     const auto elapsed = core::DurationNs{playbackClock_.nsecsElapsed()};
