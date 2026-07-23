@@ -89,7 +89,18 @@
       "additionalProperties": false,
       "required": ["path", "sha256"],
       "properties": {
-        "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^/\\\\]+(?:/[^/\\\\]+)*$",
+          "not": {
+            "anyOf": [
+              { "pattern": "^[A-Za-z]:" },
+              { "pattern": "(^|/)\\.\\.?(/|$)" }
+            ]
+          }
+        },
         "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },
@@ -102,8 +113,8 @@
         "boneCount"
       ],
       "properties": {
-        "payloadBytes": { "type": "integer", "minimum": 0 },
-        "textureBytes": { "type": "integer", "minimum": 0 },
+        "payloadBytes": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "textureBytes": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
         "textureCount": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
         "maxTextureDimension": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
         "vertexCount": { "type": "integer", "minimum": 0, "maximum": 4294967295 },

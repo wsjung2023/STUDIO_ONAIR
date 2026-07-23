@@ -11,17 +11,25 @@
 namespace creator::avatar {
 namespace {
 
-std::vector<AvatarRight> requiredRights(UseKind use) {
+struct UseRequirement final {
+    bool recognized;
+    std::vector<AvatarRight> rights;
+};
+
+UseRequirement requiredRights(UseKind use) {
     switch (use) {
-    case UseKind::Preview: return {};
+    case UseKind::Preview: return {true, {}};
     case UseKind::Broadcast:
-    case UseKind::Record: return {AvatarRight::CommercialBroadcast};
-    case UseKind::AppBundle: return {AvatarRight::AppBundle};
-    case UseKind::DerivativeCharacter: return {AvatarRight::DerivativeCharacter};
-    case UseKind::ModelExport: return {AvatarRight::ModelExport};
-    case UseKind::PortableProject: return {AvatarRight::PortableProject};
+    case UseKind::Record:
+        return {true, {AvatarRight::CommercialBroadcast}};
+    case UseKind::AppBundle: return {true, {AvatarRight::AppBundle}};
+    case UseKind::DerivativeCharacter:
+        return {true, {AvatarRight::DerivativeCharacter}};
+    case UseKind::ModelExport: return {true, {AvatarRight::ModelExport}};
+    case UseKind::PortableProject:
+        return {true, {AvatarRight::PortableProject}};
     }
-    return {};
+    return {false, {}};
 }
 
 const LicenseGrant* findGrant(const AvatarAssetManifest& manifest, AvatarRight right) {
@@ -61,7 +69,11 @@ AvatarRightsDecision AvatarLicenseResolver::resolve(
               });
 
     AvatarRightsDecision decision;
-    const auto rights = requiredRights(context.useKind);
+    const auto requirement = requiredRights(context.useKind);
+    if (!requirement.recognized) return decision;
+    if (!requirement.rights.empty() && manifests.empty()) return decision;
+
+    const auto& rights = requirement.rights;
     for (const auto* manifest : ordered) {
         const auto& regions = manifest->regionAllowList();
         const bool regionAllowed =

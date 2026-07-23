@@ -231,6 +231,47 @@ TEST(AvatarLicenseResolverTest, PreviewIgnoresRightsRegionAndValidityGates) {
     EXPECT_TRUE(result.blockers.empty());
 }
 
+TEST(AvatarLicenseResolverTest, EmptyManifestSetFailsClosedExceptForPreview) {
+    const std::vector<AvatarAssetManifest> manifests;
+    auto context = commercialCorporateExport();
+    const auto denied = AvatarLicenseResolver{}.resolve(context, manifests);
+    EXPECT_FALSE(denied.allowed);
+    EXPECT_TRUE(denied.blockers.empty());
+
+    context.useKind = UseKind::Preview;
+    const auto preview = AvatarLicenseResolver{}.resolve(context, manifests);
+    EXPECT_TRUE(preview.allowed);
+    EXPECT_TRUE(preview.blockers.empty());
+}
+
+TEST(AvatarLicenseResolverTest, OutOfDomainUseKindFailsClosed) {
+    const std::vector manifests{manifest("vendor.body", allowAll())};
+    auto context = commercialCorporateExport();
+    context.useKind = static_cast<UseKind>(999);
+    const auto result = AvatarLicenseResolver{}.resolve(context, manifests);
+    EXPECT_FALSE(result.allowed);
+    EXPECT_TRUE(result.blockers.empty());
+}
+
+TEST(AvatarLicenseResolverTest, ValidityWindowIsStartInclusiveAndEndExclusive) {
+    auto draft = manifest("vendor.windowed", allowAll()).values();
+    draft.validFrom = utc("2026-07-24T00:00:00Z");
+    draft.validUntil = utc("2026-07-25T00:00:00Z");
+    const std::vector manifests{
+        AvatarAssetManifest::create(std::move(draft)).value()};
+    auto context = commercialCorporateExport();
+
+    context.evaluatedAt = utc("2026-07-24T00:00:00Z");
+    EXPECT_TRUE(AvatarLicenseResolver{}.resolve(context, manifests).allowed);
+
+    context.evaluatedAt = utc("2026-07-25T00:00:00Z");
+    const auto expired = AvatarLicenseResolver{}.resolve(context, manifests);
+    EXPECT_FALSE(expired.allowed);
+    ASSERT_EQ(expired.blockers.size(), 1U);
+    EXPECT_NE(expired.blockers[0].reason.find("avatar.rights.time"),
+              std::string::npos);
+}
+
 TEST(AvatarLicenseResolverTest, PortableProjectDoesNotImplyRawRedistribution) {
     auto grants = withGrant(AvatarRight::RawAssetRedistribution,
                             GrantState::Denied);

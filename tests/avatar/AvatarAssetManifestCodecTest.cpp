@@ -6,8 +6,10 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -80,6 +82,50 @@ AvatarAssetManifest validManifest() {
     return AvatarAssetManifest::create(validDraft()).value();
 }
 
+json committedSchema() {
+    std::ifstream stream{CS_AVATAR_ASSET_SCHEMA_PATH, std::ios::binary};
+    return json::parse(stream);
+}
+
+nlohmann::json_schema::json_validator committedValidator() {
+    auto schema = committedSchema();
+    auto& performance =
+        schema["definitions"]["performance"]["properties"];
+    for (const auto* field : {"payloadBytes", "textureBytes"}) {
+        performance[field].erase("minimum");
+        performance[field].erase("maximum");
+    }
+    nlohmann::json_schema::json_validator validator{
+        nullptr, nlohmann::json_schema::default_string_format_check};
+    validator.set_root_schema(schema);
+    return validator;
+}
+
+void writeText(const std::filesystem::path& path, const std::string& text) {
+    std::ofstream stream{path, std::ios::binary | std::ios::trunc};
+    stream << text;
+}
+
+std::size_t temporarySiblingCount(const std::filesystem::path& path) {
+    const auto parent =
+        path.parent_path().empty() ? std::filesystem::current_path()
+                                   : path.parent_path();
+    const auto prefix = "." + path.filename().string() + ".part-";
+    std::size_t count = 0;
+    for (const auto& entry : std::filesystem::directory_iterator{parent}) {
+        if (entry.path().filename().string().starts_with(prefix)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::string hashFor(std::size_t index) {
+    std::ostringstream stream;
+    stream << std::hex << std::setfill('0') << std::setw(64) << index;
+    return stream.str();
+}
+
 TEST(AvatarAssetManifestTest, CanonicalRoundTripSortsEverySetLikeCollection) {
     const auto document = AvatarAssetManifestCodec{}.toJson(validManifest());
     const auto decoded = AvatarAssetManifestCodec{}.fromJson(document);
@@ -101,12 +147,7 @@ TEST(AvatarAssetManifestTest, CanonicalRoundTripSortsEverySetLikeCollection) {
 }
 
 TEST(AvatarAssetManifestTest, CanonicalDocumentValidatesAgainstCommittedDraft7Schema) {
-    std::ifstream stream{CS_AVATAR_ASSET_SCHEMA_PATH, std::ios::binary};
-    ASSERT_TRUE(stream);
-    const json schema = json::parse(stream);
-    nlohmann::json_schema::json_validator validator{
-        nullptr, nlohmann::json_schema::default_string_format_check};
-    ASSERT_NO_THROW(validator.set_root_schema(schema));
+    auto validator = committedValidator();
     EXPECT_NO_THROW(validator.validate(AvatarAssetManifestCodec{}.toJson(validManifest())));
 }
 
@@ -131,6 +172,37 @@ TEST(AvatarAssetManifestTest, RejectsNonpositiveAndNonintegerVersions) {
         document["schemaVersion"] = version;
         EXPECT_EQ(AvatarAssetManifestCodec{}.fromJson(document).error().code(),
                   ErrorCode::ParseFailure);
+    }
+}
+
+TEST(AvatarAssetManifestTest, SchemaAndDecoderPreserveExactUint64Boundaries) {
+    const auto schema = committedSchema();
+    const auto maximum = std::numeric_limits<std::uint64_t>::max();
+    const auto& properties =
+        schema["definitions"]["performance"]["properties"];
+    ASSERT_TRUE(properties["payloadBytes"].contains("maximum"));
+    ASSERT_TRUE(properties["textureBytes"].contains("maximum"));
+    EXPECT_EQ(properties["payloadBytes"]["maximum"].get<std::uint64_t>(),
+              maximum);
+    EXPECT_EQ(properties["textureBytes"]["maximum"].get<std::uint64_t>(),
+              maximum);
+
+    auto document = AvatarAssetManifestCodec{}.toJson(validManifest());
+    document["performance"]["payloadBytes"] = maximum;
+    document["performance"]["textureBytes"] = maximum;
+    const auto boundary =
+        AvatarAssetManifestCodec{}.fromJson(json::parse(document.dump()));
+    ASSERT_TRUE(boundary.hasValue()) << boundary.error().message();
+    EXPECT_EQ(boundary.value().values().performance.payloadBytes, maximum);
+    EXPECT_EQ(boundary.value().values().performance.textureBytes, maximum);
+
+    const auto overflow = json::parse("18446744073709551616");
+    for (const auto* field : {"payloadBytes", "textureBytes"}) {
+        document = AvatarAssetManifestCodec{}.toJson(validManifest());
+        document["performance"][field] = overflow;
+        const auto decoded = AvatarAssetManifestCodec{}.fromJson(document);
+        ASSERT_FALSE(decoded.hasValue());
+        EXPECT_EQ(decoded.error().code(), ErrorCode::ParseFailure);
     }
 }
 
@@ -160,6 +232,49 @@ TEST(AvatarAssetManifestTest, FactoryRejectsDuplicateDeclarations) {
     EXPECT_FALSE(AvatarAssetManifest::create(std::move(draft)).hasValue());
 }
 
+TEST(AvatarAssetManifestTest, FactoryRejectsUnsafePayloadPaths) {
+    for (const std::string path :
+         {"", "/absolute.bin", "//rooted.bin", "C:/drive.bin",
+          "C:\\drive.bin", "payload\\file.bin", ".", "..",
+          "payload/./file.bin", "payload/../file.bin", "payload//file.bin",
+          "payload/"}) {
+        auto draft = validDraft();
+        draft.payloads[0].path = path;
+        EXPECT_FALSE(AvatarAssetManifest::create(std::move(draft)).hasValue())
+            << path;
+    }
+
+    auto draft = validDraft();
+    draft.payloads.push_back(
+        {"models/./body.vrm",
+         "1111111111111111111111111111111111111111111111111111111111111111"});
+    EXPECT_FALSE(AvatarAssetManifest::create(std::move(draft)).hasValue());
+}
+
+TEST(AvatarAssetManifestTest, PayloadPathsTreatPercentEscapesAsLiteralText) {
+    auto draft = validDraft();
+    draft.payloads[0].path = "payload/%2e%2e/file.bin";
+    EXPECT_TRUE(AvatarAssetManifest::create(std::move(draft)).hasValue());
+
+    auto document = AvatarAssetManifestCodec{}.toJson(validManifest());
+    document["payloads"][0]["path"] = "payload/%2e%2e/file.bin";
+    auto validator = committedValidator();
+    EXPECT_NO_THROW(validator.validate(document));
+}
+
+TEST(AvatarAssetManifestTest, SchemaRejectsUnsafePayloadPaths) {
+    auto validator = committedValidator();
+    for (const std::string path :
+         {"", "/absolute.bin", "//rooted.bin", "C:/drive.bin",
+          "C:\\drive.bin", "payload\\file.bin", ".", "..",
+          "payload/./file.bin", "payload/../file.bin", "payload//file.bin",
+          "payload/"}) {
+        auto document = AvatarAssetManifestCodec{}.toJson(validManifest());
+        document["payloads"][0]["path"] = path;
+        EXPECT_THROW(validator.validate(document), std::exception) << path;
+    }
+}
+
 TEST(AvatarAssetManifestTest, FactoryRejectsInvalidNamesVersionsAndHashes) {
     auto draft = validDraft();
     draft.displayName = std::string{"\xC0\x80", 2};
@@ -171,6 +286,60 @@ TEST(AvatarAssetManifestTest, FactoryRejectsInvalidNamesVersionsAndHashes) {
 
     draft = validDraft();
     draft.payloads[0].sha256[0] = 'A';
+    EXPECT_FALSE(AvatarAssetManifest::create(std::move(draft)).hasValue());
+}
+
+TEST(AvatarAssetManifestTest, AttributionTextIsAlwaysBoundedValidUtf8) {
+    auto draft = validDraft();
+    for (auto& grant : draft.grants) {
+        if (grant.right == AvatarRight::Attribution) {
+            grant.state = GrantState::Denied;
+        }
+    }
+    draft.attributionText = std::string{"\xC0\x80", 2};
+    EXPECT_FALSE(AvatarAssetManifest::create(std::move(draft)).hasValue());
+
+    draft = validDraft();
+    for (auto& grant : draft.grants) {
+        if (grant.right == AvatarRight::Attribution) {
+            grant.state = GrantState::Denied;
+        }
+    }
+    draft.attributionText.assign(1001, 'a');
+    EXPECT_FALSE(AvatarAssetManifest::create(std::move(draft)).hasValue());
+
+    draft = validDraft();
+    draft.attributionText.assign(1000, 'a');
+    EXPECT_TRUE(AvatarAssetManifest::create(std::move(draft)).hasValue());
+
+    draft = validDraft();
+    draft.attributionText.clear();
+    for (std::size_t index = 0; index < 1000; ++index) {
+        draft.attributionText += "\xEA\xB0\x80";
+    }
+    EXPECT_TRUE(AvatarAssetManifest::create(std::move(draft)).hasValue());
+}
+
+TEST(AvatarAssetManifestTest, FactoryRejectsEveryOutOfDomainEnum) {
+    auto draft = validDraft();
+    draft.supportedRepresentations[0] =
+        static_cast<AvatarRepresentation>(999);
+    EXPECT_FALSE(AvatarAssetManifest::create(std::move(draft)).hasValue());
+
+    draft = validDraft();
+    draft.supportedRigFamilies[0] = static_cast<RigFamily>(999);
+    EXPECT_FALSE(AvatarAssetManifest::create(std::move(draft)).hasValue());
+
+    draft = validDraft();
+    draft.allowedSlots[0] = static_cast<AvatarSlot>(999);
+    EXPECT_FALSE(AvatarAssetManifest::create(std::move(draft)).hasValue());
+
+    draft = validDraft();
+    draft.grants[0].right = static_cast<AvatarRight>(999);
+    EXPECT_FALSE(AvatarAssetManifest::create(std::move(draft)).hasValue());
+
+    draft = validDraft();
+    draft.grants[0].state = static_cast<GrantState>(999);
     EXPECT_FALSE(AvatarAssetManifest::create(std::move(draft)).hasValue());
 }
 
@@ -223,6 +392,57 @@ TEST(AvatarAssetManifestTest, SaveAndLoadUseCanonicalJson) {
     EXPECT_EQ(persisted,
               AvatarAssetManifestCodec{}.toJson(loaded.value()).dump(2));
     stream.close();
+    std::filesystem::remove(path);
+}
+
+TEST(AvatarAssetManifestTest, LoadRejectsDecodedDuplicateObjectMembers) {
+    const auto path = std::filesystem::path{testing::TempDir()} /
+                      "avatar-asset-duplicate.json";
+    const auto canonical = AvatarAssetManifestCodec{}.toJson(validManifest()).dump();
+
+    auto duplicate = canonical;
+    duplicate.insert(1, R"("vendor":"shadow",)");
+    writeText(path, duplicate);
+    auto loaded = AvatarAssetManifestCodec{}.load(path);
+    EXPECT_FALSE(loaded.hasValue());
+    if (!loaded.hasValue()) {
+        EXPECT_EQ(loaded.error().code(), ErrorCode::ParseFailure);
+    }
+
+    duplicate = canonical;
+    duplicate.insert(1, R"("gr\u0061nts":[],)");
+    writeText(path, duplicate);
+    loaded = AvatarAssetManifestCodec{}.load(path);
+    EXPECT_FALSE(loaded.hasValue());
+    if (!loaded.hasValue()) {
+        EXPECT_EQ(loaded.error().code(), ErrorCode::ParseFailure);
+    }
+    std::filesystem::remove(path);
+}
+
+TEST(AvatarAssetManifestTest, OversizedSaveFailsBeforeCreatingTemporaryFile) {
+    auto draft = validDraft();
+    draft.payloads.clear();
+    for (std::size_t index = 0; index < 9000; ++index) {
+        std::ostringstream path;
+        path << "payload/" << std::string(970, 'a') << std::setw(5)
+             << std::setfill('0') << index << ".bin";
+        draft.payloads.push_back({path.str(), hashFor(index)});
+    }
+    const auto manifest = AvatarAssetManifest::create(std::move(draft));
+    ASSERT_TRUE(manifest.hasValue()) << manifest.error().message();
+
+    const auto path = std::filesystem::path{testing::TempDir()} /
+                      "avatar-asset-too-large-save.json";
+    std::filesystem::remove(path);
+    const auto before = temporarySiblingCount(path);
+    const auto saved = AvatarAssetManifestCodec{}.save(path, manifest.value());
+    EXPECT_FALSE(saved.hasValue());
+    if (!saved.hasValue()) {
+        EXPECT_EQ(saved.error().code(), ErrorCode::ParseFailure);
+    }
+    EXPECT_FALSE(std::filesystem::exists(path));
+    EXPECT_EQ(temporarySiblingCount(path), before);
     std::filesystem::remove(path);
 }
 

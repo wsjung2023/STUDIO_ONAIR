@@ -20,7 +20,10 @@
 #include <string_view>
 #include <system_error>
 #include <tuple>
+#include <type_traits>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -72,7 +75,17 @@ const nlohmann::json_schema::json_validator& validator() {
     static const nlohmann::json_schema::json_validator instance = [] {
         nlohmann::json_schema::json_validator compiled{
             nullptr, nlohmann::json_schema::default_string_format_check};
-        compiled.set_root_schema(json::parse(embedded::kAvatarAssetSchema));
+        auto schema = json::parse(embedded::kAvatarAssetSchema);
+        // This validator release narrows unsigned schema limits through int64.
+        // Keep the exact uint64 limits in the committed schema and enforce
+        // those two native-width fields explicitly before decoding instead.
+        auto& performance =
+            schema["definitions"]["performance"]["properties"];
+        for (const auto* field : {"payloadBytes", "textureBytes"}) {
+            performance[field].erase("minimum");
+            performance[field].erase("maximum");
+        }
+        compiled.set_root_schema(schema);
         return compiled;
     }();
     return instance;
@@ -97,6 +110,55 @@ Result<void> validate(const json& document) {
                 std::string{error.what()},
             "avatar.asset.codec.schema", "avatar.validation.schema");
     }
+}
+
+template <typename Unsigned>
+bool fitsUnsignedNativeWidth(const json& value) {
+    static_assert(std::is_unsigned_v<Unsigned>);
+    if (value.is_number_unsigned()) {
+        return value.get<std::uint64_t>() <=
+               static_cast<std::uint64_t>(
+                   std::numeric_limits<Unsigned>::max());
+    }
+    if (value.is_number_integer()) {
+        const auto signedValue = value.get<std::int64_t>();
+        return signedValue >= 0 &&
+               static_cast<std::uint64_t>(signedValue) <=
+                   static_cast<std::uint64_t>(
+                       std::numeric_limits<Unsigned>::max());
+    }
+    return false;
+}
+
+Result<void> validatePerformanceNativeWidths(const json& document) {
+    const auto& performance = document.at("performance");
+    const bool valid =
+        fitsUnsignedNativeWidth<std::uint64_t>(
+            performance.at("payloadBytes")) &&
+        fitsUnsignedNativeWidth<std::uint64_t>(
+            performance.at("textureBytes")) &&
+        fitsUnsignedNativeWidth<std::uint32_t>(
+            performance.at("textureCount")) &&
+        fitsUnsignedNativeWidth<std::uint32_t>(
+            performance.at("maxTextureDimension")) &&
+        fitsUnsignedNativeWidth<std::uint32_t>(
+            performance.at("vertexCount")) &&
+        fitsUnsignedNativeWidth<std::uint32_t>(
+            performance.at("triangleCount")) &&
+        fitsUnsignedNativeWidth<std::uint32_t>(
+            performance.at("drawCallCount")) &&
+        fitsUnsignedNativeWidth<std::uint32_t>(
+            performance.at("drawPartCount")) &&
+        fitsUnsignedNativeWidth<std::uint32_t>(
+            performance.at("boneCount"));
+    if (!valid) {
+        return codecError(
+            ErrorCode::ParseFailure,
+            "avatar asset performance metadata exceeds its native width",
+            "avatar.asset.codec.performance-width",
+            "avatar.validation.schema");
+    }
+    return core::ok();
 }
 
 template <typename Enum, std::size_t Size>
@@ -443,6 +505,10 @@ core::Result<AvatarAssetManifest> AvatarAssetManifestCodec::fromJson(
         }
     }
     if (auto valid = validate(document); !valid.hasValue()) return valid.error();
+    if (auto widths = validatePerformanceNativeWidths(document);
+        !widths.hasValue()) {
+        return widths.error();
+    }
     const auto& version = document.at("schemaVersion");
     const bool current =
         (version.is_number_unsigned() &&
@@ -665,7 +731,38 @@ core::Result<AvatarAssetManifest> AvatarAssetManifestCodec::load(
                           "avatar asset file could not be read",
                           "avatar.asset.codec.load", "avatar.validation.io");
     try {
-        return fromJson(json::parse(contents));
+        bool duplicateMember = false;
+        std::vector<std::unordered_set<std::string>> objectMembers;
+        const auto callback =
+            [&duplicateMember, &objectMembers](
+                int, json::parse_event_t event, json& parsed) {
+                switch (event) {
+                case json::parse_event_t::object_start:
+                    objectMembers.emplace_back();
+                    break;
+                case json::parse_event_t::key:
+                    if (!objectMembers.back()
+                             .insert(parsed.get<std::string>())
+                             .second) {
+                        duplicateMember = true;
+                    }
+                    break;
+                case json::parse_event_t::object_end:
+                    objectMembers.pop_back();
+                    break;
+                default: break;
+                }
+                return true;
+            };
+        auto document = json::parse(contents, callback);
+        if (duplicateMember) {
+            return codecError(
+                ErrorCode::ParseFailure,
+                "avatar asset JSON contains a duplicate object member",
+                "avatar.asset.codec.duplicate-member",
+                "avatar.validation.json");
+        }
+        return fromJson(document);
     } catch (const std::exception& error) {
         return codecError(
             ErrorCode::ParseFailure,
@@ -680,7 +777,14 @@ core::Result<void> AvatarAssetManifestCodec::save(
     const AvatarAssetManifest& manifest) const {
     if (auto safe = ensureSafePath(path); !safe.hasValue()) return safe.error();
     try {
-        return writeAtomically(path, toJson(manifest).dump(2));
+        const auto contents = toJson(manifest).dump(2);
+        if (contents.size() > kMaximumFileSize) {
+            return codecError(ErrorCode::ParseFailure,
+                              "avatar asset file exceeds 8 MiB",
+                              "avatar.asset.codec.save",
+                              "avatar.validation.size");
+        }
+        return writeAtomically(path, contents);
     } catch (const std::exception& error) {
         return codecError(
             ErrorCode::ParseFailure,

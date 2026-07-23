@@ -8,6 +8,7 @@
 #include <optional>
 #include <regex>
 #include <string_view>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 
@@ -80,6 +81,39 @@ bool validHash(std::string_view value) noexcept {
            });
 }
 
+bool validPayloadPath(std::string_view value) noexcept {
+    if (!validText(value, 1024U) || value.front() == '/' ||
+        value.find('\\') != std::string_view::npos ||
+        (value.size() >= 2U &&
+         ((value[0] >= 'A' && value[0] <= 'Z') ||
+          (value[0] >= 'a' && value[0] <= 'z')) &&
+         value[1] == ':')) {
+        return false;
+    }
+    std::size_t start = 0;
+    while (start < value.size()) {
+        const auto slash = value.find('/', start);
+        const auto component =
+            value.substr(start, slash == std::string_view::npos
+                                    ? std::string_view::npos
+                                    : slash - start);
+        if (component.empty() || component == "." || component == "..") {
+            return false;
+        }
+        if (slash == std::string_view::npos) return true;
+        start = slash + 1U;
+    }
+    return false;
+}
+
+template <typename Enum>
+bool enumInRange(Enum value, Enum first, Enum last) noexcept {
+    using Underlying = std::underlying_type_t<Enum>;
+    const auto raw = static_cast<Underlying>(value);
+    return raw >= static_cast<Underlying>(first) &&
+           raw <= static_cast<Underlying>(last);
+}
+
 template <typename T>
 bool hasDuplicates(const std::vector<T>& values) {
     auto sorted = values;
@@ -118,6 +152,27 @@ core::Result<AvatarAssetManifest> AvatarAssetManifest::create(
         return invalid("avatar asset requires a representation, rig, slot, and payload",
                        "avatar.asset.required-content", "avatar.validation.required-content");
     }
+    if (std::any_of(draft.supportedRepresentations.begin(),
+                    draft.supportedRepresentations.end(),
+                    [](AvatarRepresentation value) {
+                        return !enumInRange(value,
+                                            AvatarRepresentation::Inochi2d,
+                                            AvatarRepresentation::GltfRig);
+                    }) ||
+        std::any_of(draft.supportedRigFamilies.begin(),
+                    draft.supportedRigFamilies.end(), [](RigFamily value) {
+                        return !enumInRange(value, RigFamily::Humanoid,
+                                            RigFamily::Avian);
+                    }) ||
+        std::any_of(draft.allowedSlots.begin(), draft.allowedSlots.end(),
+                    [](AvatarSlot value) {
+                        return !enumInRange(value, AvatarSlot::Body,
+                                            AvatarSlot::BodyAccessory);
+                    })) {
+        return invalid("avatar asset compatibility contains an unknown enum value",
+                       "avatar.asset.compatibility-enum",
+                       "avatar.validation.compatibility");
+    }
     if (hasDuplicates(draft.supportedRepresentations) ||
         hasDuplicates(draft.supportedRigFamilies) || hasDuplicates(draft.allowedSlots)) {
         return invalid("avatar asset compatibility declarations must be unique",
@@ -136,7 +191,7 @@ core::Result<AvatarAssetManifest> AvatarAssetManifest::create(
     std::unordered_set<std::string> paths;
     std::unordered_set<std::string> hashes;
     for (const auto& payload : draft.payloads) {
-        if (!validText(payload.path, 1024U) || !validHash(payload.sha256)) {
+        if (!validPayloadPath(payload.path) || !validHash(payload.sha256)) {
             return invalid("avatar payload paths and SHA-256 hashes must be valid",
                            "avatar.asset.payload", "avatar.validation.payload");
         }
@@ -148,6 +203,14 @@ core::Result<AvatarAssetManifest> AvatarAssetManifest::create(
     }
     std::unordered_set<AvatarRight> rights;
     for (const auto& grant : draft.grants) {
+        if (!enumInRange(grant.right, AvatarRight::CommercialBroadcast,
+                         AvatarRight::Attribution) ||
+            !enumInRange(grant.state, GrantState::Allowed,
+                         GrantState::Unknown)) {
+            return invalid("avatar license grant contains an unknown enum value",
+                           "avatar.asset.grant-enum",
+                           "avatar.validation.grant");
+        }
         if (!rights.insert(grant.right).second) {
             return invalid("avatar license grants must name each right once",
                            "avatar.asset.duplicate-grant",
@@ -162,8 +225,13 @@ core::Result<AvatarAssetManifest> AvatarAssetManifest::create(
     const auto attribution = std::find_if(
         draft.grants.begin(), draft.grants.end(),
         [](const LicenseGrant& grant) { return grant.right == AvatarRight::Attribution; });
+    const auto attributionLength = utf8Length(draft.attributionText);
+    if (!attributionLength.has_value() || *attributionLength > 1000U) {
+        return invalid("avatar attribution text must be valid UTF-8 and at most 1000 characters",
+                       "avatar.asset.attribution", "avatar.validation.attribution");
+    }
     if (attribution != draft.grants.end() && attribution->state == GrantState::Allowed &&
-        !validText(draft.attributionText, 1000U)) {
+        draft.attributionText.empty()) {
         return invalid("allowed attribution requires non-empty attribution text",
                        "avatar.asset.attribution", "avatar.validation.attribution");
     }
