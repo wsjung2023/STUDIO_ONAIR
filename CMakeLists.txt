@@ -16,10 +16,12 @@ option(CS_ENABLE_FFMPEG "Build the audited FFmpeg adapter" OFF)
 option(CS_ENABLE_MLT "Build the audited MLT edit-engine adapter" OFF)
 option(CS_ENABLE_RNNOISE "Build the audited RNNoise denoise adapter" OFF)
 option(CS_ENABLE_WHISPER "Build the audited whisper.cpp transcription adapter" OFF)
+option(CS_ENABLE_AVATAR_PACKS "Build signed avatar package support" OFF)
 set(CS_FFMPEG_ROOT "" CACHE PATH "Audited FFmpeg dynamic-library prefix")
 set(CS_MLT_ROOT "" CACHE PATH "Audited MLT dynamic-library prefix")
 set(CS_RNNOISE_ROOT "" CACHE PATH "Audited RNNoise static-library prefix")
 set(CS_WHISPER_ROOT "" CACHE PATH "Audited whisper.cpp install prefix")
+set(CS_SODIUM_ROOT "" CACHE PATH "Audited libsodium prefix")
 
 if(CS_ENABLE_MLT AND NOT CS_ENABLE_FFMPEG)
     message(FATAL_ERROR
@@ -80,6 +82,34 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Test)
 qt_standard_project_setup(REQUIRES 6.8)
 
 include(FetchContent)
+
+if(CS_ENABLE_AVATAR_PACKS)
+    if(NOT CS_SODIUM_ROOT)
+        message(FATAL_ERROR "CS_ENABLE_AVATAR_PACKS requires CS_SODIUM_ROOT")
+    endif()
+    execute_process(
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_sodium_runtime.ps1"
+            -RuntimeRoot "${CS_SODIUM_ROOT}"
+        RESULT_VARIABLE CS_SODIUM_VERIFY_RESULT
+    )
+    if(NOT CS_SODIUM_VERIFY_RESULT EQUAL 0)
+        message(FATAL_ERROR "CS_SODIUM_ROOT failed the audited runtime verification")
+    endif()
+
+    FetchContent_Declare(miniz
+        URL https://github.com/richgel999/miniz/releases/download/3.1.2/miniz-3.1.2.zip
+        URL_HASH SHA256=f0446d863f9c19926ad9483c523fdc42e42b8d4a6a431d27e09d49c79a140d9a
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_MakeAvailable(miniz)
+    add_library(miniz STATIC "${miniz_SOURCE_DIR}/miniz.c")
+    target_include_directories(miniz PUBLIC "${miniz_SOURCE_DIR}")
+    set_target_properties(miniz PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+
+    find_package(Sodium REQUIRED)
+    add_subdirectory(src/avatar_pack_adapter)
+endif()
 
 # nlohmann/json is MIT, which is in the LICENSE_POLICY 허용 기본군. It is used
 # instead of QJsonDocument because cs_project_store must stay Qt-free: pulling

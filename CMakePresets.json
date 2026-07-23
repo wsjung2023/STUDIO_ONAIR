@@ -89,6 +89,16 @@
       }
     },
     {
+      "name": "windows-avatar-packs-debug",
+      "displayName": "Windows Debug with signed avatar packages",
+      "inherits": "windows-debug",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CS_ENABLE_AVATAR_PACKS": "ON",
+        "CS_SODIUM_ROOT": "${sourceDir}/build/sodium/prefix"
+      }
+    },
+    {
       "name": "macos-debug",
       "displayName": "macOS Debug (AppleClang + Ninja)",
       "inherits": "base",
@@ -118,6 +128,7 @@
     { "name": "windows-rnnoise-release", "configurePreset": "windows-rnnoise-release" },
     { "name": "windows-whisper-debug", "configurePreset": "windows-whisper-debug" },
     { "name": "windows-whisper-release", "configurePreset": "windows-whisper-release" },
+    { "name": "windows-avatar-packs-debug", "configurePreset": "windows-avatar-packs-debug" },
     { "name": "macos-debug", "configurePreset": "macos-debug" },
     { "name": "macos-release", "configurePreset": "macos-release" }
   ],
@@ -136,6 +147,7 @@
     { "name": "windows-rnnoise-release", "inherits": "test-base", "configurePreset": "windows-rnnoise-release" },
     { "name": "windows-whisper-debug", "inherits": "test-base", "configurePreset": "windows-whisper-debug" },
     { "name": "windows-whisper-release", "inherits": "test-base", "configurePreset": "windows-whisper-release" },
+    { "name": "windows-avatar-packs-debug", "inherits": "test-base", "configurePreset": "windows-avatar-packs-debug" },
     { "name": "macos-debug", "inherits": "test-base", "configurePreset": "macos-debug" },
     { "name": "macos-release", "inherits": "test-base", "configurePreset": "macos-release" }
   ]
