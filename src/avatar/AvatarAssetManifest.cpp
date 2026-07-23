@@ -83,6 +83,7 @@ bool validHash(std::string_view value) noexcept {
 
 bool validPayloadPath(std::string_view value) noexcept {
     if (!validText(value, 1024U) || value.front() == '/' ||
+        value.find('\0') != std::string_view::npos ||
         value.find('\\') != std::string_view::npos ||
         (value.size() >= 2U &&
          ((value[0] >= 'A' && value[0] <= 'Z') ||

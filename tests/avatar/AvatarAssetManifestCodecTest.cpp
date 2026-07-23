@@ -251,6 +251,14 @@ TEST(AvatarAssetManifestTest, FactoryRejectsUnsafePayloadPaths) {
     EXPECT_FALSE(AvatarAssetManifest::create(std::move(draft)).hasValue());
 }
 
+TEST(AvatarAssetManifestTest, FactoryRejectsPayloadPathWithEmbeddedNull) {
+    auto draft = validDraft();
+    draft.payloads[0].path = "payload/";
+    draft.payloads[0].path.push_back('\0');
+    draft.payloads[0].path += "file.bin";
+    EXPECT_FALSE(AvatarAssetManifest::create(std::move(draft)).hasValue());
+}
+
 TEST(AvatarAssetManifestTest, PayloadPathsTreatPercentEscapesAsLiteralText) {
     auto draft = validDraft();
     draft.payloads[0].path = "payload/%2e%2e/file.bin";
@@ -273,6 +281,15 @@ TEST(AvatarAssetManifestTest, SchemaRejectsUnsafePayloadPaths) {
         document["payloads"][0]["path"] = path;
         EXPECT_THROW(validator.validate(document), std::exception) << path;
     }
+}
+
+TEST(AvatarAssetManifestTest, SchemaRejectsPayloadPathWithEmbeddedNull) {
+    auto document = AvatarAssetManifestCodec{}.toJson(validManifest());
+    document["payloads"][0]["path"] = "payload/";
+    document["payloads"][0]["path"].get_ref<std::string&>().push_back('\0');
+    document["payloads"][0]["path"].get_ref<std::string&>() += "file.bin";
+    auto validator = committedValidator();
+    EXPECT_THROW(validator.validate(document), std::exception);
 }
 
 TEST(AvatarAssetManifestTest, FactoryRejectsInvalidNamesVersionsAndHashes) {
@@ -413,6 +430,25 @@ TEST(AvatarAssetManifestTest, LoadRejectsDecodedDuplicateObjectMembers) {
     duplicate.insert(1, R"("gr\u0061nts":[],)");
     writeText(path, duplicate);
     loaded = AvatarAssetManifestCodec{}.load(path);
+    EXPECT_FALSE(loaded.hasValue());
+    if (!loaded.hasValue()) {
+        EXPECT_EQ(loaded.error().code(), ErrorCode::ParseFailure);
+    }
+    std::filesystem::remove(path);
+}
+
+TEST(AvatarAssetManifestTest, LoadRejectsEscapedEmbeddedNullPayloadPath) {
+    const auto path = std::filesystem::path{testing::TempDir()} /
+                      "avatar-asset-null-payload.json";
+    auto document = AvatarAssetManifestCodec{}.toJson(validManifest());
+    document["payloads"][0]["path"] = "payload/";
+    document["payloads"][0]["path"].get_ref<std::string&>().push_back('\0');
+    document["payloads"][0]["path"].get_ref<std::string&>() += "file.bin";
+    const auto raw = document.dump();
+    EXPECT_NE(raw.find("\\u0000"), std::string::npos);
+    writeText(path, raw);
+
+    const auto loaded = AvatarAssetManifestCodec{}.load(path);
     EXPECT_FALSE(loaded.hasValue());
     if (!loaded.hasValue()) {
         EXPECT_EQ(loaded.error().code(), ErrorCode::ParseFailure);
