@@ -380,13 +380,12 @@ int main(int argc, char* argv[]) {
         std::make_unique<creator::mlt_adapter::MltEditEngine>(
             creator::mlt_adapter::MltEditEngineConfig{
                 .runtimeRoot = mltRuntimeRoot,
-                // Editor preview renders on the CPU; at 1280x720 the software
-                // composite cannot keep 30 fps in a debug build, so playback
-                // stutters. Use a 640x360 (16:9) proxy for the preview only --
-                // it is scaled to fit the preview surface and keeps playback
-                // smooth. Export is unaffected (it renders at full 1920x1080).
-                .previewWidth = 640,
-                .previewHeight = 360,
+                // Editor preview renders on the CPU. 960x540 (16:9) keeps the
+                // software composite roughly twice as cheap as 720p so debug
+                // playback is smoother, while staying sharp enough to edit by.
+                // Export is unaffected (it renders at full 1920x1080).
+                .previewWidth = 960,
+                .previewHeight = 540,
                 .audioProcessingChain = std::move(audioProcessingChain)});
     std::unique_ptr<creator::edit_engine::IEditEngine> exportEngine =
         std::make_unique<creator::app::ProjectExportEngine>(mltRuntimeRoot);
