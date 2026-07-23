@@ -6,6 +6,14 @@ cs_add_qtfree_library(cs_avatar
         AvatarSpec.cpp
         AvatarSpecCodec.h
         AvatarSpecCodec.cpp
+        AvatarLicense.h
+        AvatarLicense.cpp
+        AvatarAssetManifest.h
+        AvatarAssetManifest.cpp
+        AvatarAssetManifestCodec.h
+        AvatarAssetManifestCodec.cpp
+        AvatarLicenseResolver.h
+        AvatarLicenseResolver.cpp
         ExpressionParameters.h
         AvatarParameterMapper.h
         AvatarParameterMapper.cpp

@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://creator-studio.local/schemas/avatar-asset.schema.json",
+  "title": "Creator Studio Avatar Asset Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "packageId", "packageVersion", "assetId", "assetVersion",
+    "displayName", "vendor", "supportedRepresentations", "supportedRigFamilies",
+    "allowedSlots", "dependencies", "payloads", "performance", "sourceUri",
+    "licenseId", "licenseVersion", "grants", "attributionText",
+    "regionAllowList", "validFrom", "validUntil"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "packageId": { "$ref": "#/definitions/name" },
+    "packageVersion": { "$ref": "#/definitions/version" },
+    "assetId": { "$ref": "#/definitions/name" },
+    "assetVersion": { "$ref": "#/definitions/version" },
+    "displayName": { "$ref": "#/definitions/name" },
+    "vendor": { "$ref": "#/definitions/name" },
+    "supportedRepresentations": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["inochi2d", "vrm-1.0", "gltf-rig"] }
+    },
+    "supportedRigFamilies": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["humanoid", "kemonomimi", "anthro-biped", "mascot", "quadruped", "avian"]
+      }
+    },
+    "allowedSlots": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["body", "head", "face", "skin", "hair-front", "hair-side-left", "hair-side-right", "hair-back", "hair-tie", "brows", "eyes", "nose", "mouth", "teeth", "ear-left", "ear-right", "muzzle", "horn-left", "horn-right", "wing-left", "wing-right", "tail", "inner", "top", "bottom", "outerwear", "hands", "footwear", "headwear", "face-accessory", "body-accessory"]
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/dependency" }
+    },
+    "payloads": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/payload" }
+    },
+    "performance": { "$ref": "#/definitions/performance" },
+    "sourceUri": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "licenseId": { "$ref": "#/definitions/name" },
+    "licenseVersion": { "$ref": "#/definitions/version" },
+    "grants": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/grant" }
+    },
+    "attributionText": { "type": "string", "maxLength": 1000 },
+    "regionAllowList": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+    },
+    "validFrom": { "type": "string", "format": "date-time" },
+    "validUntil": {
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "definitions": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetId", "version"],
+      "properties": {
+        "assetId": { "$ref": "#/definitions/name" },
+        "version": { "$ref": "#/definitions/version" }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "performance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payloadBytes", "textureBytes", "textureCount", "maxTextureDimension",
+        "vertexCount", "triangleCount", "drawCallCount", "drawPartCount",
+        "boneCount"
+      ],
+      "properties": {
+        "payloadBytes": { "type": "integer", "minimum": 0 },
+        "textureBytes": { "type": "integer", "minimum": 0 },
+        "textureCount": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "maxTextureDimension": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "vertexCount": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "triangleCount": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "drawCallCount": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "drawPartCount": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "boneCount": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      }
+    },
+    "grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["right", "state", "condition"],
+      "properties": {
+        "right": {
+          "enum": ["commercial-broadcast", "app-bundle", "derivative-character", "model-export", "raw-asset-redistribution", "portable-project", "attribution"]
+        },
+        "state": { "enum": ["allowed", "denied", "conditional", "unknown"] },
+        "condition": { "type": "string" }
+      }
+    }
+  }
+}

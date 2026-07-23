@@ -1,0 +1,8 @@
+#pragma once
+
+#include <string_view>
+
+namespace creator::avatar::embedded {
+inline constexpr std::string_view kAvatarAssetSchema =
+    R"CS_SCHEMA(@CS_AVATAR_ASSET_SCHEMA_JSON@)CS_SCHEMA";
+}  // namespace creator::avatar::embedded

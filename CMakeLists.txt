@@ -145,6 +145,16 @@ configure_file(
     @ONLY
 )
 
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/schemas/avatar-asset.schema.json"
+)
+file(READ "${PROJECT_SOURCE_DIR}/schemas/avatar-asset.schema.json" CS_AVATAR_ASSET_SCHEMA_JSON)
+configure_file(
+    "${PROJECT_SOURCE_DIR}/cmake/AvatarAssetSchema.h.in"
+    "${PROJECT_BINARY_DIR}/generated/avatar/AvatarAssetSchema.h"
+    @ONLY
+)
+
 set(CS_MIGRATION_001 "${PROJECT_SOURCE_DIR}/src/project_store/migrations/001_initial.sql")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CS_MIGRATION_001}")
 file(READ "${CS_MIGRATION_001}" CS_MIGRATION_001_SQL)
