@@ -25,7 +25,8 @@ Pane {
         // Start in a stable local folder, not OneDrive-synced Downloads/문서
         // where saving fails at random ("이 위치에 저장할 권한이 없습니다").
         currentFolder: projectController.defaultProjectFolder
-        onAccepted: projectController.createProject(selectedFile, projectName.text)
+        onAccepted: projectController.createProject(selectedFile, projectName.text,
+                                                    portraitSwitch.checked)
     }
 
     FolderDialog {
@@ -236,6 +237,30 @@ Pane {
                                 border.color: projectName.activeFocus ? theme.accent : theme.border
                                 border.width: projectName.activeFocus ? 2 : 1
                                 Behavior on border.color { ColorAnimation { duration: theme.animFast } }
+                            }
+                        }
+
+                        // Project orientation: landscape 16:9 (default) or portrait
+                        // 9:16 for shorts. Read in newProjectDialog.onAccepted.
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.spaceMd
+                            Label {
+                                text: qsTr("화면 방향")
+                                color: theme.textSecondary
+                                font.family: theme.fontFamily
+                                font.pixelSize: theme.sizeLabel
+                                Layout.alignment: Qt.AlignVCenter
+                            }
+                            Item { Layout.fillWidth: true }
+                            Switch {
+                                id: portraitSwitch
+                                objectName: "newProjectPortraitSwitch"
+                                text: checked ? qsTr("세로 9:16 (쇼츠)") : qsTr("가로 16:9")
+                                enabled: !projectController.busy
+                                Material.accent: theme.accent
+                                font.family: theme.fontFamily
+                                font.pixelSize: theme.sizeBody
                             }
                         }
                     }

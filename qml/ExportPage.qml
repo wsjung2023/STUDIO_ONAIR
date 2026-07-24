@@ -111,10 +111,17 @@ Pane {
                         enabled: !root.controller.busy
                         textRole: "label"
                         valueRole: "value"
-                        model: [
-                            { label: qsTr("1080p · 30 fps"), value: "h264-1080p30" },
-                            { label: qsTr("4K · 30 fps"), value: "h264-2160p30" }
-                        ]
+                        // Portrait (9:16 shorts) projects offer vertical presets;
+                        // landscape projects keep the 16:9 presets.
+                        model: root.controller.portrait
+                            ? [
+                                { label: qsTr("1080×1920 · 30 fps (쇼츠)"), value: "h264-1080x1920p30" },
+                                { label: qsTr("720×1280 · 30 fps (경량)"), value: "h264-720x1280p30" }
+                              ]
+                            : [
+                                { label: qsTr("1080p · 30 fps"), value: "h264-1080p30" },
+                                { label: qsTr("4K · 30 fps"), value: "h264-2160p30" }
+                              ]
                         Layout.fillWidth: true
                         Layout.preferredHeight: 44
                         font.family: theme.fontFamily
