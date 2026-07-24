@@ -11,7 +11,6 @@
 #include <cstddef>
 #include <exception>
 #include <limits>
-#include <mutex>
 #include <new>
 #include <optional>
 #include <string>
@@ -25,6 +24,9 @@
 #else
 #include <fcntl.h>
 #include <sys/stat.h>
+#ifdef __linux__
+#include <sys/syscall.h>
+#endif
 #include <sys/types.h>
 #include <unistd.h>
 #endif
@@ -51,6 +53,21 @@ AppError allocationError() {
     return stagingError("avatar pack staging allocation failed",
                         "avatar.pack.staging.allocation",
                         ErrorCode::InsufficientStorage);
+}
+
+AppError promotionError(
+    ErrorCode code = ErrorCode::IoFailure) {
+    return stagingError(
+        code == ErrorCode::AlreadyExists
+            ? "avatar pack promotion destination already exists"
+            : "avatar pack staging promotion failed",
+        "avatar.pack.staging.promote", code);
+}
+
+[[maybe_unused]] AppError promotionErrorAt(std::string_view stage) {
+    return stagingError(
+        "avatar pack staging promotion failed at " + std::string{stage},
+        "avatar.pack.staging.promote", ErrorCode::IoFailure);
 }
 
 std::string randomDirectoryName() {
@@ -149,6 +166,19 @@ bool childPath(std::wstring_view parent, std::wstring_view child) noexcept {
                static_cast<int>(parent.size()), TRUE) == CSTR_EQUAL;
 }
 
+std::wstring renamePath(const std::filesystem::path& path) {
+    const auto value = path.native();
+    constexpr std::wstring_view kExtendedPrefix = L"\\\\?\\";
+    constexpr std::wstring_view kExtendedUncPrefix = L"\\\\?\\UNC\\";
+    if (value.starts_with(kExtendedUncPrefix)) {
+        return L"\\\\" + value.substr(kExtendedUncPrefix.size());
+    }
+    if (value.starts_with(kExtendedPrefix)) {
+        return value.substr(kExtendedPrefix.size());
+    }
+    return value;
+}
+
 struct ObjectIdentity final {
     DWORD volumeSerial{};
     DWORD indexHigh{};
@@ -194,8 +224,17 @@ bool regularNewFile(HANDLE handle) noexcept {
 
 HANDLE openDirectoryNoDelete(const std::filesystem::path& path) noexcept {
     return CreateFileW(
-        path.c_str(), FILE_READ_ATTRIBUTES,
+        path.c_str(), FILE_READ_ATTRIBUTES | DELETE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+}
+
+HANDLE openDirectoryForIdentity(
+    const std::filesystem::path& path) noexcept {
+    return CreateFileW(
+        path.c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING,
         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
 }
 
@@ -223,6 +262,13 @@ bool sameObjectAt(int parent, const std::string& name,
 
 bool sameObject(const struct stat& left, const struct stat& right) noexcept {
     return left.st_dev == right.st_dev && left.st_ino == right.st_ino;
+}
+
+bool trustedPrivateDirectory(
+    const struct stat& information) noexcept {
+    return S_ISDIR(information.st_mode) &&
+           information.st_uid == ::geteuid() &&
+           (information.st_mode & 0077U) == 0U;
 }
 
 #endif
@@ -380,7 +426,6 @@ public:
             }
             root.finalPath = std::filesystem::path{*rootFinal};
             root.identity = identityOf(*rootInformation);
-            displayRoot_ = parent / *wideName;
             directoryIndexes_.emplace("", 0U);
             return core::ok();
         }
@@ -390,16 +435,19 @@ public:
                                        O_CLOEXEC);
         struct stat parentInformation {};
         if (parentDescriptor_ < 0 ||
-            !directoryDescriptor(parentDescriptor_, parentInformation)) {
+            !directoryDescriptor(parentDescriptor_, parentInformation) ||
+            !trustedPrivateDirectory(parentInformation)) {
             return stagingError(
-                "avatar pack staging parent is unavailable",
+                "avatar pack staging parent is not private",
                 "avatar.pack.staging.parent");
         }
+        parentIdentity_ = parentInformation;
         for (std::size_t attempt = 0; attempt < 32U; ++attempt) {
             const auto name = randomDirectoryName();
             directories_.push_back(
                 {.parentIndex = kNoParent,
                  .name = name,
+                 .relativePath = {},
                  .descriptor = -1,
                  .identity = std::nullopt});
             if (::mkdirat(parentDescriptor_, name.c_str(), 0700) != 0) {
@@ -422,10 +470,6 @@ public:
                     "avatar.pack.staging.create");
             }
             root.identity = rootInformation;
-            std::error_code error;
-            auto absoluteParent = std::filesystem::absolute(parent, error);
-            displayRoot_ =
-                (error ? parent : absoluteParent) / name;
             directoryIndexes_.emplace("", 0U);
             return core::ok();
         }
@@ -460,8 +504,7 @@ public:
             directories_[parent.value()].finalPath / *leaf;
         files_.push_back({.relativePath = std::string{relativePath},
                           .finalPath = expected,
-                          .identity = std::nullopt,
-                          .readHandle = INVALID_HANDLE_VALUE});
+                          .identity = std::nullopt});
         HANDLE handle = CreateFileW(
             expected.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES, 0,
             nullptr, CREATE_NEW,
@@ -495,8 +538,7 @@ public:
             {.parentIndex = parent.value(),
              .name = leaf,
              .relativePath = std::string{relativePath},
-             .identity = std::nullopt,
-             .readDescriptor = -1});
+             .identity = std::nullopt});
         const int descriptor = ::openat(
             parentDescriptor, leaf.c_str(),
             O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
@@ -575,22 +617,66 @@ public:
                                 "avatar.pack.staging.identity");
         }
         for (auto& file : files_) {
-            file.readHandle = CreateFileW(
+            HANDLE readHandle = CreateFileW(
                 file.finalPath.c_str(), GENERIC_READ | FILE_READ_ATTRIBUTES,
-                FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr, OPEN_EXISTING,
                 FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN,
                 nullptr);
-            const auto information = handleInformation(file.readHandle);
-            const auto final = finalHandlePath(file.readHandle);
-            if (file.readHandle == INVALID_HANDLE_VALUE ||
-                !regularNewFile(file.readHandle) || !information.has_value() ||
+            const auto information = handleInformation(readHandle);
+            const auto final = finalHandlePath(readHandle);
+            LARGE_INTEGER size{};
+            if (readHandle == INVALID_HANDLE_VALUE ||
+                !regularNewFile(readHandle) || !information.has_value() ||
                 !file.identity.has_value() ||
                 identityOf(*information) != *file.identity ||
                 !final.has_value() ||
                 !equalPath(file.finalPath.native(), *final) ||
-                !childPath(directories_.front().finalPath.native(), *final)) {
+                !childPath(directories_.front().finalPath.native(), *final) ||
+                GetFileSizeEx(readHandle, &size) == FALSE ||
+                size.QuadPart < 0) {
+                (void)closeHandle(readHandle);
                 return stagingError("avatar pack staging file identity changed",
                                     "avatar.pack.staging.identity");
+            }
+            crypto_hash_sha256_state hash{};
+            crypto_hash_sha256_init(&hash);
+            std::array<unsigned char, 64U * 1024U> buffer{};
+            std::uint64_t total = 0U;
+            for (;;) {
+                DWORD received = 0U;
+                if (ReadFile(readHandle, buffer.data(),
+                             static_cast<DWORD>(buffer.size()), &received,
+                             nullptr) == FALSE) {
+                    (void)closeHandle(readHandle);
+                    return stagingError(
+                        "avatar pack staging file read failed",
+                        "avatar.pack.staging.read");
+                }
+                if (received == 0U) break;
+                crypto_hash_sha256_update(&hash, buffer.data(), received);
+                total += received;
+            }
+            const auto after = handleInformation(readHandle);
+            LARGE_INTEGER afterSize{};
+            if (!after.has_value() ||
+                identityOf(*after) != *file.identity ||
+                GetFileSizeEx(readHandle, &afterSize) == FALSE ||
+                afterSize.QuadPart < 0 ||
+                total != static_cast<std::uint64_t>(afterSize.QuadPart) ||
+                afterSize.QuadPart != size.QuadPart ||
+                !closeHandle(readHandle)) {
+                return stagingError("avatar pack staging file identity changed",
+                                    "avatar.pack.staging.identity");
+            }
+            file.sealedSize = total;
+            crypto_hash_sha256_final(&hash, file.sealedHash.data());
+        }
+        for (std::size_t index = 1U; index < directories_.size(); ++index) {
+            if (!closeHandle(directories_[index].handle)) {
+                return stagingError(
+                    "avatar pack staging directory close failed",
+                    "avatar.pack.staging.identity");
             }
         }
 #else
@@ -602,17 +688,58 @@ public:
         }
         for (auto& file : files_) {
             const auto parent = directories_[file.parentIndex].descriptor;
-            file.readDescriptor = ::openat(parent, file.name.c_str(),
-                                           O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+            int readDescriptor = ::openat(
+                parent, file.name.c_str(),
+                O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
             struct stat information{};
-            if (file.readDescriptor < 0 ||
-                ::fstat(file.readDescriptor, &information) != 0 ||
+            if (readDescriptor < 0 ||
+                ::fstat(readDescriptor, &information) != 0 ||
                 !S_ISREG(information.st_mode) || information.st_nlink != 1 ||
                 !file.identity.has_value() ||
                 !sameObject(information, *file.identity) ||
                 !sameObjectAt(parent, file.name, information)) {
+                (void)closeDescriptor(readDescriptor);
                 return stagingError("avatar pack staging file identity changed",
                                     "avatar.pack.staging.identity");
+            }
+            crypto_hash_sha256_state hash{};
+            crypto_hash_sha256_init(&hash);
+            std::array<unsigned char, 64U * 1024U> buffer{};
+            std::uint64_t total = 0U;
+            for (;;) {
+                const auto received =
+                    ::read(readDescriptor, buffer.data(), buffer.size());
+                if (received < 0 && errno == EINTR) continue;
+                if (received < 0) {
+                    (void)closeDescriptor(readDescriptor);
+                    return stagingError(
+                        "avatar pack staging file read failed",
+                        "avatar.pack.staging.read");
+                }
+                if (received == 0) break;
+                crypto_hash_sha256_update(
+                    &hash, buffer.data(),
+                    static_cast<unsigned long long>(received));
+                total += static_cast<std::uint64_t>(received);
+            }
+            struct stat after {};
+            if (::fstat(readDescriptor, &after) != 0 ||
+                !sameObject(after, *file.identity) ||
+                after.st_size < 0 ||
+                total != static_cast<std::uint64_t>(after.st_size) ||
+                after.st_size != information.st_size ||
+                !closeDescriptor(readDescriptor)) {
+                return stagingError("avatar pack staging file identity changed",
+                                    "avatar.pack.staging.identity");
+            }
+            file.sealedSize = total;
+            crypto_hash_sha256_final(&hash, file.sealedHash.data());
+        }
+        for (std::size_t index = 1U; index < directories_.size(); ++index) {
+            if (!closeDescriptor(directories_[index].descriptor)) {
+                return stagingError(
+                    "avatar pack staging directory close failed",
+                    "avatar.pack.staging.identity");
             }
         }
 #endif
@@ -620,19 +747,23 @@ public:
         return core::ok();
     }
 
-    [[nodiscard]] const std::filesystem::path& displayRoot() const noexcept {
-        return displayRoot_;
-    }
-
     Result<bool> exists(std::string_view relativePath) const {
         auto found = findReadableFile(relativePath);
         if (!found.hasValue()) return found.error();
         if (found.value() == nullptr) return false;
-        return readableIdentity(*found.value())
-                   ? Result<bool>{true}
-                   : Result<bool>{stagingError(
-                         "avatar pack staging file identity changed",
-                         "avatar.pack.staging.identity")};
+        const auto* file = found.value();
+        if (file->sealedSize >
+            static_cast<std::uint64_t>(
+                std::numeric_limits<std::size_t>::max())) {
+            return stagingError(
+                "avatar pack staging file exceeds the read limit",
+                "avatar.pack.staging.read-limit",
+                ErrorCode::InvalidArgument);
+        }
+        auto verified =
+            read(relativePath, static_cast<std::size_t>(file->sealedSize));
+        if (!verified.hasValue()) return verified.error();
+        return true;
     }
 
     Result<std::vector<std::uint8_t>> read(std::string_view relativePath,
@@ -645,30 +776,46 @@ public:
                                 "avatar.pack.staging.not-found",
                                 ErrorCode::NotFound);
         }
-        if (!readableIdentity(*file)) {
-            return stagingError("avatar pack staging file identity changed",
-                                "avatar.pack.staging.identity");
-        }
-
-        std::lock_guard lock{readMutex_};
 #ifdef _WIN32
+        HANDLE readHandle = CreateFileW(
+            file->finalPath.c_str(), GENERIC_READ | FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN,
+            nullptr);
+        const auto information = handleInformation(readHandle);
+        const auto final = finalHandlePath(readHandle);
         LARGE_INTEGER size{};
-        if (GetFileSizeEx(file->readHandle, &size) == FALSE ||
+        if (readHandle == INVALID_HANDLE_VALUE ||
+            !regularNewFile(readHandle) || !information.has_value() ||
+            !file->identity.has_value() ||
+            identityOf(*information) != *file->identity ||
+            !final.has_value() ||
+            !equalPath(file->finalPath.native(), *final) ||
+            !childPath(directories_.front().finalPath.native(), *final) ||
+            GetFileSizeEx(readHandle, &size) == FALSE ||
             size.QuadPart < 0 ||
+            static_cast<std::uint64_t>(size.QuadPart) !=
+                file->sealedSize ||
             static_cast<std::uint64_t>(size.QuadPart) >
                 static_cast<std::uint64_t>(maximumBytes) ||
             static_cast<std::uint64_t>(size.QuadPart) >
                 static_cast<std::uint64_t>(
                     std::numeric_limits<std::size_t>::max())) {
+            (void)closeHandle(readHandle);
             return stagingError(
-                "avatar pack staging file exceeds the read limit",
-                "avatar.pack.staging.read-limit", ErrorCode::InvalidArgument);
-        }
-        LARGE_INTEGER beginning{};
-        if (SetFilePointerEx(file->readHandle, beginning, nullptr,
-                             FILE_BEGIN) == FALSE) {
-            return stagingError("avatar pack staging file read failed",
-                                "avatar.pack.staging.read");
+                file->sealedSize >
+                        static_cast<std::uint64_t>(maximumBytes)
+                    ? "avatar pack staging file exceeds the read limit"
+                    : "avatar pack staging file identity changed",
+                file->sealedSize >
+                        static_cast<std::uint64_t>(maximumBytes)
+                    ? "avatar.pack.staging.read-limit"
+                    : "avatar.pack.staging.identity",
+                file->sealedSize >
+                        static_cast<std::uint64_t>(maximumBytes)
+                    ? ErrorCode::InvalidArgument
+                    : ErrorCode::IoFailure);
         }
         std::vector<std::uint8_t> bytes(
             static_cast<std::size_t>(size.QuadPart));
@@ -677,27 +824,90 @@ public:
             const auto amount = static_cast<DWORD>(std::min<std::size_t>(
                 bytes.size() - offset, std::numeric_limits<DWORD>::max()));
             DWORD received = 0U;
-            if (ReadFile(file->readHandle, bytes.data() + offset, amount,
+            if (ReadFile(readHandle, bytes.data() + offset, amount,
                          &received, nullptr) == FALSE ||
                 received == 0U) {
+                (void)closeHandle(readHandle);
                 return stagingError("avatar pack staging file read failed",
                                     "avatar.pack.staging.read");
             }
             offset += static_cast<std::size_t>(received);
         }
+        const auto after = handleInformation(readHandle);
+        LARGE_INTEGER afterSize{};
+        std::array<unsigned char, crypto_hash_sha256_BYTES> hash{};
+        crypto_hash_sha256(hash.data(), bytes.data(),
+                           static_cast<unsigned long long>(bytes.size()));
+        if (!after.has_value() ||
+            identityOf(*after) != *file->identity ||
+            GetFileSizeEx(readHandle, &afterSize) == FALSE ||
+            afterSize.QuadPart != size.QuadPart ||
+            sodium_memcmp(hash.data(), file->sealedHash.data(),
+                          hash.size()) != 0 ||
+            !closeHandle(readHandle)) {
+            return stagingError("avatar pack staging file identity changed",
+                                "avatar.pack.staging.identity");
+        }
 #else
+        const auto components = pathComponents(file->relativePath);
+        if (!components.has_value()) {
+            return stagingError("avatar pack staging path is invalid",
+                                "avatar.pack.staging.path",
+                                ErrorCode::InvalidArgument);
+        }
+        int parent = ::dup(directories_.front().descriptor);
+        if (parent < 0) {
+            return stagingError("avatar pack staging file read failed",
+                                "avatar.pack.staging.read");
+        }
+        for (std::size_t index = 0U;
+             index + 1U < components->size(); ++index) {
+            int child = ::openat(
+                parent, (*components)[index].c_str(),
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            (void)closeDescriptor(parent);
+            parent = child;
+            if (parent < 0) {
+                return stagingError(
+                    "avatar pack staging file identity changed",
+                    "avatar.pack.staging.identity");
+            }
+        }
+        int readDescriptor = ::openat(
+            parent, components->back().c_str(),
+            O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
         struct stat information{};
-        if (::fstat(file->readDescriptor, &information) != 0 ||
+        if (readDescriptor < 0 ||
+            ::fstat(readDescriptor, &information) != 0 ||
+            !S_ISREG(information.st_mode) || information.st_nlink != 1 ||
+            !file->identity.has_value() ||
+            !sameObject(information, *file->identity) ||
+            !sameObjectAt(parent, components->back(), information) ||
             information.st_size < 0 ||
+            static_cast<std::uint64_t>(information.st_size) !=
+                file->sealedSize ||
             static_cast<std::uint64_t>(information.st_size) >
                 static_cast<std::uint64_t>(maximumBytes) ||
             static_cast<std::uint64_t>(information.st_size) >
                 static_cast<std::uint64_t>(
                     std::numeric_limits<std::size_t>::max())) {
+            (void)closeDescriptor(readDescriptor);
+            (void)closeDescriptor(parent);
             return stagingError(
-                "avatar pack staging file exceeds the read limit",
-                "avatar.pack.staging.read-limit", ErrorCode::InvalidArgument);
+                file->sealedSize >
+                        static_cast<std::uint64_t>(maximumBytes)
+                    ? "avatar pack staging file exceeds the read limit"
+                    : "avatar pack staging file identity changed",
+                file->sealedSize >
+                        static_cast<std::uint64_t>(maximumBytes)
+                    ? "avatar.pack.staging.read-limit"
+                    : "avatar.pack.staging.identity",
+                file->sealedSize >
+                        static_cast<std::uint64_t>(maximumBytes)
+                    ? ErrorCode::InvalidArgument
+                    : ErrorCode::IoFailure);
         }
+        (void)closeDescriptor(parent);
         std::vector<std::uint8_t> bytes(
             static_cast<std::size_t>(information.st_size));
         std::size_t offset = 0U;
@@ -706,14 +916,28 @@ public:
                 bytes.size() - offset,
                 static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
             const auto received =
-                ::pread(file->readDescriptor, bytes.data() + offset, amount,
+                ::pread(readDescriptor, bytes.data() + offset, amount,
                         static_cast<off_t>(offset));
             if (received < 0 && errno == EINTR) continue;
             if (received <= 0) {
+                (void)closeDescriptor(readDescriptor);
                 return stagingError("avatar pack staging file read failed",
                                     "avatar.pack.staging.read");
             }
             offset += static_cast<std::size_t>(received);
+        }
+        struct stat after {};
+        std::array<unsigned char, crypto_hash_sha256_BYTES> hash{};
+        crypto_hash_sha256(hash.data(), bytes.data(),
+                           static_cast<unsigned long long>(bytes.size()));
+        if (::fstat(readDescriptor, &after) != 0 ||
+            !sameObject(after, *file->identity) ||
+            after.st_size != information.st_size ||
+            sodium_memcmp(hash.data(), file->sealedHash.data(),
+                          hash.size()) != 0 ||
+            !closeDescriptor(readDescriptor)) {
+            return stagingError("avatar pack staging file identity changed",
+                                "avatar.pack.staging.identity");
         }
 #endif
         return bytes;
@@ -726,55 +950,289 @@ public:
             active_ = false;
             return cleanupError();
         }
-        if (!treeIdentityMatches()) {
+        bool succeeded = true;
+#ifdef _WIN32
+        for (auto iterator = files_.rbegin(); iterator != files_.rend();
+             ++iterator) {
+            HANDLE current = CreateFileW(
+                iterator->finalPath.c_str(),
+                FILE_READ_ATTRIBUTES | DELETE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT,
+                nullptr);
+            const auto information = handleInformation(current);
+            const auto final = finalHandlePath(current);
+            FILE_DISPOSITION_INFO disposition{TRUE};
+            const bool matches =
+                regularNewFile(current) && information.has_value() &&
+                iterator->identity.has_value() &&
+                identityOf(*information) == *iterator->identity &&
+                final.has_value() &&
+                equalPath(iterator->finalPath.native(), *final) &&
+                childPath(directories_.front().finalPath.native(), *final);
+            if (!matches ||
+                SetFileInformationByHandle(
+                    current, FileDispositionInfo, &disposition,
+                    sizeof(disposition)) == FALSE ||
+                !closeHandle(current)) {
+                succeeded = false;
+                break;
+            }
+        }
+        if (succeeded) {
+            for (auto iterator = directories_.rbegin();
+                 iterator != directories_.rend(); ++iterator) {
+                HANDLE current = iterator->handle;
+                const bool borrowed = current != INVALID_HANDLE_VALUE;
+                if (!borrowed) {
+                    current = CreateFileW(
+                        iterator->finalPath.c_str(),
+                        FILE_READ_ATTRIBUTES | DELETE,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE |
+                            FILE_SHARE_DELETE,
+                        nullptr, OPEN_EXISTING,
+                        FILE_FLAG_OPEN_REPARSE_POINT |
+                            FILE_FLAG_BACKUP_SEMANTICS,
+                        nullptr);
+                }
+                const auto information = handleInformation(current);
+                const auto final = finalHandlePath(current);
+                FILE_DISPOSITION_INFO disposition{TRUE};
+                const bool matches =
+                    regularDirectory(current) && information.has_value() &&
+                    iterator->identity.has_value() &&
+                    identityOf(*information) == *iterator->identity &&
+                    final.has_value() &&
+                    equalPath(iterator->finalPath.native(), *final);
+                const bool marked =
+                    matches &&
+                    SetFileInformationByHandle(
+                        current, FileDispositionInfo, &disposition,
+                        sizeof(disposition)) != FALSE;
+                bool closed = true;
+                if (borrowed) {
+                    closed = closeHandle(iterator->handle);
+                } else {
+                    closed = closeHandle(current);
+                }
+                if (!marked || !closed) {
+                    succeeded = false;
+                    break;
+                }
+            }
+        }
+        if (!closeAuthority()) succeeded = false;
+#else
+        struct stat parentInformation {};
+        if (!parentIdentity_.has_value() ||
+            ::fstat(parentDescriptor_, &parentInformation) != 0 ||
+            !sameObject(parentInformation, *parentIdentity_) ||
+            !trustedPrivateDirectory(parentInformation)) {
             closeAuthority();
             active_ = false;
             return cleanupError();
         }
-        bool succeeded = true;
-#ifdef _WIN32
-        for (auto& file : files_) {
-            if (!closeHandle(file.readHandle)) succeeded = false;
-        }
         for (auto iterator = files_.rbegin(); iterator != files_.rend();
              ++iterator) {
-            if (DeleteFileW(iterator->finalPath.c_str()) == FALSE)
-                succeeded = false;
-        }
-        for (auto iterator = directories_.rbegin();
-             iterator != directories_.rend(); ++iterator) {
-            if (!closeHandle(iterator->handle)) succeeded = false;
-            if (RemoveDirectoryW(iterator->finalPath.c_str()) == FALSE)
-                succeeded = false;
-        }
-        if (!closeHandle(parentHandle_)) succeeded = false;
-#else
-        for (auto& file : files_) {
-            if (!closeDescriptor(file.readDescriptor)) succeeded = false;
-        }
-        for (auto iterator = files_.rbegin(); iterator != files_.rend();
-             ++iterator) {
-            const auto parent =
-                directories_[iterator->parentIndex].descriptor;
-            if (::unlinkat(parent, iterator->name.c_str(), 0) != 0)
-                succeeded = false;
-        }
-        for (auto index = directories_.size(); index > 0U; --index) {
-            auto& directory = directories_[index - 1U];
-            if (!closeDescriptor(directory.descriptor)) succeeded = false;
-            const auto parent =
-                directory.parentIndex == kNoParent
-                    ? parentDescriptor_
-                    : directories_[directory.parentIndex].descriptor;
-            if (::unlinkat(parent, directory.name.c_str(), AT_REMOVEDIR) !=
-                0) {
+            int parent = openDirectoryRelative(
+                directories_[iterator->parentIndex].relativePath);
+            struct stat information {};
+            const bool matches =
+                parent >= 0 && iterator->identity.has_value() &&
+                ::fstatat(parent, iterator->name.c_str(), &information,
+                          AT_SYMLINK_NOFOLLOW) == 0 &&
+                S_ISREG(information.st_mode) && information.st_nlink == 1 &&
+                sameObject(information, *iterator->identity);
+            if (!matches ||
+                ::unlinkat(parent, iterator->name.c_str(), 0) != 0) {
                 succeeded = false;
             }
+            (void)closeDescriptor(parent);
+            if (!succeeded) break;
         }
-        if (!closeDescriptor(parentDescriptor_)) succeeded = false;
+        if (succeeded) {
+            for (auto index = directories_.size(); index > 0U; --index) {
+                auto& directory = directories_[index - 1U];
+                int parent =
+                    directory.parentIndex == kNoParent
+                        ? ::dup(parentDescriptor_)
+                        : openDirectoryRelative(
+                              directories_[directory.parentIndex]
+                                  .relativePath);
+                struct stat information {};
+                const bool matches =
+                    parent >= 0 && directory.identity.has_value() &&
+                    ::fstatat(parent, directory.name.c_str(), &information,
+                              AT_SYMLINK_NOFOLLOW) == 0 &&
+                    S_ISDIR(information.st_mode) &&
+                    sameObject(information, *directory.identity);
+                if (!matches ||
+                    ::unlinkat(parent, directory.name.c_str(),
+                               AT_REMOVEDIR) != 0) {
+                    succeeded = false;
+                }
+                (void)closeDescriptor(parent);
+                if (!closeDescriptor(directory.descriptor))
+                    succeeded = false;
+                if (!succeeded) break;
+            }
+        }
+        if (!closeAuthority()) succeeded = false;
 #endif
         active_ = false;
         return succeeded ? core::ok() : Result<void>{cleanupError()};
+    }
+
+    Result<void> promoteTo(const std::filesystem::path& finalPath) {
+        if (!active_ || !sealed_ || directories_.empty() ||
+            finalPath.empty() || finalPath.filename().empty() ||
+            finalPath.filename() == "." || finalPath.filename() == "..") {
+            return stagingError("avatar pack staging cannot be promoted",
+                                "avatar.pack.staging.state",
+                                ErrorCode::InvalidState);
+        }
+        if (!rootIdentityMatches() || !treeIdentityMatches() ||
+            !flushTree()) {
+            return promotionError();
+        }
+#ifdef _WIN32
+        HANDLE destinationParent = CreateFileW(
+            finalPath.parent_path().c_str(),
+            GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+            nullptr);
+        const auto destinationParentFinal =
+            finalHandlePath(destinationParent);
+        if (!regularDirectory(destinationParent) ||
+            !destinationParentFinal.has_value()) {
+            (void)closeHandle(destinationParent);
+            return promotionErrorAt("destination parent");
+        }
+        const auto destination =
+            std::filesystem::path{*destinationParentFinal} /
+            finalPath.filename();
+        if (GetFileAttributesW(destination.c_str()) !=
+            INVALID_FILE_ATTRIBUTES) {
+            (void)closeHandle(destinationParent);
+            return promotionError(ErrorCode::AlreadyExists);
+        }
+        const auto name = renamePath(destination);
+        if (name.size() >
+            (std::numeric_limits<DWORD>::max() / sizeof(wchar_t))) {
+            (void)closeHandle(destinationParent);
+            return promotionErrorAt("rename");
+        }
+        std::vector<std::uint8_t> renameBytes(
+            offsetof(FILE_RENAME_INFO, FileName) +
+            (name.size() + 1U) * sizeof(wchar_t));
+        auto* rename =
+            reinterpret_cast<FILE_RENAME_INFO*>(renameBytes.data());
+        rename->ReplaceIfExists = FALSE;
+        rename->RootDirectory = nullptr;
+        rename->FileNameLength =
+            static_cast<DWORD>(name.size() * sizeof(wchar_t));
+        std::memcpy(rename->FileName, name.data(), rename->FileNameLength);
+        auto& root = directories_.front();
+        const auto original = root.finalPath;
+        if (SetFileInformationByHandle(
+                root.handle, FileRenameInfo, rename,
+                static_cast<DWORD>(renameBytes.size())) == FALSE) {
+            const auto code = GetLastError();
+            (void)closeHandle(destinationParent);
+            return promotionError(
+                code == ERROR_ALREADY_EXISTS || code == ERROR_FILE_EXISTS
+                    ? ErrorCode::AlreadyExists
+                    : ErrorCode::IoFailure);
+        }
+        root.finalPath = destination;
+        const bool durable =
+            FlushFileBuffers(destinationParent) != FALSE;
+        if (!durable) {
+            const auto rollbackName = renamePath(original);
+            std::vector<std::uint8_t> rollbackBytes(
+                offsetof(FILE_RENAME_INFO, FileName) +
+                (rollbackName.size() + 1U) * sizeof(wchar_t));
+            auto* rollback =
+                reinterpret_cast<FILE_RENAME_INFO*>(rollbackBytes.data());
+            rollback->ReplaceIfExists = FALSE;
+            rollback->RootDirectory = nullptr;
+            rollback->FileNameLength =
+                static_cast<DWORD>(rollbackName.size() * sizeof(wchar_t));
+            std::memcpy(rollback->FileName, rollbackName.data(),
+                        rollback->FileNameLength);
+            if (SetFileInformationByHandle(
+                    root.handle, FileRenameInfo, rollback,
+                    static_cast<DWORD>(rollbackBytes.size())) != FALSE) {
+                root.finalPath = original;
+            }
+            (void)closeHandle(destinationParent);
+            return promotionErrorAt("destination durability");
+        }
+        (void)closeHandle(destinationParent);
+#else
+        struct stat parentInformation {};
+        if (!parentIdentity_.has_value() ||
+            ::fstat(parentDescriptor_, &parentInformation) != 0 ||
+            !sameObject(parentInformation, *parentIdentity_) ||
+            !trustedPrivateDirectory(parentInformation)) {
+            return promotionError();
+        }
+        const auto destinationName = finalPath.filename().string();
+        const int destinationParent = ::open(
+            finalPath.parent_path().c_str(),
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        struct stat destinationInformation {};
+        if (destinationParent < 0 ||
+            !directoryDescriptor(destinationParent,
+                                 destinationInformation) ||
+            !trustedPrivateDirectory(destinationInformation)) {
+            int closing = destinationParent;
+            (void)closeDescriptor(closing);
+            return promotionError();
+        }
+        struct stat existing {};
+        if (::fstatat(destinationParent, destinationName.c_str(), &existing,
+                      AT_SYMLINK_NOFOLLOW) == 0) {
+            int closing = destinationParent;
+            (void)closeDescriptor(closing);
+            return promotionError(ErrorCode::AlreadyExists);
+        }
+#ifdef __linux__
+        constexpr unsigned int kRenameNoReplace = 1U;
+        const auto renamed = ::syscall(
+            SYS_renameat2, parentDescriptor_,
+            directories_.front().name.c_str(), destinationParent,
+            destinationName.c_str(), kRenameNoReplace);
+#else
+        errno = ENOTSUP;
+        const auto renamed = -1L;
+#endif
+        if (renamed != 0) {
+            const auto code = errno;
+            int closing = destinationParent;
+            (void)closeDescriptor(closing);
+            return promotionError(
+                code == EEXIST ? ErrorCode::AlreadyExists
+                               : ErrorCode::IoFailure);
+        }
+        if (::fsync(destinationParent) != 0) {
+#ifdef __linux__
+            (void)::syscall(
+                SYS_renameat2, destinationParent, destinationName.c_str(),
+                parentDescriptor_, directories_.front().name.c_str(),
+                kRenameNoReplace);
+#endif
+            int closing = destinationParent;
+            (void)closeDescriptor(closing);
+            return promotionError();
+        }
+        int closing = destinationParent;
+        (void)closeDescriptor(closing);
+#endif
+        closeAuthority();
+        active_ = false;
+        return core::ok();
     }
 
 private:
@@ -789,7 +1247,8 @@ private:
         std::string relativePath;
         std::filesystem::path finalPath;
         std::optional<ObjectIdentity> identity;
-        HANDLE readHandle{INVALID_HANDLE_VALUE};
+        std::uint64_t sealedSize{};
+        std::array<unsigned char, crypto_hash_sha256_BYTES> sealedHash{};
     };
 #else
     static constexpr std::size_t kNoParent =
@@ -798,6 +1257,7 @@ private:
     struct DirectoryRecord final {
         std::size_t parentIndex{kNoParent};
         std::string name;
+        std::string relativePath;
         int descriptor{-1};
         std::optional<struct stat> identity;
     };
@@ -807,7 +1267,8 @@ private:
         std::string name;
         std::string relativePath;
         std::optional<struct stat> identity;
-        int readDescriptor{-1};
+        std::uint64_t sealedSize{};
+        std::array<unsigned char, crypto_hash_sha256_BYTES> sealedHash{};
     };
 #endif
 
@@ -830,25 +1291,10 @@ private:
         return found == files_.end() ? nullptr : &*found;
     }
 
-    bool readableIdentity(const FileRecord& file) const noexcept {
-#ifdef _WIN32
-        const auto information = handleInformation(file.readHandle);
-        return information.has_value() && file.identity.has_value() &&
-               regularNewFile(file.readHandle) &&
-               identityOf(*information) == *file.identity;
-#else
-        struct stat information{};
-        return file.readDescriptor >= 0 &&
-               ::fstat(file.readDescriptor, &information) == 0 &&
-               S_ISREG(information.st_mode) && information.st_nlink == 1 &&
-               file.identity.has_value() &&
-               sameObject(information, *file.identity);
-#endif
-    }
-
 #ifdef _WIN32
     bool pathMatches(const DirectoryRecord& directory) const {
-        HANDLE current = openDirectoryNoDelete(directory.finalPath);
+        HANDLE current =
+            openDirectoryForIdentity(directory.finalPath);
         const auto information = handleInformation(current);
         const auto final = finalHandlePath(current);
         const bool matches =
@@ -902,50 +1348,154 @@ private:
                    files_.begin(), files_.end(),
                    [this](const auto& file) { return pathMatches(file); });
 #else
-        for (const auto& directory : directories_) {
-            const auto parent =
-                directory.parentIndex == kNoParent
-                    ? parentDescriptor_
-                    : directories_[directory.parentIndex].descriptor;
-            struct stat information{};
-            if (!directory.identity.has_value() ||
-                ::fstatat(parent, directory.name.c_str(), &information,
-                          AT_SYMLINK_NOFOLLOW) != 0 ||
-                !S_ISDIR(information.st_mode) ||
-                !sameObject(information, *directory.identity)) {
-                return false;
-            }
+        for (std::size_t index = 0U; index < directories_.size(); ++index) {
+            const auto& directory = directories_[index];
+            int current =
+                index == 0U
+                    ? ::dup(directories_.front().descriptor)
+                    : openDirectoryRelative(directory.relativePath);
+            struct stat information {};
+            const bool matches =
+                current >= 0 && directory.identity.has_value() &&
+                directoryDescriptor(current, information) &&
+                sameObject(information, *directory.identity);
+            (void)closeDescriptor(current);
+            if (!matches) return false;
         }
         for (const auto& file : files_) {
-            const auto parent = directories_[file.parentIndex].descriptor;
-            struct stat information{};
-            if (!file.identity.has_value() ||
+            int parent = openDirectoryRelative(
+                directories_[file.parentIndex].relativePath);
+            struct stat information {};
+            const bool matches =
+                parent >= 0 && file.identity.has_value() &&
                 ::fstatat(parent, file.name.c_str(), &information,
-                          AT_SYMLINK_NOFOLLOW) != 0 ||
-                !S_ISREG(information.st_mode) || information.st_nlink != 1 ||
-                !sameObject(information, *file.identity)) {
-                return false;
-            }
+                          AT_SYMLINK_NOFOLLOW) == 0 &&
+                S_ISREG(information.st_mode) && information.st_nlink == 1 &&
+                sameObject(information, *file.identity);
+            (void)closeDescriptor(parent);
+            if (!matches) return false;
         }
         return true;
 #endif
     }
 
-    void closeAuthority() noexcept {
+    bool flushTree() const noexcept {
 #ifdef _WIN32
-        for (auto& file : files_)
-            (void)closeHandle(file.readHandle);
-        for (auto& directory : directories_)
-            (void)closeHandle(directory.handle);
-        (void)closeHandle(parentHandle_);
+        for (const auto& file : files_) {
+            HANDLE current = CreateFileW(
+                file.finalPath.c_str(),
+                GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT,
+                nullptr);
+            const auto information = handleInformation(current);
+            const auto final = finalHandlePath(current);
+            const bool flushed =
+                regularNewFile(current) && information.has_value() &&
+                file.identity.has_value() &&
+                identityOf(*information) == *file.identity &&
+                final.has_value() &&
+                equalPath(file.finalPath.native(), *final) &&
+                FlushFileBuffers(current) != FALSE;
+            const bool closed = closeHandle(current);
+            if (!flushed || !closed) return false;
+        }
+        for (const auto& directory : directories_) {
+            HANDLE current = CreateFileW(
+                directory.finalPath.c_str(),
+                GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr, OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT |
+                    FILE_FLAG_BACKUP_SEMANTICS,
+                nullptr);
+            const auto information = handleInformation(current);
+            const auto final = finalHandlePath(current);
+            const bool flushed =
+                regularDirectory(current) && information.has_value() &&
+                directory.identity.has_value() &&
+                identityOf(*information) == *directory.identity &&
+                final.has_value() &&
+                equalPath(directory.finalPath.native(), *final) &&
+                FlushFileBuffers(current) != FALSE;
+            const bool closed = closeHandle(current);
+            if (!flushed || !closed) return false;
+        }
+        return true;
 #else
-        for (auto& file : files_)
-            (void)closeDescriptor(file.readDescriptor);
-        for (auto& directory : directories_)
-            (void)closeDescriptor(directory.descriptor);
-        (void)closeDescriptor(parentDescriptor_);
+        for (const auto& file : files_) {
+            int parent = openDirectoryRelative(
+                directories_[file.parentIndex].relativePath);
+            int current =
+                parent < 0
+                    ? -1
+                    : ::openat(parent, file.name.c_str(),
+                               O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+            struct stat information {};
+            const bool flushed =
+                current >= 0 && file.identity.has_value() &&
+                ::fstat(current, &information) == 0 &&
+                S_ISREG(information.st_mode) &&
+                information.st_nlink == 1 &&
+                sameObject(information, *file.identity) &&
+                ::fsync(current) == 0;
+            (void)closeDescriptor(current);
+            (void)closeDescriptor(parent);
+            if (!flushed) return false;
+        }
+        for (const auto& directory : directories_) {
+            int current = openDirectoryRelative(directory.relativePath);
+            struct stat information {};
+            const bool flushed =
+                current >= 0 && directory.identity.has_value() &&
+                directoryDescriptor(current, information) &&
+                sameObject(information, *directory.identity) &&
+                ::fsync(current) == 0;
+            (void)closeDescriptor(current);
+            if (!flushed) return false;
+        }
+        return true;
 #endif
     }
+
+    bool closeAuthority() noexcept {
+        bool succeeded = true;
+#ifdef _WIN32
+        for (auto& directory : directories_)
+            if (!closeHandle(directory.handle)) succeeded = false;
+        if (!closeHandle(parentHandle_)) succeeded = false;
+#else
+        for (auto& directory : directories_)
+            if (!closeDescriptor(directory.descriptor)) succeeded = false;
+        if (!closeDescriptor(parentDescriptor_)) succeeded = false;
+#endif
+        return succeeded;
+    }
+
+#ifndef _WIN32
+    int openDirectoryRelative(std::string_view relativePath) const noexcept {
+        if (directories_.empty() ||
+            directories_.front().descriptor < 0) {
+            return -1;
+        }
+        int current = ::dup(directories_.front().descriptor);
+        if (current < 0 || relativePath.empty()) return current;
+        const auto components = pathComponents(relativePath);
+        if (!components.has_value()) {
+            (void)closeDescriptor(current);
+            return -1;
+        }
+        for (const auto& component : *components) {
+            int child = ::openat(
+                current, component.c_str(),
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            (void)closeDescriptor(current);
+            current = child;
+            if (current < 0) break;
+        }
+        return current;
+    }
+#endif
 
     Result<std::size_t> ensureParent(
         const std::vector<std::string>& components) {
@@ -1002,6 +1552,7 @@ private:
             directories_.push_back(
                 {.parentIndex = current,
                  .name = components[index],
+                 .relativePath = key,
                  .descriptor = -1,
                  .identity = std::nullopt});
             if (::mkdirat(parentDescriptor, components[index].c_str(),
@@ -1034,7 +1585,6 @@ private:
 
     bool active_{true};
     bool sealed_{false};
-    std::filesystem::path displayRoot_;
     std::unordered_map<std::string, std::size_t> directoryIndexes_;
     std::vector<DirectoryRecord> directories_;
 #ifdef _WIN32
@@ -1043,9 +1593,9 @@ private:
     std::vector<FileRecord> files_;
 #else
     int parentDescriptor_{-1};
+    std::optional<struct stat> parentIdentity_;
     std::vector<FileRecord> files_;
 #endif
-    mutable std::mutex readMutex_;
 };
 
 AvatarPackStaging::AvatarPackStaging(
@@ -1139,11 +1689,6 @@ Result<std::string> AvatarPackStaging::extractNewFile(
     }
 }
 
-const std::filesystem::path& AvatarPackStaging::displayPath() const noexcept {
-    static const std::filesystem::path empty;
-    return implementation_ ? implementation_->displayRoot() : empty;
-}
-
 Result<bool>
 AvatarPackStaging::exists(std::string_view relativePath) const noexcept {
     try {
@@ -1185,6 +1730,22 @@ Result<void> AvatarPackStaging::cleanup() noexcept {
         return implementation_->cleanup();
     } catch (...) {
         return cleanupError();
+    }
+}
+
+Result<void> AvatarPackStaging::promoteTo(
+    const std::filesystem::path& finalPath) && noexcept {
+    try {
+        if (!implementation_) {
+            return stagingError("avatar pack staging is no longer active",
+                                "avatar.pack.staging.state",
+                                ErrorCode::InvalidState);
+        }
+        return implementation_->promoteTo(finalPath);
+    } catch (const std::bad_alloc&) {
+        return allocationError();
+    } catch (...) {
+        return promotionError();
     }
 }
 

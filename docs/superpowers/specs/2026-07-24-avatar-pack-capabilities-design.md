@@ -43,8 +43,9 @@ signature is never ignored in favor of an earlier valid candidate.
 `AvatarPackStaging` remains move-only and becomes the sealed lease returned in
 `ValidatedAvatarPack{manifest, staging}`. Creation, writing, extraction, and
 sealing are private operations available only to `AvatarPackValidator`.
-Sealing retains the staging parent, root, and created-directory handles or
-descriptors. The previous bare `stagingRoot` field is removed.
+Sealing retains only the staging parent and root handles or descriptors.
+Construction may open child directories transiently, but closes them before
+the lease becomes public. The previous bare `stagingRoot` field is removed.
 
 The public lease contract is:
 
@@ -85,10 +86,10 @@ best-effort fallback cleanup; callers that need the result call `cleanup()`.
 
 Sealing does not retain one handle per archive entry. It stores bounded entry
 metadata (relative name, identity, byte count, and authenticated SHA-256) and
-keeps only the root/parent capability plus the bounded directory descriptors
-needed during construction. Public reads reopen the requested file and verify
-identity, size, and hash before returning bytes. This prevents a valid-shape
-10,000-entry package from exhausting the process descriptor table.
+keeps only the root/parent capability after construction. Public reads reopen
+the requested file and verify identity, size, and hash before returning bytes.
+This prevents a valid-shape 10,000-entry package from exhausting the process
+descriptor table.
 
 ## Exception and ownership boundaries
 
@@ -98,6 +99,12 @@ attempt explicit cleanup; cleanup failure takes precedence. Archive reads and
 streams and staging public operations use the same result-only boundary.
 Manifest payload processing uses sorted references instead of copying payload
 records.
+
+The `noexcept` API prevents exceptions from crossing the pack boundary and
+translates ordinary allocation failures into `AppError` results. As with any
+result type that must allocate its fallback error text, process-wide memory
+exhaustion can still make construction of that fallback fail and cause C++
+termination.
 
 ## Tests
 
@@ -119,9 +126,11 @@ Real local fixtures, without production hooks or filesystem mocks, cover:
 - compile-time absence of `displayPath()` and rvalue-only promotion;
 - a valid-shape 10,000-entry staging tree without one retained descriptor per
   entry;
+- cleanup failure closing retained root/parent authority without a handle
+  leak;
 - compile-time and runtime no-exception public contracts;
-- the existing 27 validator/fuzz tests, repeated focused gates, MSVC ASan, the
-  enabled full build, and the complete CTest matrix.
+- all 36 validator/fuzz tests, repeated focused gates, MSVC ASan, the enabled
+  full build, and the complete CTest matrix.
 
 No test-only production hook, fake filesystem, path-authority fallback, or
 Windows whole-archive snapshot is introduced.

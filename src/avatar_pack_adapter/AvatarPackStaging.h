@@ -30,8 +30,6 @@ public:
     AvatarPackStaging(const AvatarPackStaging&) = delete;
     AvatarPackStaging& operator=(const AvatarPackStaging&) = delete;
 
-    /// Returns a diagnostic/display path, never file-access authority.
-    [[nodiscard]] const std::filesystem::path& displayPath() const noexcept;
     [[nodiscard]] core::Result<bool>
     exists(std::string_view relativePath) const noexcept;
     [[nodiscard]] core::Result<std::vector<std::uint8_t>>
@@ -40,6 +38,13 @@ public:
 
     /// Deletes the owned tree only while retained root identity still matches.
     [[nodiscard]] core::Result<void> cleanup() noexcept;
+
+    /// Atomically transfers the sealed tree to a new, absent destination.
+    ///
+    /// Exceptions do not cross this boundary. Under process-wide memory
+    /// exhaustion, allocating the fallback AppError itself may still terminate.
+    [[nodiscard]] core::Result<void> promoteTo(
+        const std::filesystem::path& finalPath) && noexcept;
 
 private:
     friend class AvatarPackValidator;

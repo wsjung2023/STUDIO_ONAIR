@@ -663,8 +663,7 @@ TEST(AvatarPackValidatorTest, RejectsTamperAndUnknownSigningKey) {
 TEST(AvatarPackValidatorTest, ExtractsOnlyAfterAllChecksPass) {
     const auto result = validate(validSignedFixture());
     ASSERT_TRUE(result.hasValue()) << result.error().message();
-    EXPECT_TRUE(std::filesystem::exists(
-        result.value().stagingRoot / "manifest.json"));
+    EXPECT_TRUE(result.value().staging.exists("manifest.json").value());
     EXPECT_EQ(result.value().manifest.assetId().value(), "core.body.humanoid");
 }
 ```
@@ -689,7 +688,7 @@ struct TrustedAvatarKey final {
 };
 struct ValidatedAvatarPack final {
     AvatarAssetManifest manifest;
-    std::filesystem::path stagingRoot;
+    AvatarPackStaging staging;
 };
 class AvatarPackValidator final {
 public:
@@ -711,7 +710,8 @@ Validation order is fixed:
 5. Verify Ed25519 with `crypto_sign_verify_detached`.
 6. Stream each payload to a newly created unpredictable staging directory,
    hash while writing, flush, compare, and delete staging on any mismatch.
-7. Return the staging path only after every entry passes.
+7. Return the sealed, move-only staging capability only after every entry
+   passes; never expose its source path.
 
 Never log signature bytes, model contents, or extracted user paths.
 
@@ -816,11 +816,13 @@ catalog-root/
 ```
 
 `install` obtains a process-local mutex and an exclusive
-`catalog-root/catalog.lock`, calls `validateAndExtract`, fsyncs the staging tree,
-renames it to the final version directory, and fsyncs its parent. Existing
-versions are immutable. A conflicting package ID/version with a different
-manifest hash returns `AlreadyExists`. Startup removes abandoned staging
-directories older than 24 hours and never deletes quarantine automatically.
+`catalog-root/catalog.lock`, calls `validateAndExtract`, and invokes
+`std::move(validated.value().staging).promoteTo(finalVersionPath)`. Task 6
+never asks the capability for a path and never reimplements tree flushing,
+rename, or parent durability. Existing versions are immutable. A conflicting
+package ID/version with a different manifest hash returns `AlreadyExists`.
+Startup removes abandoned staging directories older than 24 hours and never
+deletes quarantine automatically.
 
 - [ ] **Step 4: Run catalog and pack tests**
 

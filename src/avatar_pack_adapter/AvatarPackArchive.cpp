@@ -333,35 +333,29 @@ Result<void> preflightRawZip(std::FILE* file, std::uint64_t archiveSize) {
                             "avatar.pack.archive.envelope");
     }
 
-    std::size_t plausibleCandidates = 0;
-    std::size_t validCandidates = 0;
-    std::optional<AppError> singleCandidateError;
+    std::optional<std::size_t> candidateOffset;
     for (std::size_t offset = 0; offset + kEocdBytes <= tail.size(); ++offset) {
         if (little32(tail, offset) != kEocdSignature) continue;
-        const auto commentBytes =
-            static_cast<std::size_t>(little16(tail, offset + 20U));
-        if (commentBytes > AvatarPackArchive::kMaximumZipCommentBytes ||
-            offset + kEocdBytes + commentBytes != tail.size()) {
-            continue;
+        if (candidateOffset.has_value()) {
+            return invalidEnvelope(
+                "avatar pack ZIP EOCD is ambiguous");
         }
-        ++plausibleCandidates;
-        const auto eocdOffset = tailOffset + static_cast<std::uint64_t>(offset);
-        auto candidate = validateRawEocdCandidate(
-            file, eocdOffset,
-            std::span<const std::uint8_t>{tail}.subspan(offset, kEocdBytes));
-        if (candidate.hasValue()) {
-            ++validCandidates;
-        } else if (candidate.error().code() == ErrorCode::IoFailure) {
-            return candidate.error();
-        } else if (plausibleCandidates == 1U) {
-            singleCandidateError = candidate.error();
-        }
+        candidateOffset = offset;
     }
-    if (validCandidates == 1U) return core::ok();
-    if (plausibleCandidates == 1U && singleCandidateError.has_value())
-        return *singleCandidateError;
-    return invalidEnvelope(
-        "avatar pack ZIP EOCD is missing, ambiguous, or trailing");
+    if (!candidateOffset.has_value()) {
+        return invalidEnvelope("avatar pack ZIP EOCD is missing");
+    }
+    const auto offset = *candidateOffset;
+    const auto commentBytes =
+        static_cast<std::size_t>(little16(tail, offset + 20U));
+    if (commentBytes > AvatarPackArchive::kMaximumZipCommentBytes ||
+        offset + kEocdBytes + commentBytes != tail.size()) {
+        return invalidEnvelope(
+            "avatar pack ZIP EOCD comment or trailing data is invalid");
+    }
+    return validateRawEocdCandidate(
+        file, tailOffset + static_cast<std::uint64_t>(offset),
+        std::span<const std::uint8_t>{tail}.subspan(offset, kEocdBytes));
 }
 
 struct ImmutableArchiveSource final {
