@@ -1,5 +1,6 @@
 #include "avatar/AvatarAssetManifestCodec.h"
 #include "avatar_pack_adapter/AvatarPackArchive.h"
+#include "avatar_pack_adapter/AvatarPackPromotionInternal.h"
 #include "avatar_pack_adapter/AvatarPackValidator.h"
 #include "core/Sha256.h"
 #include "core/Uuid.h"
@@ -32,11 +33,21 @@
 
 #ifdef _WIN32
 #define NOMINMAX
+#include <Aclapi.h>
 #include <Windows.h>
 #include <winioctl.h>
 #else
 #include <fcntl.h>
 #include <unistd.h>
+#endif
+
+#ifndef _WIN32
+std::size_t openDescriptorCount() {
+    return static_cast<std::size_t>(
+        std::distance(
+            std::filesystem::directory_iterator{"/proc/self/fd"},
+            std::filesystem::directory_iterator{}));
+}
 #endif
 
 namespace creator::avatar_pack_adapter {
@@ -73,6 +84,10 @@ static_assert(std::is_nothrow_move_constructible_v<ValidatedAvatarPack>);
 static_assert(!HasDisplayPath<AvatarPackStaging>);
 static_assert(!HasLvaluePromotion<AvatarPackStaging>);
 static_assert(HasRvaluePromotion<AvatarPackStaging>);
+static_assert(std::is_same_v<
+              decltype(std::declval<AvatarPackStaging&&>().promoteTo(
+                  std::declval<const fs::path&>())),
+              core::Result<PromotionOutcome>>);
 static_assert(noexcept(std::declval<AvatarPackStaging&&>().promoteTo(
     std::declval<const fs::path&>())));
 static_assert(
@@ -91,6 +106,43 @@ using avatar::RigFamily;
 
 constexpr std::uint64_t kMiB = 1024ULL * 1024ULL;
 constexpr std::uint64_t kGiB = 1024ULL * kMiB;
+
+TEST(AvatarPackPromotionStateMachineTest,
+     AttemptsBothDurabilityConfirmationsAndReturnsAValueOutcome) {
+    for (const auto [sourceSucceeds, destinationSucceeds] :
+         std::array{std::pair{true, true}, std::pair{true, false},
+                    std::pair{false, true}, std::pair{false, false}}) {
+        int sourceCalls = 0;
+        int destinationCalls = 0;
+
+        const auto outcome = detail::confirmPromotionDurability(
+            [&] {
+                ++sourceCalls;
+                return sourceSucceeds;
+            },
+            [&] {
+                ++destinationCalls;
+                return destinationSucceeds;
+            });
+
+        EXPECT_EQ(sourceCalls, 1);
+        EXPECT_EQ(destinationCalls, 1);
+        EXPECT_EQ(outcome,
+                  sourceSucceeds && destinationSucceeds
+                      ? PromotionOutcome::Durable
+                      : PromotionOutcome::Indeterminate);
+    }
+
+    int destinationCalls = 0;
+    const auto throwing = detail::confirmPromotionDurability(
+        []() -> bool { throw std::runtime_error{"flush failed"}; },
+        [&] {
+            ++destinationCalls;
+            return true;
+        });
+    EXPECT_EQ(destinationCalls, 1);
+    EXPECT_EQ(throwing, PromotionOutcome::Indeterminate);
+}
 
 struct ZipEntry final {
     std::string path;
@@ -547,6 +599,43 @@ std::error_code createDirectoryJunction(const fs::path& junction,
     CloseHandle(handle);
     if (!created) RemoveDirectoryW(junction.c_str());
     return {static_cast<int>(code), std::system_category()};
+}
+
+DWORD grantEveryoneWriteAccess(const fs::path& path) {
+    std::array<std::uint8_t, SECURITY_MAX_SID_SIZE> everyone{};
+    DWORD sidBytes = static_cast<DWORD>(everyone.size());
+    if (CreateWellKnownSid(WinWorldSid, nullptr, everyone.data(),
+                           &sidBytes) == FALSE) {
+        return GetLastError();
+    }
+    PACL oldDacl = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    auto status = GetNamedSecurityInfoW(
+        const_cast<wchar_t*>(path.c_str()), SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION, nullptr, nullptr, &oldDacl, nullptr,
+        &descriptor);
+    if (status != ERROR_SUCCESS) return status;
+    EXPLICIT_ACCESSW access{};
+    access.grfAccessPermissions =
+        FILE_GENERIC_WRITE | DELETE | WRITE_DAC;
+    access.grfAccessMode = GRANT_ACCESS;
+    access.grfInheritance =
+        SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+    access.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    access.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+    access.Trustee.ptstrName =
+        reinterpret_cast<LPWSTR>(everyone.data());
+    PACL updated = nullptr;
+    status = SetEntriesInAclW(1U, &access, oldDacl, &updated);
+    if (status == ERROR_SUCCESS) {
+        status = SetNamedSecurityInfoW(
+            const_cast<wchar_t*>(path.c_str()), SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION, nullptr, nullptr, updated,
+            nullptr);
+    }
+    if (updated != nullptr) (void)LocalFree(updated);
+    if (descriptor != nullptr) (void)LocalFree(descriptor);
+    return status;
 }
 #endif
 
@@ -1653,6 +1742,51 @@ TEST_F(AvatarPackValidatorTest,
         "payload/item-9996", 4U);
     ASSERT_TRUE(last.hasValue()) << last.error().message();
     EXPECT_EQ(last.value(), bytes("9996"));
+    const auto destinationParent = root_ / "maximum-installed";
+    ASSERT_TRUE(fs::create_directory(destinationParent));
+    const auto destination = destinationParent / "1.0.0";
+
+    auto promoted =
+        std::move(result.value().staging).promoteTo(destination);
+
+    ASSERT_TRUE(promoted.hasValue())
+        << promoted.error().message() << " platform=" << platformError();
+    EXPECT_EQ(promoted.value(), PromotionOutcome::Durable);
+    EXPECT_EQ(readBytes(destination / "payload/item-9996"), bytes("9996"));
+    DWORD afterPromotion = 0U;
+    ASSERT_TRUE(GetProcessHandleCount(GetCurrentProcess(), &afterPromotion));
+    EXPECT_LT(afterPromotion - before, 32U);
+}
+#elif defined(__linux__)
+TEST_F(AvatarPackValidatorTest,
+       MaximumShapePackRetainsOnlyRootDescriptorsAcrossUniqueDirectories) {
+    std::vector<Payload> payloads;
+    payloads.reserve(9'997U);
+    for (std::size_t index = 0U; index < 9'997U; ++index) {
+        payloads.push_back(
+            {.path = "payload/item-" + std::to_string(index) + "/model.bin",
+             .contents = bytes(std::to_string(index))});
+    }
+    const auto package = writeSignedPack(payloads);
+    const auto before = openDescriptorCount();
+
+    auto result = validator().validateAndExtract(package);
+
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    const auto after = openDescriptorCount();
+    EXPECT_LT(after - before, 16U);
+    const auto destinationParent = root_ / "maximum-installed";
+    ASSERT_TRUE(fs::create_directory(destinationParent));
+    ASSERT_FALSE(::chmod(destinationParent.c_str(), 0700));
+    auto promoted = std::move(result.value().staging)
+                        .promoteTo(destinationParent / "1.0.0");
+    ASSERT_TRUE(promoted.hasValue()) << promoted.error().message();
+    EXPECT_EQ(promoted.value(), PromotionOutcome::Durable);
+    EXPECT_EQ(readBytes(destinationParent /
+                        "1.0.0/payload/item-9996/model.bin"),
+              bytes("9996"));
+    const auto afterPromotion = openDescriptorCount();
+    EXPECT_LT(afterPromotion - before, 16U);
 }
 #endif
 
@@ -1673,6 +1807,7 @@ TEST_F(AvatarPackValidatorTest,
 
     ASSERT_TRUE(promoted.hasValue())
         << promoted.error().message() << " platform=" << platformError();
+    EXPECT_EQ(promoted.value(), PromotionOutcome::Durable);
     ASSERT_TRUE(fs::exists(destination)) << destination;
     ASSERT_TRUE(fs::exists(destination / "payload/model.bin"))
         << destination / "payload/model.bin";
@@ -1711,11 +1846,136 @@ TEST_F(AvatarPackValidatorTest,
         std::move(result.value().staging).promoteTo(retry);
     ASSERT_TRUE(promoted.hasValue())
         << promoted.error().message() << " platform=" << platformError();
+    EXPECT_EQ(promoted.value(), PromotionOutcome::Durable);
     EXPECT_EQ(readBytes(retry / "payload/model.bin"),
               bytes("real-avatar-model"));
 }
 
+TEST_F(AvatarPackValidatorTest,
+       RejectsInPlaceMutationBeforePromotionAndRemainsRetryable) {
+    auto result = validator().validateAndExtract(writeSignedPack());
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    const auto observed = waitForStagingRoot(staging_);
+    ASSERT_TRUE(observed.has_value());
+    const auto payload = *observed / "payload/model.bin";
+    writeBytes(payload, bytes("evil-avatar-model"));
+    const auto destinationParent = root_ / "mutation-installed";
+    ASSERT_TRUE(fs::create_directory(destinationParent));
+    const auto destination = destinationParent / "1.0.0";
+
+    auto rejected =
+        std::move(result.value().staging).promoteTo(destination);
+
+    ASSERT_FALSE(rejected.hasValue());
+    EXPECT_FALSE(fs::exists(destination));
+    writeBytes(payload, bytes("real-avatar-model"));
+    auto promoted =
+        std::move(result.value().staging).promoteTo(destination);
+    ASSERT_TRUE(promoted.hasValue()) << promoted.error().message();
+    EXPECT_EQ(promoted.value(), PromotionOutcome::Durable);
+}
+
+TEST_F(AvatarPackValidatorTest,
+       RejectsUnknownFileBeforePromotionAndRemainsRetryable) {
+    auto result = validator().validateAndExtract(writeSignedPack());
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    const auto observed = waitForStagingRoot(staging_);
+    ASSERT_TRUE(observed.has_value());
+    const auto unknown = *observed / "payload/unknown.bin";
+    writeBytes(unknown, bytes("unknown"));
+    const auto destinationParent = root_ / "unknown-file-installed";
+    ASSERT_TRUE(fs::create_directory(destinationParent));
+    const auto destination = destinationParent / "1.0.0";
+
+    auto rejected =
+        std::move(result.value().staging).promoteTo(destination);
+
+    ASSERT_FALSE(rejected.hasValue());
+    EXPECT_FALSE(fs::exists(destination));
+    ASSERT_TRUE(fs::remove(unknown));
+    auto promoted =
+        std::move(result.value().staging).promoteTo(destination);
+    ASSERT_TRUE(promoted.hasValue()) << promoted.error().message();
+    EXPECT_EQ(promoted.value(), PromotionOutcome::Durable);
+}
+
+TEST_F(AvatarPackValidatorTest,
+       RejectsUnknownDirectoryBeforePromotionAndRemainsRetryable) {
+    auto result = validator().validateAndExtract(writeSignedPack());
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    const auto observed = waitForStagingRoot(staging_);
+    ASSERT_TRUE(observed.has_value());
+    const auto unknown = *observed / "unknown-directory";
+    ASSERT_TRUE(fs::create_directory(unknown));
+    const auto destinationParent = root_ / "unknown-directory-installed";
+    ASSERT_TRUE(fs::create_directory(destinationParent));
+    const auto destination = destinationParent / "1.0.0";
+
+    auto rejected =
+        std::move(result.value().staging).promoteTo(destination);
+
+    ASSERT_FALSE(rejected.hasValue());
+    EXPECT_FALSE(fs::exists(destination));
+    ASSERT_TRUE(fs::remove(unknown));
+    auto promoted =
+        std::move(result.value().staging).promoteTo(destination);
+    ASSERT_TRUE(promoted.hasValue()) << promoted.error().message();
+    EXPECT_EQ(promoted.value(), PromotionOutcome::Durable);
+}
+
 #ifdef _WIN32
+TEST_F(AvatarPackValidatorTest,
+       RejectsAConcurrentWritableFileLeaseAndRemainsRetryable) {
+    auto result = validator().validateAndExtract(writeSignedPack());
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    const auto observed = waitForStagingRoot(staging_);
+    ASSERT_TRUE(observed.has_value());
+    const auto payload = *observed / "payload/model.bin";
+    const auto destinationParent = root_ / "race-installed";
+    ASSERT_TRUE(fs::create_directory(destinationParent));
+    const auto destination = destinationParent / "1.0.0";
+
+    {
+        WritableFixtureFile writable{payload};
+        ASSERT_TRUE(writable.valid());
+        ASSERT_TRUE(writable.overwriteByte(0U, 'x'));
+        auto rejected =
+            std::move(result.value().staging).promoteTo(destination);
+        ASSERT_FALSE(rejected.hasValue());
+        EXPECT_FALSE(fs::exists(destination));
+        ASSERT_TRUE(writable.overwriteByte(0U, 'r'));
+    }
+
+    auto promoted =
+        std::move(result.value().staging).promoteTo(destination);
+    ASSERT_TRUE(promoted.hasValue()) << promoted.error().message();
+    EXPECT_EQ(promoted.value(), PromotionOutcome::Durable);
+}
+#endif
+
+#ifdef _WIN32
+TEST_F(AvatarPackValidatorTest,
+       RejectsPromotionIntoAWindowsParentWritableByEveryone) {
+    auto result = validator().validateAndExtract(writeSignedPack());
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    const auto destinationParent = root_ / "shared-install";
+    ASSERT_TRUE(fs::create_directory(destinationParent));
+    ASSERT_EQ(grantEveryoneWriteAccess(destinationParent), ERROR_SUCCESS);
+    const auto destination = destinationParent / "1.0.0";
+
+    auto rejected =
+        std::move(result.value().staging).promoteTo(destination);
+
+    ASSERT_FALSE(rejected.hasValue());
+    EXPECT_FALSE(fs::exists(destination));
+    const auto retryParent = root_ / "private-install";
+    ASSERT_TRUE(fs::create_directory(retryParent));
+    auto promoted = std::move(result.value().staging)
+                        .promoteTo(retryParent / "1.0.0");
+    ASSERT_TRUE(promoted.hasValue()) << promoted.error().message();
+    EXPECT_EQ(promoted.value(), PromotionOutcome::Durable);
+}
+
 TEST_F(AvatarPackValidatorTest,
        RejectsPromotionThroughAReparseDestinationParent) {
     auto result = validator().validateAndExtract(writeSignedPack());
@@ -1816,6 +2076,9 @@ TEST_F(AvatarPackValidatorTest,
 
 TEST_F(AvatarPackValidatorTest,
        SurfacesCleanupFailureWhenARealOpenHandleBlocksRemoval) {
+    auto warmed = validator().validateAndExtract(writeSignedPack());
+    ASSERT_TRUE(warmed.hasValue()) << warmed.error().message();
+    ASSERT_TRUE(warmed.value().staging.cleanup().hasValue());
     std::vector<std::uint8_t> largePayload(
         static_cast<std::size_t>(32ULL * kMiB), 0x31U);
     const auto package = writeSignedPack(
@@ -1871,6 +2134,72 @@ TEST_F(AvatarPackValidatorTest,
     EXPECT_EQ(handlesAfter, handlesBefore);
 }
 
+TEST_F(AvatarPackValidatorTest,
+       CleanupIdentityMismatchPreservesReplacementWithoutLeakingAHandle) {
+    auto warmed = validator().validateAndExtract(writeSignedPack());
+    ASSERT_TRUE(warmed.hasValue()) << warmed.error().message();
+    ASSERT_TRUE(warmed.value().staging.cleanup().hasValue());
+    DWORD handlesBefore = 0U;
+    ASSERT_TRUE(GetProcessHandleCount(GetCurrentProcess(), &handlesBefore));
+    auto result = validator().validateAndExtract(writeSignedPack());
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    const auto observed = waitForStagingRoot(staging_);
+    ASSERT_TRUE(observed.has_value());
+    const auto payload = *observed / "payload/model.bin";
+    const auto original = root_ / "original-model.bin";
+    ASSERT_TRUE(MoveFileExW(payload.c_str(), original.c_str(), 0U))
+        << GetLastError();
+    writeBytes(payload, bytes("replacement"));
+
+    auto cleaned = result.value().staging.cleanup();
+
+    ASSERT_FALSE(cleaned.hasValue());
+    EXPECT_EQ(readBytes(payload), bytes("replacement"));
+    DWORD handlesAfter = 0U;
+    ASSERT_TRUE(GetProcessHandleCount(GetCurrentProcess(), &handlesAfter));
+    EXPECT_EQ(handlesAfter, handlesBefore);
+}
+
+TEST_F(AvatarPackValidatorTest,
+       CleanupDispositionFailurePreservesContentWithoutLeakingAHandle) {
+    auto warmed = validator().validateAndExtract(writeSignedPack());
+    ASSERT_TRUE(warmed.hasValue()) << warmed.error().message();
+    ASSERT_TRUE(warmed.value().staging.cleanup().hasValue());
+    DWORD handlesBefore = 0U;
+    ASSERT_TRUE(GetProcessHandleCount(GetCurrentProcess(), &handlesBefore));
+    const auto sodiumModule = GetModuleHandleW(L"libsodium.dll");
+    ASSERT_NE(sodiumModule, nullptr);
+    std::wstring sodiumPath(32'768U, L'\0');
+    const auto sodiumPathSize = GetModuleFileNameW(
+        sodiumModule, sodiumPath.data(),
+        static_cast<DWORD>(sodiumPath.size()));
+    ASSERT_GT(sodiumPathSize, 0U);
+    ASSERT_LT(sodiumPathSize, sodiumPath.size());
+    sodiumPath.resize(sodiumPathSize);
+    const auto libraryBytes = readBytes(sodiumPath);
+    auto result = validator().validateAndExtract(
+        writeSignedPack("payload/cleanup-fixture.dll",
+                        std::string_view{
+                            reinterpret_cast<const char*>(
+                                libraryBytes.data()),
+                            libraryBytes.size()}));
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    const auto observed = waitForStagingRoot(staging_);
+    ASSERT_TRUE(observed.has_value());
+    const auto payload = *observed / "payload/cleanup-fixture.dll";
+    const auto loaded = LoadLibraryW(payload.c_str());
+    ASSERT_NE(loaded, nullptr) << GetLastError();
+
+    auto cleaned = result.value().staging.cleanup();
+    ASSERT_TRUE(FreeLibrary(loaded));
+
+    ASSERT_FALSE(cleaned.hasValue());
+    EXPECT_EQ(readBytes(payload), libraryBytes);
+    DWORD handlesAfter = 0U;
+    ASSERT_TRUE(GetProcessHandleCount(GetCurrentProcess(), &handlesAfter));
+    EXPECT_EQ(handlesAfter, handlesBefore);
+}
+
 TEST_F(AvatarPackValidatorTest, RejectsARealReparseStagingParent) {
     const auto outside = root_ / "outside-parent";
     ASSERT_TRUE(fs::create_directory(outside));
@@ -1886,6 +2215,20 @@ TEST_F(AvatarPackValidatorTest, RejectsARealReparseStagingParent) {
     ASSERT_FALSE(result.hasValue());
     EXPECT_FALSE(fs::exists(outside / "manifest.json"));
     ASSERT_TRUE(RemoveDirectoryW(redirectedParent.c_str()));
+}
+
+TEST_F(AvatarPackValidatorTest,
+       RejectsAWindowsStagingParentWritableByEveryone) {
+    const auto sharedParent = root_ / "shared-staging";
+    ASSERT_TRUE(fs::create_directory(sharedParent));
+    ASSERT_EQ(grantEveryoneWriteAccess(sharedParent), ERROR_SUCCESS);
+    AvatarPackValidator shared{{trustedKey()}, sharedParent};
+
+    const auto result =
+        shared.validateAndExtract(writeSignedPack());
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_TRUE(directoryEmpty(sharedParent));
 }
 #endif
 

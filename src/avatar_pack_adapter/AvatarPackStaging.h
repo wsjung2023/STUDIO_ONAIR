@@ -16,6 +16,11 @@ class AvatarPackArchive;
 class AvatarPackValidator;
 struct AvatarPackArchiveEntry;
 
+enum class PromotionOutcome : std::uint8_t {
+    Durable,
+    Indeterminate,
+};
+
 /// Move-only ownership capability for one verified private staging tree.
 ///
 /// Move construction/assignment transfers ownership. Task 6 may accept this
@@ -43,7 +48,7 @@ public:
     ///
     /// Exceptions do not cross this boundary. Under process-wide memory
     /// exhaustion, allocating the fallback AppError itself may still terminate.
-    [[nodiscard]] core::Result<void> promoteTo(
+    [[nodiscard]] core::Result<PromotionOutcome> promoteTo(
         const std::filesystem::path& finalPath) && noexcept;
 
 private:

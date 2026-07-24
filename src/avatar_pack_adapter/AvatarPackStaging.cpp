@@ -1,6 +1,7 @@
 #include "avatar_pack_adapter/AvatarPackStaging.h"
 
 #include "avatar_pack_adapter/AvatarPackArchive.h"
+#include "avatar_pack_adapter/AvatarPackPromotionInternal.h"
 #include "core/AppError.h"
 
 #include <sodium.h>
@@ -11,6 +12,7 @@
 #include <cstddef>
 #include <exception>
 #include <limits>
+#include <map>
 #include <new>
 #include <optional>
 #include <string>
@@ -20,8 +22,10 @@
 
 #ifdef _WIN32
 #define NOMINMAX
+#include <Aclapi.h>
 #include <Windows.h>
 #else
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #ifdef __linux__
@@ -135,6 +139,171 @@ bool closeHandle(HANDLE& handle) noexcept {
     return CloseHandle(closing) != FALSE;
 }
 
+class ScopedHandle final {
+public:
+    ScopedHandle() = default;
+    explicit ScopedHandle(HANDLE handle) noexcept : handle_(handle) {}
+    ~ScopedHandle() { (void)close(); }
+
+    ScopedHandle(ScopedHandle&& other) noexcept
+        : handle_(std::exchange(other.handle_, INVALID_HANDLE_VALUE)) {}
+    ScopedHandle& operator=(ScopedHandle&& other) noexcept {
+        if (this == &other) return *this;
+        (void)close();
+        handle_ = std::exchange(other.handle_, INVALID_HANDLE_VALUE);
+        return *this;
+    }
+
+    ScopedHandle(const ScopedHandle&) = delete;
+    ScopedHandle& operator=(const ScopedHandle&) = delete;
+
+    [[nodiscard]] HANDLE get() const noexcept { return handle_; }
+    [[nodiscard]] bool valid() const noexcept {
+        return handle_ != INVALID_HANDLE_VALUE;
+    }
+    [[nodiscard]] bool close() noexcept { return closeHandle(handle_); }
+
+private:
+    HANDLE handle_{INVALID_HANDLE_VALUE};
+};
+
+class ScopedFindHandle final {
+public:
+    explicit ScopedFindHandle(HANDLE handle) noexcept : handle_(handle) {}
+    ~ScopedFindHandle() {
+        if (handle_ != INVALID_HANDLE_VALUE) (void)FindClose(handle_);
+    }
+
+    ScopedFindHandle(const ScopedFindHandle&) = delete;
+    ScopedFindHandle& operator=(const ScopedFindHandle&) = delete;
+
+    [[nodiscard]] HANDLE get() const noexcept { return handle_; }
+
+private:
+    HANDLE handle_{INVALID_HANDLE_VALUE};
+};
+
+struct WindowsPathLess final {
+    bool operator()(const std::wstring& left,
+                    const std::wstring& right) const noexcept {
+        return CompareStringOrdinal(
+                   left.data(), static_cast<int>(left.size()), right.data(),
+                   static_cast<int>(right.size()), TRUE) == CSTR_LESS_THAN;
+    }
+};
+
+bool regularDirectory(HANDLE handle) noexcept;
+
+std::optional<std::vector<std::uint8_t>> currentUserSid() {
+    ScopedHandle token;
+    HANDLE rawToken = INVALID_HANDLE_VALUE;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &rawToken) ==
+        FALSE) {
+        return std::nullopt;
+    }
+    token = ScopedHandle{rawToken};
+    DWORD required = 0U;
+    (void)GetTokenInformation(token.get(), TokenUser, nullptr, 0U,
+                              &required);
+    if (required == 0U || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+        return std::nullopt;
+    std::vector<std::uint8_t> information(required);
+    if (GetTokenInformation(token.get(), TokenUser, information.data(),
+                            required, &required) == FALSE) {
+        return std::nullopt;
+    }
+    const auto* user =
+        reinterpret_cast<const TOKEN_USER*>(information.data());
+    const auto sidLength = GetLengthSid(user->User.Sid);
+    if (sidLength == 0U) return std::nullopt;
+    std::vector<std::uint8_t> sid(sidLength);
+    if (CopySid(sidLength, sid.data(), user->User.Sid) == FALSE)
+        return std::nullopt;
+    return sid;
+}
+
+bool trustedPrivateDirectory(HANDLE handle) {
+    if (!regularDirectory(handle)) return false;
+    PSID owner = nullptr;
+    PACL dacl = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if (GetSecurityInfo(
+            handle, SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &owner, nullptr, &dacl, nullptr, &descriptor) !=
+        ERROR_SUCCESS) {
+        return false;
+    }
+    const auto releaseDescriptor = [&] {
+        if (descriptor != nullptr) (void)LocalFree(descriptor);
+    };
+    auto currentUser = currentUserSid();
+    if (!currentUser.has_value() || owner == nullptr ||
+        IsValidSid(owner) == FALSE ||
+        EqualSid(owner, currentUser->data()) == FALSE || dacl == nullptr) {
+        releaseDescriptor();
+        return false;
+    }
+
+    std::array<std::uint8_t, SECURITY_MAX_SID_SIZE> systemSid{};
+    std::array<std::uint8_t, SECURITY_MAX_SID_SIZE> administratorsSid{};
+    DWORD systemBytes = static_cast<DWORD>(systemSid.size());
+    DWORD administratorsBytes =
+        static_cast<DWORD>(administratorsSid.size());
+    if (CreateWellKnownSid(WinLocalSystemSid, nullptr, systemSid.data(),
+                           &systemBytes) == FALSE ||
+        CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr,
+                           administratorsSid.data(),
+                           &administratorsBytes) == FALSE) {
+        releaseDescriptor();
+        return false;
+    }
+
+    ULONG entryCount = 0U;
+    PEXPLICIT_ACCESSW entries = nullptr;
+    if (GetExplicitEntriesFromAclW(dacl, &entryCount, &entries) !=
+        ERROR_SUCCESS) {
+        releaseDescriptor();
+        return false;
+    }
+    bool trusted = true;
+    constexpr DWORD kDangerousRights =
+        FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA |
+        FILE_WRITE_ATTRIBUTES | FILE_DELETE_CHILD | DELETE | WRITE_DAC |
+        WRITE_OWNER;
+    constexpr GENERIC_MAPPING kFileMapping{
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE,
+        FILE_ALL_ACCESS};
+    for (ULONG index = 0U; index < entryCount; ++index) {
+        const auto& entry = entries[index];
+        if (entry.grfAccessMode != GRANT_ACCESS &&
+            entry.grfAccessMode != SET_ACCESS) {
+            continue;
+        }
+        DWORD rights = entry.grfAccessPermissions;
+        auto mapping = kFileMapping;
+        MapGenericMask(&rights, &mapping);
+        if ((rights & kDangerousRights) == 0U) continue;
+        if (entry.Trustee.TrusteeForm != TRUSTEE_IS_SID ||
+            entry.Trustee.ptstrName == nullptr) {
+            trusted = false;
+            break;
+        }
+        auto* sid = reinterpret_cast<PSID>(
+            entry.Trustee.ptstrName);
+        if (IsValidSid(sid) == FALSE ||
+            (EqualSid(sid, currentUser->data()) == FALSE &&
+             EqualSid(sid, systemSid.data()) == FALSE &&
+             EqualSid(sid, administratorsSid.data()) == FALSE)) {
+            trusted = false;
+            break;
+        }
+    }
+    if (entries != nullptr) (void)LocalFree(entries);
+    releaseDescriptor();
+    return trusted;
+}
+
 std::optional<std::wstring> finalHandlePath(HANDLE handle) {
     const auto flags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
     const auto required =
@@ -224,7 +393,8 @@ bool regularNewFile(HANDLE handle) noexcept {
 
 HANDLE openDirectoryNoDelete(const std::filesystem::path& path) noexcept {
     return CreateFileW(
-        path.c_str(), FILE_READ_ATTRIBUTES | DELETE,
+        path.c_str(),
+        GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
 }
@@ -245,6 +415,56 @@ bool closeDescriptor(int& descriptor) noexcept {
     const auto closing = std::exchange(descriptor, -1);
     return ::close(closing) == 0;
 }
+
+class ScopedDescriptor final {
+public:
+    ScopedDescriptor() = default;
+    explicit ScopedDescriptor(int descriptor) noexcept
+        : descriptor_(descriptor) {}
+    ~ScopedDescriptor() { (void)close(); }
+
+    ScopedDescriptor(ScopedDescriptor&& other) noexcept
+        : descriptor_(std::exchange(other.descriptor_, -1)) {}
+    ScopedDescriptor& operator=(ScopedDescriptor&& other) noexcept {
+        if (this == &other) return *this;
+        (void)close();
+        descriptor_ = std::exchange(other.descriptor_, -1);
+        return *this;
+    }
+
+    ScopedDescriptor(const ScopedDescriptor&) = delete;
+    ScopedDescriptor& operator=(const ScopedDescriptor&) = delete;
+
+    [[nodiscard]] int get() const noexcept { return descriptor_; }
+    [[nodiscard]] int release() noexcept {
+        return std::exchange(descriptor_, -1);
+    }
+    [[nodiscard]] bool close() noexcept {
+        return closeDescriptor(descriptor_);
+    }
+
+private:
+    int descriptor_{-1};
+};
+
+class ScopedDirectoryStream final {
+public:
+    explicit ScopedDirectoryStream(DIR* stream) noexcept : stream_(stream) {}
+    ~ScopedDirectoryStream() { (void)close(); }
+
+    ScopedDirectoryStream(const ScopedDirectoryStream&) = delete;
+    ScopedDirectoryStream& operator=(const ScopedDirectoryStream&) = delete;
+
+    [[nodiscard]] DIR* get() const noexcept { return stream_; }
+    [[nodiscard]] bool close() noexcept {
+        if (stream_ == nullptr) return true;
+        auto* closing = std::exchange(stream_, nullptr);
+        return ::closedir(closing) == 0;
+    }
+
+private:
+    DIR* stream_{nullptr};
+};
 
 bool directoryDescriptor(int descriptor, struct stat& information) noexcept {
     return ::fstat(descriptor, &information) == 0 &&
@@ -377,7 +597,7 @@ public:
 #ifdef _WIN32
         parentHandle_ = openDirectoryNoDelete(parent);
         if (parentHandle_ == INVALID_HANDLE_VALUE ||
-            !regularDirectory(parentHandle_)) {
+            !trustedPrivateDirectory(parentHandle_)) {
             return stagingError(
                 "avatar pack staging parent is unavailable",
                 "avatar.pack.staging.parent");
@@ -532,8 +752,13 @@ public:
         return FileWriter{handle};
 #else
         const auto& leaf = components->back();
-        const auto parentDescriptor =
-            directories_[parent.value()].descriptor;
+        int parentDescriptor = openDirectoryRelative(
+            directories_[parent.value()].relativePath);
+        if (parentDescriptor < 0) {
+            return stagingError(
+                "avatar pack staging directory verification failed",
+                "avatar.pack.staging.directory");
+        }
         files_.push_back(
             {.parentIndex = parent.value(),
              .name = leaf,
@@ -543,6 +768,7 @@ public:
             parentDescriptor, leaf.c_str(),
             O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
         if (descriptor < 0) {
+            (void)closeDescriptor(parentDescriptor);
             files_.pop_back();
             return stagingError(
                 "avatar pack staging file creation failed",
@@ -554,11 +780,19 @@ public:
             !sameObjectAt(parentDescriptor, leaf, information)) {
             int closing = descriptor;
             (void)closeDescriptor(closing);
+            (void)closeDescriptor(parentDescriptor);
             return stagingError(
                 "avatar pack staging file verification failed",
                 "avatar.pack.staging.file");
         }
         files_.back().identity = information;
+        if (!closeDescriptor(parentDescriptor)) {
+            int closing = descriptor;
+            (void)closeDescriptor(closing);
+            return stagingError(
+                "avatar pack staging directory close failed",
+                "avatar.pack.staging.identity");
+        }
         return FileWriter{descriptor};
 #endif
     }
@@ -687,7 +921,8 @@ public:
                                 "avatar.pack.staging.identity");
         }
         for (auto& file : files_) {
-            const auto parent = directories_[file.parentIndex].descriptor;
+            int parent = openDirectoryRelative(
+                directories_[file.parentIndex].relativePath);
             int readDescriptor = ::openat(
                 parent, file.name.c_str(),
                 O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
@@ -699,8 +934,15 @@ public:
                 !sameObject(information, *file.identity) ||
                 !sameObjectAt(parent, file.name, information)) {
                 (void)closeDescriptor(readDescriptor);
+                (void)closeDescriptor(parent);
                 return stagingError("avatar pack staging file identity changed",
                                     "avatar.pack.staging.identity");
+            }
+            if (!closeDescriptor(parent)) {
+                (void)closeDescriptor(readDescriptor);
+                return stagingError(
+                    "avatar pack staging directory close failed",
+                    "avatar.pack.staging.identity");
             }
             crypto_hash_sha256_state hash{};
             crypto_hash_sha256_init(&hash);
@@ -734,13 +976,6 @@ public:
             }
             file.sealedSize = total;
             crypto_hash_sha256_final(&hash, file.sealedHash.data());
-        }
-        for (std::size_t index = 1U; index < directories_.size(); ++index) {
-            if (!closeDescriptor(directories_[index].descriptor)) {
-                return stagingError(
-                    "avatar pack staging directory close failed",
-                    "avatar.pack.staging.identity");
-            }
         }
 #endif
         sealed_ = true;
@@ -849,32 +1084,14 @@ public:
                                 "avatar.pack.staging.identity");
         }
 #else
-        const auto components = pathComponents(file->relativePath);
-        if (!components.has_value()) {
-            return stagingError("avatar pack staging path is invalid",
-                                "avatar.pack.staging.path",
-                                ErrorCode::InvalidArgument);
-        }
-        int parent = ::dup(directories_.front().descriptor);
+        int parent = openDirectoryRelative(
+            directories_[file->parentIndex].relativePath);
         if (parent < 0) {
             return stagingError("avatar pack staging file read failed",
                                 "avatar.pack.staging.read");
         }
-        for (std::size_t index = 0U;
-             index + 1U < components->size(); ++index) {
-            int child = ::openat(
-                parent, (*components)[index].c_str(),
-                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-            (void)closeDescriptor(parent);
-            parent = child;
-            if (parent < 0) {
-                return stagingError(
-                    "avatar pack staging file identity changed",
-                    "avatar.pack.staging.identity");
-            }
-        }
         int readDescriptor = ::openat(
-            parent, components->back().c_str(),
+            parent, file->name.c_str(),
             O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
         struct stat information{};
         if (readDescriptor < 0 ||
@@ -882,7 +1099,7 @@ public:
             !S_ISREG(information.st_mode) || information.st_nlink != 1 ||
             !file->identity.has_value() ||
             !sameObject(information, *file->identity) ||
-            !sameObjectAt(parent, components->back(), information) ||
+            !sameObjectAt(parent, file->name, information) ||
             information.st_size < 0 ||
             static_cast<std::uint64_t>(information.st_size) !=
                 file->sealedSize ||
@@ -954,27 +1171,29 @@ public:
 #ifdef _WIN32
         for (auto iterator = files_.rbegin(); iterator != files_.rend();
              ++iterator) {
-            HANDLE current = CreateFileW(
+            ScopedHandle current{CreateFileW(
                 iterator->finalPath.c_str(),
                 FILE_READ_ATTRIBUTES | DELETE,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT,
-                nullptr);
-            const auto information = handleInformation(current);
-            const auto final = finalHandlePath(current);
+                nullptr)};
+            const auto information = handleInformation(current.get());
+            const auto final = finalHandlePath(current.get());
             FILE_DISPOSITION_INFO disposition{TRUE};
             const bool matches =
-                regularNewFile(current) && information.has_value() &&
+                regularNewFile(current.get()) && information.has_value() &&
                 iterator->identity.has_value() &&
                 identityOf(*information) == *iterator->identity &&
                 final.has_value() &&
                 equalPath(iterator->finalPath.native(), *final) &&
                 childPath(directories_.front().finalPath.native(), *final);
-            if (!matches ||
+            const bool disposed =
+                matches &&
                 SetFileInformationByHandle(
-                    current, FileDispositionInfo, &disposition,
-                    sizeof(disposition)) == FALSE ||
-                !closeHandle(current)) {
+                    current.get(), FileDispositionInfo, &disposition,
+                    sizeof(disposition)) != FALSE;
+            const bool closed = current.close();
+            if (!matches || !disposed || !closed) {
                 succeeded = false;
                 break;
             }
@@ -982,10 +1201,12 @@ public:
         if (succeeded) {
             for (auto iterator = directories_.rbegin();
                  iterator != directories_.rend(); ++iterator) {
-                HANDLE current = iterator->handle;
-                const bool borrowed = current != INVALID_HANDLE_VALUE;
-                if (!borrowed) {
-                    current = CreateFileW(
+                ScopedHandle current;
+                if (iterator->handle != INVALID_HANDLE_VALUE) {
+                    current = ScopedHandle{std::exchange(
+                        iterator->handle, INVALID_HANDLE_VALUE)};
+                } else {
+                    current = ScopedHandle{CreateFileW(
                         iterator->finalPath.c_str(),
                         FILE_READ_ATTRIBUTES | DELETE,
                         FILE_SHARE_READ | FILE_SHARE_WRITE |
@@ -993,13 +1214,15 @@ public:
                         nullptr, OPEN_EXISTING,
                         FILE_FLAG_OPEN_REPARSE_POINT |
                             FILE_FLAG_BACKUP_SEMANTICS,
-                        nullptr);
+                        nullptr)};
                 }
-                const auto information = handleInformation(current);
-                const auto final = finalHandlePath(current);
+                const auto information =
+                    handleInformation(current.get());
+                const auto final = finalHandlePath(current.get());
                 FILE_DISPOSITION_INFO disposition{TRUE};
                 const bool matches =
-                    regularDirectory(current) && information.has_value() &&
+                    regularDirectory(current.get()) &&
+                    information.has_value() &&
                     iterator->identity.has_value() &&
                     identityOf(*information) == *iterator->identity &&
                     final.has_value() &&
@@ -1007,14 +1230,9 @@ public:
                 const bool marked =
                     matches &&
                     SetFileInformationByHandle(
-                        current, FileDispositionInfo, &disposition,
+                        current.get(), FileDispositionInfo, &disposition,
                         sizeof(disposition)) != FALSE;
-                bool closed = true;
-                if (borrowed) {
-                    closed = closeHandle(iterator->handle);
-                } else {
-                    closed = closeHandle(current);
-                }
+                const bool closed = current.close();
                 if (!marked || !closed) {
                     succeeded = false;
                     break;
@@ -1083,7 +1301,8 @@ public:
         return succeeded ? core::ok() : Result<void>{cleanupError()};
     }
 
-    Result<void> promoteTo(const std::filesystem::path& finalPath) {
+    Result<PromotionOutcome> promoteTo(
+        const std::filesystem::path& finalPath) {
         if (!active_ || !sealed_ || directories_.empty() ||
             finalPath.empty() || finalPath.filename().empty() ||
             finalPath.filename() == "." || finalPath.filename() == "..") {
@@ -1091,8 +1310,7 @@ public:
                                 "avatar.pack.staging.state",
                                 ErrorCode::InvalidState);
         }
-        if (!rootIdentityMatches() || !treeIdentityMatches() ||
-            !flushTree()) {
+        if (!rootIdentityMatches()) {
             return promotionError();
         }
 #ifdef _WIN32
@@ -1104,7 +1322,7 @@ public:
             nullptr);
         const auto destinationParentFinal =
             finalHandlePath(destinationParent);
-        if (!regularDirectory(destinationParent) ||
+        if (!trustedPrivateDirectory(destinationParent) ||
             !destinationParentFinal.has_value()) {
             (void)closeHandle(destinationParent);
             return promotionErrorAt("destination parent");
@@ -1133,8 +1351,21 @@ public:
         rename->FileNameLength =
             static_cast<DWORD>(name.size() * sizeof(wchar_t));
         std::memcpy(rename->FileName, name.data(), rename->FileNameLength);
+        auto verifiedFiles = verifyWindowsTreeForPromotion();
+        if (!verifiedFiles.hasValue()) {
+            (void)closeHandle(destinationParent);
+            return verifiedFiles.error();
+        }
+        bool filesClosed = true;
+        for (auto& file : verifiedFiles.value()) {
+            const bool closed = file.close();
+            filesClosed = closed && filesClosed;
+        }
+        if (!filesClosed) {
+            (void)closeHandle(destinationParent);
+            return promotionErrorAt("integrity handles");
+        }
         auto& root = directories_.front();
-        const auto original = root.finalPath;
         if (SetFileInformationByHandle(
                 root.handle, FileRenameInfo, rename,
                 static_cast<DWORD>(renameBytes.size())) == FALSE) {
@@ -1145,30 +1376,12 @@ public:
                     ? ErrorCode::AlreadyExists
                     : ErrorCode::IoFailure);
         }
-        root.finalPath = destination;
-        const bool durable =
-            FlushFileBuffers(destinationParent) != FALSE;
-        if (!durable) {
-            const auto rollbackName = renamePath(original);
-            std::vector<std::uint8_t> rollbackBytes(
-                offsetof(FILE_RENAME_INFO, FileName) +
-                (rollbackName.size() + 1U) * sizeof(wchar_t));
-            auto* rollback =
-                reinterpret_cast<FILE_RENAME_INFO*>(rollbackBytes.data());
-            rollback->ReplaceIfExists = FALSE;
-            rollback->RootDirectory = nullptr;
-            rollback->FileNameLength =
-                static_cast<DWORD>(rollbackName.size() * sizeof(wchar_t));
-            std::memcpy(rollback->FileName, rollbackName.data(),
-                        rollback->FileNameLength);
-            if (SetFileInformationByHandle(
-                    root.handle, FileRenameInfo, rollback,
-                    static_cast<DWORD>(rollbackBytes.size())) != FALSE) {
-                root.finalPath = original;
-            }
-            (void)closeHandle(destinationParent);
-            return promotionErrorAt("destination durability");
-        }
+        active_ = false;
+        const auto outcome = detail::confirmPromotionDurability(
+            [this] { return FlushFileBuffers(parentHandle_) != FALSE; },
+            [destinationParent] {
+                return FlushFileBuffers(destinationParent) != FALSE;
+            });
         (void)closeHandle(destinationParent);
 #else
         struct stat parentInformation {};
@@ -1198,6 +1411,12 @@ public:
             (void)closeDescriptor(closing);
             return promotionError(ErrorCode::AlreadyExists);
         }
+        auto verified = verifyPosixTreeForPromotion();
+        if (!verified.hasValue()) {
+            int closing = destinationParent;
+            (void)closeDescriptor(closing);
+            return verified.error();
+        }
 #ifdef __linux__
         constexpr unsigned int kRenameNoReplace = 1U;
         const auto renamed = ::syscall(
@@ -1216,23 +1435,17 @@ public:
                 code == EEXIST ? ErrorCode::AlreadyExists
                                : ErrorCode::IoFailure);
         }
-        if (::fsync(destinationParent) != 0) {
-#ifdef __linux__
-            (void)::syscall(
-                SYS_renameat2, destinationParent, destinationName.c_str(),
-                parentDescriptor_, directories_.front().name.c_str(),
-                kRenameNoReplace);
-#endif
-            int closing = destinationParent;
-            (void)closeDescriptor(closing);
-            return promotionError();
-        }
+        active_ = false;
+        const auto outcome = detail::confirmPromotionDurability(
+            [this] { return ::fsync(parentDescriptor_) == 0; },
+            [destinationParent] {
+                return ::fsync(destinationParent) == 0;
+            });
         int closing = destinationParent;
         (void)closeDescriptor(closing);
 #endif
         closeAuthority();
-        active_ = false;
-        return core::ok();
+        return outcome;
     }
 
 private:
@@ -1338,125 +1551,351 @@ private:
 #endif
     }
 
-    bool treeIdentityMatches() const {
 #ifdef _WIN32
-        return std::all_of(directories_.begin(), directories_.end(),
-                           [this](const auto& directory) {
-                               return pathMatches(directory);
-                           }) &&
-               std::all_of(
-                   files_.begin(), files_.end(),
-                   [this](const auto& file) { return pathMatches(file); });
-#else
-        for (std::size_t index = 0U; index < directories_.size(); ++index) {
-            const auto& directory = directories_[index];
-            int current =
-                index == 0U
-                    ? ::dup(directories_.front().descriptor)
-                    : openDirectoryRelative(directory.relativePath);
-            struct stat information {};
-            const bool matches =
-                current >= 0 && directory.identity.has_value() &&
-                directoryDescriptor(current, information) &&
-                sameObject(information, *directory.identity);
-            (void)closeDescriptor(current);
-            if (!matches) return false;
+    bool verifyPromotionFile(HANDLE handle,
+                             const FileRecord& file) const {
+        const auto information = handleInformation(handle);
+        const auto final = finalHandlePath(handle);
+        LARGE_INTEGER size{};
+        if (!regularNewFile(handle) || !information.has_value() ||
+            !file.identity.has_value() ||
+            identityOf(*information) != *file.identity ||
+            !final.has_value() ||
+            !equalPath(file.finalPath.native(), *final) ||
+            !childPath(directories_.front().finalPath.native(), *final) ||
+            GetFileSizeEx(handle, &size) == FALSE || size.QuadPart < 0 ||
+            static_cast<std::uint64_t>(size.QuadPart) != file.sealedSize) {
+            return false;
         }
-        for (const auto& file : files_) {
-            int parent = openDirectoryRelative(
-                directories_[file.parentIndex].relativePath);
-            struct stat information {};
-            const bool matches =
-                parent >= 0 && file.identity.has_value() &&
-                ::fstatat(parent, file.name.c_str(), &information,
-                          AT_SYMLINK_NOFOLLOW) == 0 &&
-                S_ISREG(information.st_mode) && information.st_nlink == 1 &&
-                sameObject(information, *file.identity);
-            (void)closeDescriptor(parent);
-            if (!matches) return false;
+        LARGE_INTEGER beginning{};
+        if (SetFilePointerEx(handle, beginning, nullptr, FILE_BEGIN) ==
+            FALSE) {
+            return false;
         }
-        return true;
-#endif
+        crypto_hash_sha256_state hash{};
+        if (crypto_hash_sha256_init(&hash) != 0) return false;
+        std::array<unsigned char, 64U * 1024U> buffer{};
+        std::uint64_t total = 0U;
+        for (;;) {
+            DWORD received = 0U;
+            if (ReadFile(handle, buffer.data(),
+                         static_cast<DWORD>(buffer.size()), &received,
+                         nullptr) == FALSE) {
+                return false;
+            }
+            if (received == 0U) break;
+            if (crypto_hash_sha256_update(&hash, buffer.data(), received) !=
+                0) {
+                return false;
+            }
+            total += received;
+        }
+        std::array<unsigned char, crypto_hash_sha256_BYTES> actualHash{};
+        if (crypto_hash_sha256_final(&hash, actualHash.data()) != 0)
+            return false;
+        const auto after = handleInformation(handle);
+        LARGE_INTEGER afterSize{};
+        return after.has_value() &&
+               identityOf(*after) == *file.identity &&
+               GetFileSizeEx(handle, &afterSize) != FALSE &&
+               afterSize.QuadPart == size.QuadPart &&
+               total == file.sealedSize &&
+               sodium_memcmp(actualHash.data(), file.sealedHash.data(),
+                             actualHash.size()) == 0 &&
+               FlushFileBuffers(handle) != FALSE;
     }
 
-    bool flushTree() const noexcept {
-#ifdef _WIN32
-        for (const auto& file : files_) {
-            HANDLE current = CreateFileW(
-                file.finalPath.c_str(),
-                GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT,
-                nullptr);
-            const auto information = handleInformation(current);
-            const auto final = finalHandlePath(current);
-            const bool flushed =
-                regularNewFile(current) && information.has_value() &&
-                file.identity.has_value() &&
-                identityOf(*information) == *file.identity &&
-                final.has_value() &&
-                equalPath(file.finalPath.native(), *final) &&
-                FlushFileBuffers(current) != FALSE;
-            const bool closed = closeHandle(current);
-            if (!flushed || !closed) return false;
+    Result<std::vector<ScopedHandle>>
+    verifyWindowsTreeForPromotion() const {
+        struct ExpectedNode final {
+            bool directory{};
+            std::size_t index{};
+            bool seen{};
+        };
+
+        std::map<std::wstring, ExpectedNode, WindowsPathLess> expected;
+        for (std::size_t index = 1U; index < directories_.size(); ++index) {
+            const auto [iterator, inserted] = expected.emplace(
+                directories_[index].finalPath.native(),
+                ExpectedNode{.directory = true, .index = index});
+            (void)iterator;
+            if (!inserted) return promotionErrorAt("topology");
         }
-        for (const auto& directory : directories_) {
-            HANDLE current = CreateFileW(
-                directory.finalPath.c_str(),
-                GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                nullptr, OPEN_EXISTING,
-                FILE_FLAG_OPEN_REPARSE_POINT |
-                    FILE_FLAG_BACKUP_SEMANTICS,
-                nullptr);
-            const auto information = handleInformation(current);
-            const auto final = finalHandlePath(current);
-            const bool flushed =
-                regularDirectory(current) && information.has_value() &&
-                directory.identity.has_value() &&
-                identityOf(*information) == *directory.identity &&
-                final.has_value() &&
-                equalPath(directory.finalPath.native(), *final) &&
-                FlushFileBuffers(current) != FALSE;
-            const bool closed = closeHandle(current);
-            if (!flushed || !closed) return false;
+        for (std::size_t index = 0U; index < files_.size(); ++index) {
+            const auto [iterator, inserted] = expected.emplace(
+                files_[index].finalPath.native(),
+                ExpectedNode{.directory = false, .index = index});
+            (void)iterator;
+            if (!inserted) return promotionErrorAt("topology");
         }
-        return true;
-#else
-        for (const auto& file : files_) {
-            int parent = openDirectoryRelative(
-                directories_[file.parentIndex].relativePath);
-            int current =
-                parent < 0
-                    ? -1
-                    : ::openat(parent, file.name.c_str(),
-                               O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-            struct stat information {};
-            const bool flushed =
-                current >= 0 && file.identity.has_value() &&
-                ::fstat(current, &information) == 0 &&
-                S_ISREG(information.st_mode) &&
-                information.st_nlink == 1 &&
-                sameObject(information, *file.identity) &&
-                ::fsync(current) == 0;
-            (void)closeDescriptor(current);
-            (void)closeDescriptor(parent);
-            if (!flushed) return false;
+
+        std::vector<ScopedHandle> verifiedFiles;
+        verifiedFiles.reserve(files_.size());
+        auto enumerate = [&](bool verifyContents) {
+            for (auto& [path, node] : expected) {
+                (void)path;
+                node.seen = false;
+            }
+            std::vector<std::filesystem::path> pending{
+                directories_.front().finalPath};
+            while (!pending.empty()) {
+                auto directory = std::move(pending.back());
+                pending.pop_back();
+                WIN32_FIND_DATAW data{};
+                const auto pattern = directory / L"*";
+                ScopedFindHandle found{
+                    FindFirstFileW(pattern.c_str(), &data)};
+                if (found.get() == INVALID_HANDLE_VALUE) {
+                    if (GetLastError() == ERROR_FILE_NOT_FOUND) continue;
+                    return false;
+                }
+                for (;;) {
+                    const std::wstring_view name{data.cFileName};
+                    if (name != L"." && name != L"..") {
+                        const auto actual = directory / data.cFileName;
+                        const bool isDirectory =
+                            (data.dwFileAttributes &
+                             FILE_ATTRIBUTE_DIRECTORY) != 0U;
+                        const bool isReparse =
+                            (data.dwFileAttributes &
+                             FILE_ATTRIBUTE_REPARSE_POINT) != 0U;
+                        const auto expectedNode =
+                            expected.find(actual.native());
+                        if (isReparse ||
+                            expectedNode == expected.end() ||
+                            expectedNode->second.seen ||
+                            expectedNode->second.directory != isDirectory) {
+                            return false;
+                        }
+                        auto& node = expectedNode->second;
+                        node.seen = true;
+                        if (isDirectory) {
+                            ScopedHandle current{CreateFileW(
+                                actual.c_str(),
+                                verifyContents
+                                    ? GENERIC_READ | GENERIC_WRITE |
+                                          FILE_READ_ATTRIBUTES
+                                    : FILE_READ_ATTRIBUTES,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                    FILE_SHARE_DELETE,
+                                nullptr, OPEN_EXISTING,
+                                FILE_FLAG_OPEN_REPARSE_POINT |
+                                    FILE_FLAG_BACKUP_SEMANTICS,
+                                nullptr)};
+                            const auto information =
+                                handleInformation(current.get());
+                            const auto final =
+                                finalHandlePath(current.get());
+                            const auto& record =
+                                directories_[node.index];
+                            if (!regularDirectory(current.get()) ||
+                                !information.has_value() ||
+                                !record.identity.has_value() ||
+                                identityOf(*information) !=
+                                    *record.identity ||
+                                !final.has_value() ||
+                                !equalPath(record.finalPath.native(),
+                                           *final) ||
+                                (verifyContents &&
+                                 FlushFileBuffers(current.get()) == FALSE)) {
+                                return false;
+                            }
+                            pending.push_back(actual);
+                        } else if (verifyContents) {
+                            ScopedHandle current{CreateFileW(
+                                actual.c_str(),
+                                GENERIC_READ | GENERIC_WRITE |
+                                    FILE_READ_ATTRIBUTES,
+                                FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                FILE_FLAG_OPEN_REPARSE_POINT |
+                                    FILE_FLAG_SEQUENTIAL_SCAN,
+                                nullptr)};
+                            if (!current.valid() ||
+                                !verifyPromotionFile(
+                                    current.get(),
+                                    files_[node.index])) {
+                                return false;
+                            }
+                            verifiedFiles.push_back(std::move(current));
+                        }
+                    }
+                    if (FindNextFileW(found.get(), &data) == FALSE) {
+                        if (GetLastError() != ERROR_NO_MORE_FILES)
+                            return false;
+                        break;
+                    }
+                }
+            }
+            return std::all_of(
+                expected.begin(), expected.end(),
+                [](const auto& item) { return item.second.seen; });
+        };
+
+        if (!rootIdentityMatches() ||
+            FlushFileBuffers(directories_.front().handle) == FALSE ||
+            !enumerate(true) || verifiedFiles.size() != files_.size() ||
+            !enumerate(false) || !rootIdentityMatches()) {
+            return promotionErrorAt("integrity");
         }
-        for (const auto& directory : directories_) {
-            int current = openDirectoryRelative(directory.relativePath);
-            struct stat information {};
-            const bool flushed =
-                current >= 0 && directory.identity.has_value() &&
-                directoryDescriptor(current, information) &&
-                sameObject(information, *directory.identity) &&
-                ::fsync(current) == 0;
-            (void)closeDescriptor(current);
-            if (!flushed) return false;
-        }
-        return true;
-#endif
+        return verifiedFiles;
     }
+#else
+    Result<void> verifyPosixTreeForPromotion() const {
+        struct ExpectedNode final {
+            bool directory{};
+            std::size_t index{};
+            bool seen{};
+        };
+
+        std::map<std::string, ExpectedNode> expected;
+        for (std::size_t index = 1U; index < directories_.size(); ++index) {
+            const auto [iterator, inserted] = expected.emplace(
+                directories_[index].relativePath,
+                ExpectedNode{.directory = true, .index = index});
+            (void)iterator;
+            if (!inserted) return promotionErrorAt("topology");
+        }
+        for (std::size_t index = 0U; index < files_.size(); ++index) {
+            const auto [iterator, inserted] = expected.emplace(
+                files_[index].relativePath,
+                ExpectedNode{.directory = false, .index = index});
+            (void)iterator;
+            if (!inserted) return promotionErrorAt("topology");
+        }
+
+        auto enumerate = [&](bool verifyContents) {
+            for (auto& [path, node] : expected) {
+                (void)path;
+                node.seen = false;
+            }
+            std::vector<std::string> pending{std::string{}};
+            while (!pending.empty()) {
+                auto currentPath = std::move(pending.back());
+                pending.pop_back();
+                ScopedDescriptor current{
+                    openDirectoryRelative(currentPath)};
+                if (current.get() < 0) return false;
+                ScopedDirectoryStream stream{
+                    ::fdopendir(current.release())};
+                if (stream.get() == nullptr) return false;
+                for (;;) {
+                    errno = 0;
+                    auto* entry = ::readdir(stream.get());
+                    if (entry == nullptr) {
+                        if (errno != 0) return false;
+                        break;
+                    }
+                    const std::string_view name{entry->d_name};
+                    if (name == "." || name == "..") continue;
+                    const auto relative =
+                        currentPath.empty()
+                            ? std::string{name}
+                            : currentPath + "/" + std::string{name};
+                    const auto expectedNode = expected.find(relative);
+                    struct stat information {};
+                    if (expectedNode == expected.end() ||
+                        expectedNode->second.seen ||
+                        ::fstatat(::dirfd(stream.get()), entry->d_name,
+                                  &information,
+                                  AT_SYMLINK_NOFOLLOW) != 0) {
+                        return false;
+                    }
+                    const bool isDirectory =
+                        S_ISDIR(information.st_mode);
+                    const bool isFile = S_ISREG(information.st_mode);
+                    auto& node = expectedNode->second;
+                    if ((!isDirectory && !isFile) ||
+                        node.directory != isDirectory) {
+                        return false;
+                    }
+                    node.seen = true;
+                    if (isDirectory) {
+                        const auto& record = directories_[node.index];
+                        ScopedDescriptor child{::openat(
+                            ::dirfd(stream.get()), entry->d_name,
+                            O_RDONLY | O_DIRECTORY | O_NOFOLLOW |
+                                O_CLOEXEC)};
+                        struct stat opened {};
+                        if (child.get() < 0 ||
+                            !record.identity.has_value() ||
+                            !directoryDescriptor(child.get(), opened) ||
+                            !sameObject(opened, information) ||
+                            !sameObject(opened, *record.identity) ||
+                            (verifyContents &&
+                             ::fsync(child.get()) != 0)) {
+                            return false;
+                        }
+                        pending.push_back(relative);
+                        continue;
+                    }
+                    const auto& record = files_[node.index];
+                    ScopedDescriptor file{::openat(
+                        ::dirfd(stream.get()), entry->d_name,
+                        O_RDONLY | O_NOFOLLOW | O_CLOEXEC)};
+                    struct stat opened {};
+                    if (file.get() < 0 ||
+                        !record.identity.has_value() ||
+                        ::fstat(file.get(), &opened) != 0 ||
+                        !S_ISREG(opened.st_mode) ||
+                        opened.st_nlink != 1 ||
+                        opened.st_size < 0 ||
+                        !sameObject(opened, information) ||
+                        !sameObject(opened, *record.identity) ||
+                        static_cast<std::uint64_t>(opened.st_size) !=
+                            record.sealedSize) {
+                        return false;
+                    }
+                    if (!verifyContents) continue;
+                    crypto_hash_sha256_state hash {};
+                    if (crypto_hash_sha256_init(&hash) != 0)
+                        return false;
+                    std::array<unsigned char, 64U * 1024U> buffer {};
+                    std::uint64_t total = 0U;
+                    for (;;) {
+                        const auto received = ::read(
+                            file.get(), buffer.data(), buffer.size());
+                        if (received < 0 && errno == EINTR) continue;
+                        if (received < 0) return false;
+                        if (received == 0) break;
+                        if (crypto_hash_sha256_update(
+                                &hash, buffer.data(),
+                                static_cast<unsigned long long>(
+                                    received)) != 0) {
+                            return false;
+                        }
+                        total += static_cast<std::uint64_t>(received);
+                    }
+                    std::array<unsigned char,
+                               crypto_hash_sha256_BYTES>
+                        actualHash {};
+                    struct stat after {};
+                    if (crypto_hash_sha256_final(
+                            &hash, actualHash.data()) != 0 ||
+                        ::fstat(file.get(), &after) != 0 ||
+                        !sameObject(after, *record.identity) ||
+                        after.st_size != opened.st_size ||
+                        total != record.sealedSize ||
+                        sodium_memcmp(actualHash.data(),
+                                      record.sealedHash.data(),
+                                      actualHash.size()) != 0 ||
+                        ::fsync(file.get()) != 0) {
+                        return false;
+                    }
+                }
+                if (!stream.close()) return false;
+            }
+            return std::all_of(
+                expected.begin(), expected.end(),
+                [](const auto& item) { return item.second.seen; });
+        };
+
+        if (!enumerate(true) || !enumerate(false) ||
+            !rootIdentityMatches()) {
+            return promotionErrorAt("integrity");
+        }
+        return core::ok();
+    }
+#endif
 
     bool closeAuthority() noexcept {
         bool succeeded = true;
@@ -1479,19 +1918,47 @@ private:
             return -1;
         }
         int current = ::dup(directories_.front().descriptor);
-        if (current < 0 || relativePath.empty()) return current;
+        struct stat rootInformation {};
+        if (current < 0 ||
+            !directories_.front().identity.has_value() ||
+            !directoryDescriptor(current, rootInformation) ||
+            !sameObject(rootInformation,
+                        *directories_.front().identity)) {
+            (void)closeDescriptor(current);
+            return -1;
+        }
+        if (relativePath.empty()) return current;
         const auto components = pathComponents(relativePath);
         if (!components.has_value()) {
             (void)closeDescriptor(current);
             return -1;
         }
+        std::string key;
         for (const auto& component : *components) {
+            if (!key.empty()) key.push_back('/');
+            key += component;
+            const auto expected = directoryIndexes_.find(key);
+            if (expected == directoryIndexes_.end() ||
+                !directories_[expected->second].identity.has_value()) {
+                (void)closeDescriptor(current);
+                return -1;
+            }
             int child = ::openat(
                 current, component.c_str(),
                 O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            struct stat information {};
+            const bool matches =
+                child >= 0 &&
+                directoryDescriptor(child, information) &&
+                sameObject(
+                    information,
+                    *directories_[expected->second].identity);
             (void)closeDescriptor(current);
             current = child;
-            if (current < 0) break;
+            if (!matches) {
+                (void)closeDescriptor(current);
+                return -1;
+            }
         }
         return current;
     }
@@ -1547,8 +2014,13 @@ private:
             created.finalPath = std::filesystem::path{*final};
             created.identity = identityOf(*information);
 #else
-            const auto parentDescriptor =
-                directories_[current].descriptor;
+            int parentDescriptor = openDirectoryRelative(
+                directories_[current].relativePath);
+            if (parentDescriptor < 0) {
+                return stagingError(
+                    "avatar pack staging directory verification failed",
+                    "avatar.pack.staging.directory");
+            }
             directories_.push_back(
                 {.parentIndex = current,
                  .name = components[index],
@@ -1558,24 +2030,36 @@ private:
             if (::mkdirat(parentDescriptor, components[index].c_str(),
                           0700) != 0) {
                 directories_.pop_back();
+                (void)closeDescriptor(parentDescriptor);
                 return stagingError(
                     "avatar pack staging directory creation failed",
                     "avatar.pack.staging.directory");
             }
             auto& created = directories_.back();
-            created.descriptor = ::openat(
+            int createdDescriptor = ::openat(
                 parentDescriptor, created.name.c_str(),
                 O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
             struct stat information {};
-            if (created.descriptor < 0 ||
-                !directoryDescriptor(created.descriptor, information) ||
+            if (createdDescriptor < 0 ||
+                !directoryDescriptor(createdDescriptor, information) ||
                 !sameObjectAt(parentDescriptor, created.name,
                               information)) {
+                (void)closeDescriptor(createdDescriptor);
+                (void)closeDescriptor(parentDescriptor);
                 return stagingError(
                     "avatar pack staging directory verification failed",
                     "avatar.pack.staging.directory");
             }
             created.identity = information;
+            const bool childClosed =
+                closeDescriptor(createdDescriptor);
+            const bool parentClosed =
+                closeDescriptor(parentDescriptor);
+            if (!childClosed || !parentClosed) {
+                return stagingError(
+                    "avatar pack staging directory close failed",
+                    "avatar.pack.staging.identity");
+            }
 #endif
             current = directories_.size() - 1U;
             directoryIndexes_.emplace(key, current);
@@ -1733,7 +2217,7 @@ Result<void> AvatarPackStaging::cleanup() noexcept {
     }
 }
 
-Result<void> AvatarPackStaging::promoteTo(
+Result<PromotionOutcome> AvatarPackStaging::promoteTo(
     const std::filesystem::path& finalPath) && noexcept {
     try {
         if (!implementation_) {

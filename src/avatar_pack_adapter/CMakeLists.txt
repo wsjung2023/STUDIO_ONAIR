@@ -2,6 +2,7 @@ cs_add_qtfree_library(cs_avatar_pack_adapter
     SOURCES
         AvatarPackArchive.h
         AvatarPackArchive.cpp
+        AvatarPackPromotionInternal.h
         AvatarPackStaging.h
         AvatarPackStaging.cpp
         SodiumSignatureVerifier.h
@@ -14,6 +15,10 @@ cs_add_qtfree_library(cs_avatar_pack_adapter
         miniz
         Sodium::Sodium
 )
+
+if(WIN32)
+    target_link_libraries(cs_avatar_pack_adapter PRIVATE advapi32)
+endif()
 
 set_target_properties(cs_avatar_pack_adapter PROPERTIES
     AUTOMOC OFF

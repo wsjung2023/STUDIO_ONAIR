@@ -54,10 +54,18 @@ The public lease contract is:
   files through retained OS capabilities with no-follow and identity checks;
 - `cleanup()` explicitly removes owned content and returns a stable
   `avatar.pack.staging.cleanup` I/O error when ownership cannot be proved;
-- `promoteTo(finalPath) &&` flushes the full tree, validates the destination
-  parent, performs a no-replace atomic rename through retained source
-  authority, flushes the destination parent, and disarms cleanup only after
-  success;
+- `promoteTo(finalPath) &&` returns `Result<PromotionOutcome>`. Before rename
+  it enumerates the actual tree, requires exact equality with sealed topology,
+  revalidates every stored identity/size/SHA-256, flushes the tree, validates
+  the destination parent, and performs a no-replace atomic rename through
+  retained source authority;
+- pre-rename failure is an ordinary error: no destination is published and the
+  lease remains active for retry;
+- rename success consumes the lease irrevocably. Both source and destination
+  parents are flushed. `PromotionOutcome::Durable` means both confirmations
+  succeeded; `PromotionOutcome::Indeterminate` means at least one failed, the
+  destination may already exist, rollback is forbidden, and startup catalog
+  reconciliation is required;
 - move construction and move assignment transfer ownership, allowing Task 6
   to accept and extend the capability for secure promotion without converting
   it back to a path.
@@ -66,17 +74,30 @@ On Windows, retained root and parent handles include delete authority.
 Lease reads reopen files beneath the verified root and require exact
 final-handle identity and containment. Cleanup opens each recorded object with
 delete authority, verifies its stored identity, and applies handle-relative
-disposition deepest-first. Promotion renames the retained root handle with
-no-replace semantics.
+disposition deepest-first. Each locally opened cleanup handle is owned by a
+scope guard, so identity or disposition failure cannot leak it. Promotion
+accepts only current-user-owned staging and destination parents whose DACL
+grants dangerous mutation rights only to that user, LocalSystem, or
+Administrators. It enumerates the full tree and holds every verified expected
+file handle without write/delete sharing through content verification, then
+performs a final topology pass. Windows cannot rename an ancestor while those
+child handles deny delete sharing, so they are closed immediately before the
+root-handle rename. A malicious process running as the same user is explicitly
+outside this trusted-private boundary.
 
 On POSIX, the supplied staging parent is accepted only when it is owned by the
 effective user, is a directory, and has no group/other access bits. Reads
 reopen with `openat` and `O_NOFOLLOW`, then verify identity and content hash.
 Cleanup uses retained root/parent descriptors and refuses to unlink the root
 name if the trusted-private parent or root identity no longer matches.
-Promotion opens and validates a trusted destination parent and uses
-`renameat2(..., RENAME_NOREPLACE)` where available; a platform without an
-atomic no-replace primitive fails closed.
+Construction retains only parent/root descriptors; child traversal is reopened
+with `openat`/`O_NOFOLLOW`, identity-checked, and closed per operation.
+Promotion enumerates and hashes relative to the retained root descriptor,
+opens and validates a trusted destination parent, and uses
+`renameat2(..., RENAME_NOREPLACE)` where available. A platform without an
+atomic no-replace primitive fails closed. The trusted-private same-euid
+contract is the POSIX exclusion boundary while enumeration and hashing run;
+a malicious process with the same effective uid is explicitly outside it.
 
 Before cleanup touches content, the current `parent/name` object must have the
 same Windows file identity or POSIX device/inode as the retained root. A
@@ -123,13 +144,17 @@ Real local fixtures, without production hooks or filesystem mocks, cover:
 - repeated cleanup replacement races preserving every replacement;
 - successful no-replace promotion, existing-destination rejection, unsafe
   destination-parent rejection, and retry after failed promotion;
+- known-file mutation, unknown file/directory topology, and a concurrent
+  mutation handle preventing promotion without publishing a destination;
+- deterministic source/destination durability state-machine coverage proving
+  both flushes are attempted and any failure yields `Indeterminate`;
 - compile-time absence of `displayPath()` and rvalue-only promotion;
 - a valid-shape 10,000-entry staging tree without one retained descriptor per
-  entry;
-- cleanup failure closing retained root/parent authority without a handle
-  leak;
+  entry and successful Windows promotion at the 10,000-entry upper bound;
+- cleanup identity and disposition failure preserving replacements/content
+  while leaving process handle count unchanged;
 - compile-time and runtime no-exception public contracts;
-- all 36 validator/fuzz tests, repeated focused gates, MSVC ASan, the enabled
+- all 45 validator/fuzz tests, repeated focused gates, MSVC ASan, the enabled
   full build, and the complete CTest matrix.
 
 No test-only production hook, fake filesystem, path-authority fallback, or
