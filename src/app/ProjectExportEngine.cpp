@@ -21,8 +21,11 @@ core::AppError unsupported() {
 
 }  // namespace
 
-ProjectExportEngine::ProjectExportEngine(std::filesystem::path mltRuntimeRoot)
-    : mltRuntimeRoot_(std::move(mltRuntimeRoot)) {}
+ProjectExportEngine::ProjectExportEngine(
+    std::filesystem::path mltRuntimeRoot,
+    ExportLoudnessSettingProvider loudnessSettingProvider)
+    : mltRuntimeRoot_(std::move(mltRuntimeRoot)),
+      loudnessSettingProvider_(std::move(loudnessSettingProvider)) {}
 
 core::Result<void> ProjectExportEngine::load(
     const edit_engine::TimelineSnapshot&) {
@@ -72,10 +75,15 @@ ProjectExportEngine::render(const edit_engine::RenderRequest& request) {
     if (!recovered.hasValue()) return recovered.error();
     auto lifecycle =
         std::make_shared<project_store::PersistentRenderJobLifecycle>(store);
+    // Resolve the loudness setting once per render so a user toggle takes effect
+    // on the next export without rebuilding the engine.
+    std::optional<audio_dsp::ExportLoudnessAnalyzer::Parameters> loudness;
+    if (loudnessSettingProvider_) loudness = loudnessSettingProvider_();
     mlt_adapter::MltEditEngine engine{{.runtimeRoot = mltRuntimeRoot_,
                                       .previewWidth = request.preset().width(),
                                       .previewHeight = request.preset().height(),
-                                      .renderLifecycle = lifecycle}};
+                                      .renderLifecycle = lifecycle,
+                                      .exportLoudness = loudness}};
     return engine.render(request);
 }
 

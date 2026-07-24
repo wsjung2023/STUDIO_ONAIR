@@ -67,6 +67,8 @@
 #endif
 #if defined(CS_APP_ENABLE_MLT)
 #include "app/ProjectExportEngine.h"
+#include <QSettings>
+#include <optional>
 #include "mlt_adapter/MltEditEngine.h"
 #endif
 
@@ -402,7 +404,24 @@ int main(int argc, char* argv[]) {
                 .previewHeight = 540,
                 .audioProcessingChain = std::move(audioProcessingChain)});
     std::unique_ptr<creator::edit_engine::IEditEngine> exportEngine =
-        std::make_unique<creator::app::ProjectExportEngine>(mltRuntimeRoot);
+        std::make_unique<creator::app::ProjectExportEngine>(
+            mltRuntimeRoot,
+            []() -> std::optional<
+                     creator::audio_dsp::ExportLoudnessAnalyzer::Parameters> {
+                // Read per export so the ExportController toggle takes effect on
+                // the next render. Off by default — loudness normalization is
+                // opt-in post-processing (음질은 컨트롤/커스텀 영역).
+                QSettings settings;
+                if (!settings
+                         .value(QStringLiteral("export/loudnessNormalization"),
+                                false)
+                         .toBool()) {
+                    return std::nullopt;
+                }
+                // Streaming/broadcast default: -14 LUFS integrated, -1 dBTP true
+                // peak (ExportLoudnessAnalyzer::Parameters defaults).
+                return creator::audio_dsp::ExportLoudnessAnalyzer::Parameters{};
+            });
 #else
     std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
         std::make_unique<creator::edit_engine::UnavailableEditEngine>();

@@ -24,16 +24,19 @@
 
 #include <QGuiApplication>
 #include <QObject>
+#include <QString>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -301,7 +304,19 @@ int main(int argc, char** argv) {
     }
 
     // ---- STEP 3: EXPORT the edited timeline to a real H.264/AAC MP4 ---------
-    ProjectExportEngine exportEngine{fs::path{CS_DRIVER_MLT_ROOT}};
+    // Optional two-pass loudness normalization, gated on CS_EXPORT_LOUDNESS=1 so
+    // this driver can measure the exported program's loudness with the feature on
+    // vs off on the same package (target -14 LUFS / -1 dBTP defaults).
+    ProjectExportEngine exportEngine{
+        fs::path{CS_DRIVER_MLT_ROOT},
+        []() -> std::optional<
+                 creator::audio_dsp::ExportLoudnessAnalyzer::Parameters> {
+            if (qEnvironmentVariable("CS_EXPORT_LOUDNESS") !=
+                QStringLiteral("1")) {
+                return std::nullopt;
+            }
+            return creator::audio_dsp::ExportLoudnessAnalyzer::Parameters{};
+        }};
     std::error_code mkdirError;
     fs::create_directories(destination.parent_path(), mkdirError);
     auto request = creator::edit_engine::RenderRequest::create(

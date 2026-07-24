@@ -23,6 +23,12 @@ class ExportController final : public QObject {
     Q_PROPERTY(int state READ state NOTIFY progressChanged)
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
     Q_PROPERTY(bool ready READ ready NOTIFY sourceChanged)
+    /// User-controlled export loudness normalization (음량 표준화) to a broadcast
+    /// target (-14 LUFS). Off by default; persisted in QSettings and read by the
+    /// export engine per render. This is the "control/custom" surface for the
+    /// otherwise-raw exported audio.
+    Q_PROPERTY(bool loudnessNormalization READ loudnessNormalization WRITE
+                   setLoudnessNormalization NOTIFY loudnessNormalizationChanged)
 
 public:
     explicit ExportController(std::unique_ptr<edit_engine::IEditEngine> engine,
@@ -40,6 +46,8 @@ public:
     [[nodiscard]] int state() const noexcept { return state_; }
     [[nodiscard]] QString statusMessage() const { return statusMessage_; }
     [[nodiscard]] bool ready() const noexcept { return source_.has_value(); }
+    [[nodiscard]] bool loudnessNormalization() const;
+    void setLoudnessNormalization(bool enabled);
 
     Q_INVOKABLE void startExport();
     Q_INVOKABLE void exportTo(const QUrl& destination,
@@ -52,6 +60,7 @@ signals:
     void progressChanged();
     void statusMessageChanged();
     void sourceChanged();
+    void loudnessNormalizationChanged();
     void exportFinished(bool success);
 
 private:

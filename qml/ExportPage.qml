@@ -152,6 +152,37 @@ Pane {
                         }
                     }
                 }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: theme.spaceLg
+                    Label {
+                        text: qsTr("Audio loudness")
+                        color: theme.textSecondary
+                        font.family: theme.fontFamily
+                        font.pixelSize: theme.sizeBody
+                        Layout.preferredWidth: 120
+                    }
+                    CheckBox {
+                        id: loudnessNormalization
+                        objectName: "exportLoudnessNormalization"
+                        text: qsTr("Normalize to −14 LUFS (broadcast/streaming standard). Off keeps the original recorded levels.")
+                        enabled: !root.controller.busy
+                        checked: root.controller.loudnessNormalization
+                        onToggled: root.controller.loudnessNormalization = checked
+                        font.family: theme.fontFamily
+                        font.pixelSize: theme.sizeBody
+                        Material.accent: theme.accent
+                        contentItem: Text {
+                            text: loudnessNormalization.text
+                            color: theme.textSecondary
+                            font: loudnessNormalization.font
+                            leftPadding: loudnessNormalization.indicator.width + theme.spaceSm
+                            verticalAlignment: Text.AlignVCenter
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+                }
             }
 
             ProgressBar {

@@ -1,9 +1,14 @@
 #include "mlt_adapter/MltEditEngine.h"
 
 #include "core/AppError.h"
+#include "core/Timebase.h"
 #include "core/Uuid.h"
 #include "audio_dsp/AudioBuffer.h"
 #include "audio_dsp/AudioFormat.h"
+#include "audio_dsp/AudioProcessingChain.h"
+#include "audio_dsp/GainProcessor.h"
+#include "audio_dsp/LimiterProcessor.h"
+#include "audio_dsp/LoudnessMeter.h"
 #include "ffmpeg_adapter/FfmpegContainerRemux.h"
 #include "ffmpeg_adapter/FfmpegMediaProbe.h"
 #include "mlt_adapter/ExportEncoderProbe.h"
@@ -1321,6 +1326,39 @@ class MltEditEngine::Impl final {
             graph->filters.push_back(std::move(creatorFilter).value());
             graph->audioProcessingFilterContexts.push_back(contextObserver);
         }
+        // Export loudness normalization, pass 2: apply the static gain that pass 1
+        // decided, then a true-peak limiter at the ceiling, over the fully-mixed
+        // 48 kHz program. Attached only on the export graph (the export path sets
+        // exportLoudnessDecision_ between its two passes) and only when the program
+        // was loud enough to normalize. Placed BEFORE the sanitize net below so any
+        // residual overshoot the limiter leaves is still clamped to [-1, 1].
+        if (exportLoudnessDecision_ && exportLoudnessDecision_->shouldNormalize) {
+            const auto loudnessFormat = audio_dsp::AudioFormat::create(48'000, 2);
+            if (!loudnessFormat.hasValue()) return loudnessFormat.error();
+            auto limiter = audio_dsp::LimiterProcessor::create(
+                audio_dsp::LimiterProcessor::Parameters{
+                    .ceilingDbtp = exportLoudnessDecision_->truePeakCeilingDbtp},
+                loudnessFormat.value());
+            if (!limiter.hasValue()) return limiter.error();
+            auto loudnessChain = std::make_shared<audio_dsp::AudioProcessingChain>();
+            loudnessChain
+                ->add(std::make_unique<audio_dsp::GainProcessor>(
+                    exportLoudnessDecision_->gainDb))
+                .add(std::make_unique<audio_dsp::LimiterProcessor>(
+                    std::move(limiter).value()));
+            auto context = std::make_unique<AudioProcessingFilterContext>(
+                std::move(loudnessChain));
+            auto* contextObserver = context.get();
+            auto creatorFilter = makeCreatorFilter(std::move(context),
+                                                   processAudioProcessingFrame);
+            if (!creatorFilter.hasValue()) return creatorFilter.error();
+            if (graph->tractor->attach(*creatorFilter.value()) != 0) {
+                return stateError(
+                    "MLT could not attach the export loudness normalization filter");
+            }
+            graph->filters.push_back(std::move(creatorFilter).value());
+            graph->audioProcessingFilterContexts.push_back(contextObserver);
+        }
         // Final safety net over the fully-mixed program audio: strip NaN/+-Inf
         // and clamp to [-1, 1] before the AAC encoder (which aborts the render
         // on non-finite input). Attached last so it runs outermost, after any
@@ -1364,6 +1402,10 @@ class MltEditEngine::Impl final {
     core::TimestampNs position_{};
     bool playing_{false};
     bool initialized_{false};
+    // Set by the export path between pass 1 (measure) and pass 2 (render) so the
+    // next build() attaches the loudness gain + true-peak limiter to the export
+    // graph. Empty for preview and for a no-op (silent/near-silent) program.
+    std::optional<audio_dsp::ExportLoudnessDecision> exportLoudnessDecision_;
 };
 
 MltEditEngine::MltEditEngine(MltEditEngineConfig config)
@@ -1717,6 +1759,54 @@ core::Result<void> MltEditEngine::renderFrozen(
     if (!loaded.hasValue()) return loaded;
     if (!impl_->graph_ || !impl_->graph_->profile || !impl_->graph_->tractor) {
         return stateError("independent export graph was not constructed");
+    }
+
+    // Two-pass export loudness normalization (opt-in via config_.exportLoudness).
+    // Pass 1: stream the whole mixed 48 kHz program through a LoudnessMeter to
+    // measure integrated LUFS and decide the static gain. Only mlt_frame_get_audio
+    // is pulled per frame, so video is never decoded here — the extra pass costs
+    // an audio-only sweep, not a full second render. Pass 2: rebuild the graph so
+    // build() attaches the gain + true-peak limiter (see exportLoudnessDecision_),
+    // and the render starts from clean filter state.
+    if (impl_->config_.exportLoudness) {
+        auto analyzer = audio_dsp::ExportLoudnessAnalyzer::create(
+            *impl_->config_.exportLoudness);
+        if (!analyzer.hasValue()) return analyzer.error();
+        const auto meterFormat = audio_dsp::AudioFormat::create(48'000, 2);
+        if (!meterFormat.hasValue()) return meterFormat.error();
+        auto meter = audio_dsp::LoudnessMeter::create(meterFormat.value());
+        if (!meter.hasValue()) return meter.error();
+        const std::int64_t durationFrames = impl_->graph_->durationFrames;
+        const core::FrameRate frameRate = impl_->graph_->frameRate;
+        for (std::int64_t frameIndex = 0; frameIndex < durationFrames;
+             ++frameIndex) {
+            if (stopToken.stop_requested()) {
+                return stateError("export cancelled during loudness analysis");
+            }
+            auto pcm = requestMixedAudio(
+                core::frameToTimestamp(frameIndex, frameRate), 48'000, 2, 96'000);
+            if (!pcm.hasValue()) return pcm.error();
+            const auto& samples = pcm.value();
+            if (samples.empty()) continue;
+            audio_dsp::AudioBuffer view{const_cast<float*>(samples.data()),
+                                        samples.size() / 2, meterFormat.value()};
+            if (auto added = meter.value().addBlock(view); !added.hasValue()) {
+                return added.error();
+            }
+        }
+        const auto decision = analyzer.value().decide(
+            meter.value().integratedLufs(), meter.value().truePeakDbtp());
+        impl_->exportLoudnessDecision_ =
+            decision.shouldNormalize ? std::optional{decision} : std::nullopt;
+        // Pass 2: rebuild. build() consumes exportLoudnessDecision_ (attaching the
+        // gain+limiter, or nothing for a no-op decision) into a fresh graph.
+        auto reloaded = impl_->loadSnapshot(request.snapshot(),
+                                            request.preset().frameRate());
+        impl_->exportLoudnessDecision_.reset();  // consumed by build(); never leak
+        if (!reloaded.hasValue()) return reloaded;
+        if (!impl_->graph_ || !impl_->graph_->profile || !impl_->graph_->tractor) {
+            return stateError("independent export graph was not reconstructed");
+        }
     }
 
     // Always render to an audio-safe Matroska partial. The aac_mf audio encoder

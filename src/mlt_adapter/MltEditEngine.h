@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio_dsp/ExportLoudnessAnalysis.h"
 #include "audio_dsp/IAudioProcessor.h"
 #include "edit_engine/IEditEngine.h"
 #include "edit_engine/IRenderJobLifecycle.h"
@@ -10,6 +11,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stop_token>
 #include <vector>
 
@@ -26,6 +28,14 @@ struct MltEditEngineConfig final {
     /// Optional real-time DSP chain applied to mixed preview audio. Export
     /// uses the same graph hook when the runtime exposes a mixed-audio frame.
     std::shared_ptr<audio_dsp::IAudioProcessor> audioProcessingChain;
+    /// When present, the EXPORT render runs a two-pass loudness normalization to
+    /// this target: pass 1 streams the whole mixed 48 kHz program through a
+    /// LoudnessMeter to measure integrated LUFS, pass 2 applies the decided
+    /// static gain + a true-peak limiter while the consumer renders. Absent
+    /// (the default) leaves the program untouched — this is user-controlled
+    /// post-processing (음질 컨트롤 영역), off unless the user opts in. Only the
+    /// export engine sets it; the preview engine leaves it empty.
+    std::optional<audio_dsp::ExportLoudnessAnalyzer::Parameters> exportLoudness;
 };
 
 struct MltEditEngineDiagnostics final {

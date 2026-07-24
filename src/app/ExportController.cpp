@@ -5,10 +5,17 @@
 #include "core/AppError.h"
 
 #include <QMetaObject>
+#include <QSettings>
 
 #include <utility>
 
 namespace creator::app {
+namespace {
+// Shared with the ProjectExportEngine loudness provider wired in main.cpp: the
+// engine reads this same key per render, so the toggle here takes effect on the
+// next export without reconstructing the engine.
+constexpr auto kLoudnessNormalizationKey = "export/loudnessNormalization";
+}  // namespace
 
 ExportController::ExportController(
     std::unique_ptr<edit_engine::IEditEngine> engine, QObject* parent)
@@ -37,6 +44,19 @@ ExportController::ExportController(
                 emit exportFinished(success);
             });
     workerThread_.start();
+}
+
+bool ExportController::loudnessNormalization() const {
+    QSettings settings;
+    return settings.value(QLatin1String(kLoudnessNormalizationKey), false)
+        .toBool();
+}
+
+void ExportController::setLoudnessNormalization(bool enabled) {
+    if (loudnessNormalization() == enabled) return;
+    QSettings settings;
+    settings.setValue(QLatin1String(kLoudnessNormalizationKey), enabled);
+    emit loudnessNormalizationChanged();
 }
 
 ExportController::~ExportController() {
