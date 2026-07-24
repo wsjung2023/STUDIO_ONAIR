@@ -287,6 +287,39 @@ TEST_F(FileAvatarCatalogTest,
 
 #ifndef _WIN32
 TEST_F(FileAvatarCatalogTest,
+       RejectsCatalogUnderARebindableAbsoluteAncestor) {
+    const auto hostile = root_ / "hostile";
+    const auto branch = hostile / "branch";
+    const auto privateParent = branch / "private";
+    ASSERT_TRUE(fs::create_directories(privateParent));
+    fs::permissions(hostile, fs::perms::all,
+                    fs::perm_options::replace);
+    fs::permissions(branch, fs::perms::owner_all,
+                    fs::perm_options::replace);
+    fs::permissions(privateParent, fs::perms::owner_all,
+                    fs::perm_options::replace);
+
+    auto opened = FileAvatarCatalog::open(
+        privateParent / "catalog", {fixture_->trustedKey()});
+    if (opened.hasValue()) {
+        auto catalog = std::move(opened).value();
+        fs::rename(branch, hostile / "displaced");
+        ASSERT_TRUE(fs::create_directories(privateParent / "catalog"));
+        fs::permissions(branch, fs::perms::owner_all,
+                        fs::perm_options::replace);
+        fs::permissions(privateParent, fs::perms::owner_all,
+                        fs::perm_options::replace);
+        fs::permissions(privateParent / "catalog",
+                        fs::perms::owner_all,
+                        fs::perm_options::replace);
+        EXPECT_FALSE(catalog.list().hasValue());
+    }
+
+    EXPECT_FALSE(opened.hasValue());
+    EXPECT_FALSE(fs::exists(privateParent / "catalog"));
+}
+
+TEST_F(FileAvatarCatalogTest,
        RetainedRootAuthorityRejectsRenameAndReplacement) {
     auto catalog = openCatalog();
     const auto catalogRoot = root_ / "catalog";
@@ -353,13 +386,26 @@ TEST_F(FileAvatarCatalogTest,
 }
 
 TEST_F(FileAvatarCatalogTest,
-       RejectsAnActuallySignedNonCanonicalPackageVersion) {
-    auto catalog = openCatalog();
+       RejectsASignedDecoderAcceptedNonCanonicalPackageVersion) {
     SignedPackOptions unsafe;
-    unsafe.rawManifestPackageVersion = "1.0.0-ALPHA";
+    unsafe.rawManifestPackageVersion = "01.0.0";
+    const auto package = fixture_->writePack(std::move(unsafe));
+    const auto decoderStaging = root_ / "decoder-staging";
+    ASSERT_TRUE(fs::create_directory(decoderStaging));
+#ifndef _WIN32
+    fs::permissions(decoderStaging, fs::perms::owner_all,
+                    fs::perm_options::replace);
+#endif
+    AvatarPackValidator validator{{fixture_->trustedKey()},
+                                  decoderStaging};
+    auto decoded = validator.validateAndExtract(package);
+    ASSERT_TRUE(decoded.hasValue()) << decoded.error().message();
+    EXPECT_EQ(decoded.value().manifest.values().packageVersion,
+              "01.0.0");
+    ASSERT_TRUE(decoded.value().staging.cleanup().hasValue());
 
-    const auto rejected =
-        catalog.install(fixture_->writePack(std::move(unsafe)));
+    auto catalog = openCatalog();
+    const auto rejected = catalog.install(package);
 
     EXPECT_FALSE(rejected.hasValue());
     EXPECT_TRUE(fs::is_empty(root_ / "catalog" / "installed"));

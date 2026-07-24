@@ -191,6 +191,33 @@ if(CS_ENABLE_AVATAR_PACKS)
             NAME cs_avatar_catalog_authority_posix_fixture
             COMMAND cs_avatar_catalog_authority_posix_fixture
         )
+
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            add_executable(cs_avatar_catalog_durability_posix_fixture
+                helpers/CatalogRootDurabilityPosixFixture.cpp
+            )
+            target_link_libraries(
+                cs_avatar_catalog_durability_posix_fixture PRIVATE
+                cs_avatar_pack_adapter
+                cs_core
+            )
+            target_link_options(
+                cs_avatar_catalog_durability_posix_fixture PRIVATE
+                -Wl,--wrap=fsync
+            )
+            set_target_properties(
+                cs_avatar_catalog_durability_posix_fixture
+                PROPERTIES
+                    AUTOMOC OFF
+                    AUTOUIC OFF
+                    AUTORCC OFF
+            )
+            cs_apply_warnings(cs_avatar_catalog_durability_posix_fixture)
+            add_test(
+                NAME cs_avatar_catalog_durability_posix_fixture
+                COMMAND cs_avatar_catalog_durability_posix_fixture
+            )
+        endif()
     endif()
 
     add_executable(cs_avatar_pack_tests

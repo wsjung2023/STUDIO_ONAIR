@@ -47,6 +47,42 @@ int main() {
                     fs::perm_options::replace, error);
     if (error) return 3;
 
+    const auto hostile = parent / "hostile";
+    const auto branch = hostile / "branch";
+    const auto privateParent = branch / "private";
+    if (!fs::create_directories(privateParent)) return 13;
+    fs::permissions(hostile, fs::perms::all,
+                    fs::perm_options::replace, error);
+    fs::permissions(branch, fs::perms::owner_all,
+                    fs::perm_options::replace, error);
+    fs::permissions(privateParent, fs::perms::owner_all,
+                    fs::perm_options::replace, error);
+    if (error) return 14;
+    {
+        auto hostileOpened =
+            CatalogRootAuthority::open(privateParent / "catalog");
+        if (hostileOpened.hasValue()) {
+            auto hostileAuthority = std::move(hostileOpened).value();
+            const auto displaced = hostile / "displaced";
+            fs::rename(branch, displaced, error);
+            if (error || !fs::create_directories(privateParent / "catalog"))
+                return 15;
+            fs::permissions(branch, fs::perms::owner_all,
+                            fs::perm_options::replace, error);
+            fs::permissions(privateParent, fs::perms::owner_all,
+                            fs::perm_options::replace, error);
+            fs::permissions(privateParent / "catalog",
+                            fs::perms::owner_all,
+                            fs::perm_options::replace, error);
+            if (error || hostileAuthority.revalidate().hasValue())
+                return 16;
+        } else if (fs::exists(privateParent / "catalog")) {
+            return 18;
+        }
+    }
+    fs::remove_all(hostile, error);
+    if (error) return 17;
+
     const auto root = parent / "catalog";
     auto opened = CatalogRootAuthority::open(root);
     if (!opened.hasValue()) return 4;

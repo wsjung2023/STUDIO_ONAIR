@@ -35,6 +35,13 @@ enum class CatalogInstallOutcome {
 /// lifetime of this object (with no-delete sharing on Windows and identity
 /// revalidation on POSIX). Paths returned by `payloadRoot` are valid authority
 /// only for that same lifetime.
+///
+/// On POSIX, `open` also proves the absolute ancestry namespace-stable under
+/// the catalog threat model. Every namespace parent is opened without
+/// following symlinks, must be root/current-user owned, and must either deny
+/// group/other writes or be sticky with a current-user-owned next child (for
+/// example `/tmp`). Unsafe ancestry is rejected, and the accepted chain is
+/// retained and revalidated for every operation.
 class FileAvatarCatalog final : public avatar::IAvatarCatalog {
 public:
     [[nodiscard]] static core::Result<FileAvatarCatalog> open(

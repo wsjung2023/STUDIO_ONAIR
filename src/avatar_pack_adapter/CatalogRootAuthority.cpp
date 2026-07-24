@@ -252,6 +252,94 @@ bool sameObject(const struct stat& left,
                 const struct stat& right) noexcept {
     return left.st_dev == right.st_dev && left.st_ino == right.st_ino;
 }
+
+bool namespaceParentSafe(const struct stat& parent,
+                         const struct stat& child) noexcept {
+    if (!S_ISDIR(parent.st_mode) || !S_ISDIR(child.st_mode))
+        return false;
+    if (parent.st_uid != 0 && parent.st_uid != ::geteuid())
+        return false;
+    if ((parent.st_mode & 0022) == 0) return true;
+    return (parent.st_mode & S_ISVTX) != 0 &&
+           child.st_uid == ::geteuid();
+}
+
+struct RetainedPosixDirectory final {
+    RetainedPosixDirectory(std::string childName, int descriptor,
+                           struct stat identity)
+        : childName(std::move(childName)),
+          descriptor(descriptor),
+          identity(identity) {}
+
+    RetainedPosixDirectory(RetainedPosixDirectory&& other) noexcept
+        : childName(std::move(other.childName)),
+          descriptor(std::exchange(other.descriptor, -1)),
+          identity(other.identity) {}
+
+    RetainedPosixDirectory& operator=(
+        RetainedPosixDirectory&& other) noexcept {
+        if (this == &other) return *this;
+        if (descriptor >= 0) (void)::close(descriptor);
+        childName = std::move(other.childName);
+        descriptor = std::exchange(other.descriptor, -1);
+        identity = other.identity;
+        return *this;
+    }
+
+    ~RetainedPosixDirectory() {
+        if (descriptor >= 0) (void)::close(descriptor);
+    }
+
+    RetainedPosixDirectory(const RetainedPosixDirectory&) = delete;
+    RetainedPosixDirectory& operator=(const RetainedPosixDirectory&) =
+        delete;
+
+    std::string childName;
+    int descriptor{-1};
+    struct stat identity {};
+};
+
+std::optional<std::vector<RetainedPosixDirectory>>
+openTrustedAncestorChain(const fs::path& parentPath) {
+    std::vector<RetainedPosixDirectory> chain;
+    const int filesystemRoot =
+        ::open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    struct stat rootInformation {};
+    if (filesystemRoot < 0 ||
+        ::fstat(filesystemRoot, &rootInformation) != 0 ||
+        !S_ISDIR(rootInformation.st_mode)) {
+        if (filesystemRoot >= 0) (void)::close(filesystemRoot);
+        return std::nullopt;
+    }
+    chain.emplace_back("", filesystemRoot, rootInformation);
+
+    for (const auto& component : parentPath.relative_path()) {
+        const auto childName = component.string();
+        if (!directChildName(std::string_view{childName}))
+            return std::nullopt;
+        struct stat namedInformation {};
+        if (::fstatat(chain.back().descriptor, childName.c_str(),
+                      &namedInformation, AT_SYMLINK_NOFOLLOW) != 0 ||
+            !namespaceParentSafe(chain.back().identity,
+                                 namedInformation)) {
+            return std::nullopt;
+        }
+        const int descriptor =
+            ::openat(chain.back().descriptor, childName.c_str(),
+                     O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        struct stat openedInformation {};
+        if (descriptor < 0 ||
+            ::fstat(descriptor, &openedInformation) != 0 ||
+            !sameObject(namedInformation, openedInformation)) {
+            if (descriptor >= 0) (void)::close(descriptor);
+            return std::nullopt;
+        }
+        chain.emplace_back(childName, descriptor, openedInformation);
+    }
+    if (chain.empty() || !trustedDirectoryStat(chain.back().identity))
+        return std::nullopt;
+    return chain;
+}
 #endif
 
 }  // namespace
@@ -320,11 +408,13 @@ public:
     BY_HANDLE_FILE_INFORMATION rootIdentity_{};
     mutable std::optional<BY_HANDLE_FILE_INFORMATION> lockIdentity_;
 #else
-    Impl(fs::path rootPath, std::string rootName, int parentDescriptor,
+    Impl(fs::path rootPath, std::string rootName,
+         std::vector<RetainedPosixDirectory> ancestorChain,
          int rootDescriptor, struct stat rootIdentity)
         : rootPath_(std::move(rootPath)),
           rootName_(std::move(rootName)),
-          parentDescriptor_(parentDescriptor),
+          ancestorChain_(std::move(ancestorChain)),
+          parentDescriptor_(ancestorChain_.back().descriptor),
           rootDescriptor_(rootDescriptor),
           rootIdentity_(rootIdentity) {}
 
@@ -332,10 +422,10 @@ public:
         if (lockAnchorDescriptor_ >= 0)
             (void)::close(lockAnchorDescriptor_);
         if (rootDescriptor_ >= 0) (void)::close(rootDescriptor_);
-        if (parentDescriptor_ >= 0) (void)::close(parentDescriptor_);
     }
 
     std::string rootName_;
+    std::vector<RetainedPosixDirectory> ancestorChain_;
     int parentDescriptor_{-1};
     int rootDescriptor_{-1};
     struct stat rootIdentity_ {};
@@ -381,7 +471,6 @@ Result<CatalogRootAuthority> CatalogRootAuthority::open(
         }
         const auto opened =
             openRelativeDirectory(parentHandle, rootName, FILE_OPEN_IF);
-        const bool created = opened.information == FILE_CREATED;
         const HANDLE rootHandle = opened.handle;
         BY_HANDLE_FILE_INFORMATION rootIdentity{};
         if (!trustedDirectoryHandle(rootHandle) ||
@@ -391,7 +480,7 @@ Result<CatalogRootAuthority> CatalogRootAuthority::open(
             (void)CloseHandle(parentHandle);
             return authorityError("avatar.catalog.root");
         }
-        if (created && FlushFileBuffers(parentHandle) == FALSE) {
+        if (FlushFileBuffers(parentHandle) == FALSE) {
             (void)CloseHandle(rootHandle);
             (void)CloseHandle(parentHandle);
             return authorityError("avatar.catalog.parent-flush");
@@ -400,33 +489,21 @@ Result<CatalogRootAuthority> CatalogRootAuthority::open(
             std::move(rootPath), rootName, parentHandle, rootHandle,
             rootIdentity)};
 #else
-        const int parentDescriptor =
-            ::open(parentPath.c_str(),
-                   O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-        struct stat parentInformation {};
-        if (parentDescriptor < 0 ||
-            ::fstat(parentDescriptor, &parentInformation) != 0 ||
-            !trustedDirectoryStat(parentInformation)) {
-            if (parentDescriptor >= 0) (void)::close(parentDescriptor);
+        auto ancestorChain = openTrustedAncestorChain(parentPath);
+        if (!ancestorChain.has_value()) {
             return authorityError("avatar.catalog.parent");
         }
+        const int parentDescriptor =
+            ancestorChain->back().descriptor;
         struct stat rootInformation {};
-        bool created = false;
         if (::fstatat(parentDescriptor, rootName.c_str(), &rootInformation,
                       AT_SYMLINK_NOFOLLOW) != 0) {
             if (errno != ENOENT ||
                 ::mkdirat(parentDescriptor, rootName.c_str(), 0700) != 0) {
-                (void)::close(parentDescriptor);
                 return authorityError("avatar.catalog.root");
             }
-            created = true;
         } else if (!trustedDirectoryStat(rootInformation)) {
-            (void)::close(parentDescriptor);
             return authorityError("avatar.catalog.root");
-        }
-        if (created && ::fsync(parentDescriptor) != 0) {
-            (void)::close(parentDescriptor);
-            return authorityError("avatar.catalog.parent-flush");
         }
         const int rootDescriptor =
             ::openat(parentDescriptor, rootName.c_str(),
@@ -435,12 +512,15 @@ Result<CatalogRootAuthority> CatalogRootAuthority::open(
             ::fstat(rootDescriptor, &rootInformation) != 0 ||
             !trustedDirectoryStat(rootInformation)) {
             if (rootDescriptor >= 0) (void)::close(rootDescriptor);
-            (void)::close(parentDescriptor);
             return authorityError("avatar.catalog.root");
         }
+        if (::fsync(parentDescriptor) != 0) {
+            (void)::close(rootDescriptor);
+            return authorityError("avatar.catalog.parent-flush");
+        }
         return CatalogRootAuthority{std::make_unique<Impl>(
-            std::move(rootPath), rootName, parentDescriptor, rootDescriptor,
-            rootInformation)};
+            std::move(rootPath), rootName, std::move(*ancestorChain),
+            rootDescriptor, rootInformation)};
 #endif
     } catch (...) {
         return authorityError("avatar.catalog.root");
@@ -474,11 +554,41 @@ Result<void> CatalogRootAuthority::revalidate() const noexcept {
         if (!matches)
             return authorityError("avatar.catalog.root-replaced");
 #else
+        if (implementation_->ancestorChain_.empty())
+            return authorityError("avatar.catalog.root-replaced");
+        struct stat previousInformation {};
+        for (std::size_t index = 0U;
+             index < implementation_->ancestorChain_.size(); ++index) {
+            const auto& binding =
+                implementation_->ancestorChain_[index];
+            struct stat retainedAncestor {};
+            if (::fstat(binding.descriptor, &retainedAncestor) != 0 ||
+                !S_ISDIR(retainedAncestor.st_mode) ||
+                !sameObject(retainedAncestor, binding.identity)) {
+                return authorityError("avatar.catalog.root-replaced");
+            }
+            if (index > 0U) {
+                struct stat namedAncestor {};
+                const auto& parent =
+                    implementation_->ancestorChain_[index - 1U];
+                if (::fstatat(parent.descriptor,
+                              binding.childName.c_str(), &namedAncestor,
+                              AT_SYMLINK_NOFOLLOW) != 0 ||
+                    !sameObject(namedAncestor, retainedAncestor) ||
+                    !namespaceParentSafe(previousInformation,
+                                         namedAncestor)) {
+                    return authorityError(
+                        "avatar.catalog.root-replaced");
+                }
+            }
+            previousInformation = retainedAncestor;
+        }
         struct stat parentInformation {};
         struct stat retained {};
         struct stat current {};
         if (::fstat(implementation_->parentDescriptor_,
                     &parentInformation) != 0 ||
+            !sameObject(parentInformation, previousInformation) ||
             !trustedDirectoryStat(parentInformation) ||
             ::fstat(implementation_->rootDescriptor_, &retained) != 0 ||
             !trustedDirectoryStat(retained) ||
@@ -629,17 +739,15 @@ Result<void> CatalogRootAuthority::ensurePrivateChild(
     const auto childName = fs::path{name}.wstring();
     const auto opened = openRelativeDirectory(
         implementation_->rootHandle_, childName, FILE_OPEN_IF);
-    const bool created = opened.information == FILE_CREATED;
     const HANDLE handle = opened.handle;
     const bool trusted = trustedDirectoryHandle(handle);
     if (handle != INVALID_HANDLE_VALUE) (void)CloseHandle(handle);
     if (!trusted) return authorityError("avatar.catalog.directory");
-    if (created && FlushFileBuffers(implementation_->rootHandle_) == FALSE)
+    if (FlushFileBuffers(implementation_->rootHandle_) == FALSE)
         return authorityError("avatar.catalog.root-flush");
 #else
     const std::string childName{name};
     struct stat information {};
-    bool created = false;
     if (::fstatat(implementation_->rootDescriptor_, childName.c_str(),
                   &information, AT_SYMLINK_NOFOLLOW) != 0) {
         if (errno != ENOENT ||
@@ -647,7 +755,6 @@ Result<void> CatalogRootAuthority::ensurePrivateChild(
                       0700) != 0) {
             return authorityError("avatar.catalog.directory");
         }
-        created = true;
     } else if (!trustedDirectoryStat(information)) {
         return authorityError("avatar.catalog.directory");
     }
@@ -660,7 +767,7 @@ Result<void> CatalogRootAuthority::ensurePrivateChild(
         trustedDirectoryStat(information);
     if (childDescriptor >= 0) (void)::close(childDescriptor);
     if (!trusted) return authorityError("avatar.catalog.directory");
-    if (created && ::fsync(implementation_->rootDescriptor_) != 0)
+    if (::fsync(implementation_->rootDescriptor_) != 0)
         return authorityError("avatar.catalog.root-flush");
 #endif
     return core::ok();
@@ -700,9 +807,7 @@ Result<void> ensurePrivateDirectoryChild(
     const HANDLE childHandle = opened.handle;
     const bool trusted = trustedDirectoryHandle(childHandle);
     if (childHandle != INVALID_HANDLE_VALUE) (void)CloseHandle(childHandle);
-    const bool durable =
-        opened.information != FILE_CREATED ||
-        FlushFileBuffers(parentHandle) != FALSE;
+    const bool durable = FlushFileBuffers(parentHandle) != FALSE;
     (void)CloseHandle(parentHandle);
     return trusted && durable ? core::ok()
                    : Result<void>{authorityError(
@@ -719,7 +824,6 @@ Result<void> ensurePrivateDirectoryChild(
         return authorityError("avatar.catalog.directory");
     }
     const std::string child{childName};
-    bool created = false;
     if (::fstatat(parentDescriptor, child.c_str(), &information,
                   AT_SYMLINK_NOFOLLOW) != 0) {
         if (errno != ENOENT ||
@@ -727,7 +831,6 @@ Result<void> ensurePrivateDirectoryChild(
             (void)::close(parentDescriptor);
             return authorityError("avatar.catalog.directory");
         }
-        created = true;
     } else if (!trustedDirectoryStat(information)) {
         (void)::close(parentDescriptor);
         return authorityError("avatar.catalog.directory");
@@ -740,7 +843,7 @@ Result<void> ensurePrivateDirectoryChild(
         ::fstat(childDescriptor, &information) == 0 &&
         trustedDirectoryStat(information);
     if (childDescriptor >= 0) (void)::close(childDescriptor);
-    const bool durable = !created || ::fsync(parentDescriptor) == 0;
+    const bool durable = ::fsync(parentDescriptor) == 0;
     (void)::close(parentDescriptor);
     return trusted && durable ? core::ok()
                    : Result<void>{authorityError(
