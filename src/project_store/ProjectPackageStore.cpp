@@ -3,6 +3,7 @@
 #include "core/AppError.h"
 #include "core/Uuid.h"
 #include "project_store/JsonProjectStore.h"
+#include "project_store/internal/AvatarSpecStorageAuthority.h"
 #include "project_store/SqliteProjectDatabase.h"
 
 #include <algorithm>
@@ -292,6 +293,11 @@ Result<ValidatedDatabase> openValidatedDatabase(const fs::path& packagePath) {
     JsonProjectStore manifests;
     auto loaded = manifests.load(packagePath);
     if (!loaded.hasValue()) return loaded.error();
+    if (auto avatars = internal::ensureAvatarDirectoryDurably(
+            packagePath, loaded.value().directories.avatars);
+        !avatars.hasValue()) {
+        return avatars.error();
+    }
     auto databasePath = validatedRelativeDatabasePath(loaded.value().database);
     if (!databasePath.hasValue()) return databasePath.error();
     auto existingDatabase = validatedExistingDatabase(packagePath, databasePath.value());
@@ -617,8 +623,8 @@ Result<OpenProjectResult> ProjectPackageStore::create(const fs::path& packagePat
         removeGeneratedStaging(staging, packagePath);
         return manifest.error();
     }
-    if (auto avatars = ensureSafeDirectory(
-            staging, fs::path{manifest.value().directories.avatars});
+    if (auto avatars = internal::ensureAvatarDirectoryDurably(
+            staging, manifest.value().directories.avatars);
         !avatars.hasValue()) {
         removeGeneratedStaging(staging, packagePath);
         return avatars.error();

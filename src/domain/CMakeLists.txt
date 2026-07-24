@@ -16,6 +16,8 @@ cs_add_qtfree_library(cs_domain
         MediaAsset.cpp
         ProjectManifest.h
         ProjectManifest.cpp
+        PortablePath.h
+        PortablePath.cpp
         RecordingSession.h
         RecordingSession.cpp
         Segment.h

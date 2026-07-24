@@ -162,6 +162,32 @@ cs_apply_warnings(cs_tests)
 
 gtest_discover_tests(cs_tests)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(cs_avatar_spec_authority_posix_fixture
+        helpers/AvatarSpecStorageAuthorityPosixFixture.cpp
+    )
+    target_link_libraries(cs_avatar_spec_authority_posix_fixture PRIVATE
+        cs_project_store
+        cs_avatar
+        cs_core
+    )
+    target_link_options(cs_avatar_spec_authority_posix_fixture PRIVATE
+        -Wl,--wrap=fsync
+        -Wl,--wrap=read
+        -Wl,--wrap=openat
+    )
+    set_target_properties(cs_avatar_spec_authority_posix_fixture PROPERTIES
+        AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF
+    )
+    cs_apply_warnings(cs_avatar_spec_authority_posix_fixture)
+    add_test(
+        NAME cs_avatar_spec_authority_posix_fixture
+        COMMAND cs_avatar_spec_authority_posix_fixture
+    )
+endif()
+
 if(CS_ENABLE_AVATAR_PACKS)
     add_executable(cs_avatar_catalog_lock_fixture
         helpers/AvatarCatalogLockFixture.cpp

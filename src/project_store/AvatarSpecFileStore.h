@@ -2,16 +2,10 @@
 
 #include "project_store/IAvatarSpecStore.h"
 
-#include <cstdint>
 #include <filesystem>
-#include <optional>
+#include <memory>
 
 namespace creator::project_store {
-
-struct AvatarSpecDirectoryIdentity final {
-    std::uint64_t first{};
-    std::uint64_t second{};
-};
 
 class AvatarSpecFileStore final : public IAvatarSpecStore {
 public:
@@ -31,10 +25,8 @@ public:
         const override;
 
 private:
-    std::filesystem::path avatarsRoot_;
-    std::optional<AvatarSpecDirectoryIdentity> rootIdentity_;
-    int rootDescriptor_{-1};
-    void* rootHandle_{nullptr};
+    class Impl;
+    std::unique_ptr<Impl> implementation_;
 };
 
 }  // namespace creator::project_store

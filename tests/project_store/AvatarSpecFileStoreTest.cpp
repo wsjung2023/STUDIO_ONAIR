@@ -93,7 +93,8 @@ TEST_F(AvatarSpecFileStoreTest, SavesLoadsAndKeepsLastGoodCopy) {
     AvatarSpecFileStore store{root_ / "avatars"};
     const auto spec = validSpec();
 
-    ASSERT_TRUE(store.save(spec).hasValue());
+    const auto saved = store.save(spec);
+    ASSERT_TRUE(saved.hasValue()) << saved.error().message();
     EXPECT_EQ(AvatarSpecCodec{}.toJson(store.load(spec.avatarId()).value()),
               AvatarSpecCodec{}.toJson(spec));
     write(primary(), "{broken");
@@ -271,6 +272,61 @@ TEST_F(AvatarSpecFileStoreTest, RejectsExternalHardLinksForBothStoredCopies) {
 
     ASSERT_FALSE(loaded.hasValue());
     EXPECT_EQ(loaded.error().code(), ErrorCode::InvalidArgument);
+}
+
+TEST_F(AvatarSpecFileStoreTest, UnsafePrimaryHardLinkDoesNotFallBackToValidLastGood) {
+    AvatarSpecFileStore store{root_ / "avatars"};
+    const auto id = AvatarId::create("hero").value();
+    ASSERT_TRUE(store.save(validSpec()).hasValue());
+    const fs::path outside = root_ / "outside.json";
+    write(outside, AvatarSpecCodec{}.toJson(validSpec()).dump());
+    ASSERT_TRUE(fs::remove(primary()));
+    std::error_code error;
+    fs::create_hard_link(outside, primary(), error);
+    ASSERT_FALSE(error) << error.message();
+
+    const auto loaded = store.load(id);
+
+    ASSERT_FALSE(loaded.hasValue());
+    EXPECT_EQ(loaded.error().code(), ErrorCode::InvalidArgument);
+}
+
+TEST_F(AvatarSpecFileStoreTest, RejectsCaseAliasBeforeCreatingAvatarDirectory) {
+    ASSERT_TRUE(fs::create_directory(root_ / "avatars" / "Hero"));
+    AvatarSpecFileStore store{root_ / "avatars"};
+
+    const auto saved = store.save(validSpec("hero", "Hero"));
+
+    ASSERT_FALSE(saved.hasValue());
+    EXPECT_EQ(saved.error().code(), ErrorCode::InvalidArgument);
+    std::vector<std::string> children;
+    for (const auto& entry : fs::directory_iterator(root_ / "avatars")) {
+        children.push_back(entry.path().filename().string());
+    }
+    EXPECT_EQ(children, std::vector<std::string>{"Hero"});
+}
+
+TEST_F(AvatarSpecFileStoreTest, OversizedSavePreservesPriorPrimaryAndLastGood) {
+    AvatarSpecFileStore store{root_ / "avatars"};
+    const auto original = validSpec("hero", "Original");
+    ASSERT_TRUE(store.save(original).hasValue());
+    auto oversizedDraft = validSpec("hero", "Oversized").values();
+    for (std::size_t index = 0; index < 48'000U; ++index) {
+        oversizedDraft.palette.emplace(
+            "color-" + std::to_string(index) + std::string(170U, 'x'),
+            creator::avatar::ColorRgba{.red = 0.1F, .green = 0.2F,
+                                       .blue = 0.3F, .alpha = 1.0F});
+    }
+    const auto oversized = AvatarSpec::create(std::move(oversizedDraft));
+    ASSERT_TRUE(oversized.hasValue()) << oversized.error().message();
+
+    const auto saved = store.save(oversized.value());
+
+    ASSERT_FALSE(saved.hasValue());
+    EXPECT_EQ(saved.error().code(), ErrorCode::InvalidArgument);
+    const auto loaded = store.load(original.avatarId());
+    ASSERT_TRUE(loaded.hasValue()) << loaded.error().message();
+    EXPECT_EQ(loaded.value().displayName(), "Original");
 }
 
 TEST_F(AvatarSpecFileStoreTest, RejectsExternalSymlinksForBothStoredCopies) {

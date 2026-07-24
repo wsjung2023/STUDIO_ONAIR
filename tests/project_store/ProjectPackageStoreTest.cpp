@@ -206,6 +206,43 @@ TEST_F(ProjectPackageStoreTest, OpenDoesNotCreateAMissingDatabase) {
     EXPECT_FALSE(fs::exists(packagePath_ / "project.db"));
 }
 
+TEST_F(ProjectPackageStoreTest, OpenSafelyProvisionsAvatarDirectoryForOlderProject) {
+    ASSERT_TRUE(store_.create(packagePath_, "Old project").hasValue());
+    ASSERT_TRUE(fs::remove(packagePath_ / "avatars"));
+    const fs::path manifestPath = packagePath_ / "manifest.json";
+    std::ifstream input{manifestPath, std::ios::binary};
+    auto document = nlohmann::json::parse(input);
+    input.close();
+    document["directories"].erase("avatars");
+    std::ofstream output{manifestPath, std::ios::binary | std::ios::trunc};
+    output << document.dump(2);
+    output.close();
+
+    const auto opened = store_.open(packagePath_);
+
+    ASSERT_TRUE(opened.hasValue()) << opened.error().message();
+    EXPECT_TRUE(fs::is_directory(packagePath_ / "avatars"));
+}
+
+TEST_F(ProjectPackageStoreTest, OpenRejectsAvatarDirectorySymlinkOrReparsePoint) {
+    ASSERT_TRUE(store_.create(packagePath_, "Hostile avatars").hasValue());
+    ASSERT_TRUE(fs::remove(packagePath_ / "avatars"));
+    const fs::path outside = root_ / "outside-avatars";
+    ASSERT_TRUE(fs::create_directory(outside));
+    std::error_code error;
+#ifdef _WIN32
+    error = createDirectoryJunction(packagePath_ / "avatars", outside);
+#else
+    fs::create_directory_symlink(outside, packagePath_ / "avatars", error);
+#endif
+    ASSERT_FALSE(error) << error.message();
+
+    const auto opened = store_.open(packagePath_);
+
+    ASSERT_FALSE(opened.hasValue());
+    EXPECT_EQ(opened.error().code(), ErrorCode::InvalidArgument);
+}
+
 TEST_F(ProjectPackageStoreTest, OpenRejectsDatabaseHardLinkedFromOutsidePackage) {
     ASSERT_TRUE(store_.create(packagePath_, "Hard Link").hasValue());
     const fs::path outsideDatabase = root_ / "outside.db";

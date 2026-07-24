@@ -216,6 +216,20 @@ TEST(ProjectManifestTest, RejectsEmptyAvatarDirectoryName) {
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
 }
 
+TEST(ProjectManifestTest, RejectsUnsafeAvatarDirectoryPath) {
+    for (const std::string path :
+         {"../avatars", R"(..\avatars)", "/avatars", R"(C:\avatars)",
+          "nested/avatars", "Avatars", "avatars.", "con"}) {
+        ProjectManifest manifest = makeValidManifest();
+        manifest.directories.avatars = path;
+
+        const auto result = validate(manifest);
+
+        ASSERT_FALSE(result.hasValue()) << path;
+        EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument) << path;
+    }
+}
+
 TEST(ProjectManifestTest, RejectsUpdatedBeforeCreated) {
     ProjectManifest manifest = makeValidManifest();
     manifest.createdAt = Utc::parseRfc3339("2026-07-16T09:30:00Z").value();

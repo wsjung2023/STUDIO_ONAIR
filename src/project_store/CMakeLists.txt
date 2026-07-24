@@ -39,6 +39,7 @@ cs_add_qtfree_library(cs_project_store
         internal/EditCommandCodec.cpp
         internal/DurableFile.h
         internal/DurableFile.cpp
+        internal/AvatarSpecStorageAuthority.h
     DEPENDS
         cs_domain
         cs_avatar

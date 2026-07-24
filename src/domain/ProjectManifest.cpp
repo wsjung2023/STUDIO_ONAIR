@@ -1,6 +1,7 @@
 #include "domain/ProjectManifest.h"
 
 #include "core/Uuid.h"
+#include "domain/PortablePath.h"
 
 #include <algorithm>
 #include <array>
@@ -127,6 +128,10 @@ Result<void> validate(const ProjectManifest& manifest) {
         if (auto result = validateDirectory(label, *value); !result.hasValue()) {
             return result;
         }
+    }
+    if (!isPortableLowercasePathComponent(manifest.directories.avatars)) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "directory 'avatars' must be a portable relative component"};
     }
 
     // schema marks requiredFeatures uniqueItems.
