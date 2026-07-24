@@ -161,6 +161,33 @@ cs_apply_warnings(cs_tests)
 
 gtest_discover_tests(cs_tests)
 
+if(CS_ENABLE_AVATAR_PACKS)
+    add_executable(cs_avatar_pack_tests
+        avatar_pack_adapter/AvatarPackValidatorTest.cpp
+    )
+    target_link_libraries(cs_avatar_pack_tests PRIVATE
+        cs_avatar_pack_adapter
+        cs_avatar
+        cs_core
+        miniz
+        Sodium::Sodium
+        GTest::gtest_main
+    )
+    set_target_properties(cs_avatar_pack_tests PROPERTIES
+        AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF
+    )
+    add_custom_command(TARGET cs_avatar_pack_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:Sodium::Sodium>
+            $<TARGET_FILE_DIR:cs_avatar_pack_tests>
+        VERBATIM
+    )
+    cs_apply_warnings(cs_avatar_pack_tests)
+    gtest_discover_tests(cs_avatar_pack_tests)
+endif()
+
 # cs_cursor (R2-01 cursor telemetry core) is Qt-free, so its tests live in their
 # own binary that links no Qt: a standing check that the cursor module really
 # does build below the application boundary. The schema path is injected so the

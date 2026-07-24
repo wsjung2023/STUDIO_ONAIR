@@ -1,17 +1,20 @@
-set(_cs_avatar_pack_anchor
-    "${CMAKE_CURRENT_BINARY_DIR}/cs_avatar_pack_adapter_anchor.cpp"
-)
-file(GENERATE
-    OUTPUT "${_cs_avatar_pack_anchor}"
-    CONTENT
-        "// Generated build anchor: package behavior is added in later tasks.\n"
-)
-set_source_files_properties("${_cs_avatar_pack_anchor}" PROPERTIES GENERATED TRUE)
-
 cs_add_qtfree_library(cs_avatar_pack_adapter
     SOURCES
-        "${_cs_avatar_pack_anchor}"
+        AvatarPackArchive.h
+        AvatarPackArchive.cpp
+        SodiumSignatureVerifier.h
+        SodiumSignatureVerifier.cpp
+        AvatarPackValidator.h
+        AvatarPackValidator.cpp
     DEPENDS
+        cs_core
+        cs_avatar
         miniz
         Sodium::Sodium
+)
+
+set_target_properties(cs_avatar_pack_adapter PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
 )
