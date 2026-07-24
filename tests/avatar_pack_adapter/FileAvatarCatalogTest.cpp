@@ -65,12 +65,56 @@ TEST(FileAvatarCatalogInternalTest,
               "avatar.catalog.reconciliation-required");
 }
 
+TEST(FileAvatarCatalogInternalTest,
+     AcceptsOnlyPortablePackageIdsAndCanonicalVersions) {
+    EXPECT_TRUE(detail::isPortablePackageId("vendor.foundation"));
+    EXPECT_TRUE(detail::isPortablePackageId("vendor.avatar_pack-2"));
+    EXPECT_FALSE(detail::isPortablePackageId(""));
+    EXPECT_FALSE(detail::isPortablePackageId("."));
+    EXPECT_FALSE(detail::isPortablePackageId(".."));
+    EXPECT_FALSE(detail::isPortablePackageId("/absolute"));
+    EXPECT_FALSE(detail::isPortablePackageId("C:/absolute"));
+    EXPECT_FALSE(detail::isPortablePackageId("../escape"));
+    EXPECT_FALSE(detail::isPortablePackageId("vendor/pack"));
+    EXPECT_FALSE(detail::isPortablePackageId("vendor\\pack"));
+    EXPECT_FALSE(detail::isPortablePackageId("vendor:pack"));
+    EXPECT_FALSE(detail::isPortablePackageId("Vendor.foundation"));
+    EXPECT_FALSE(detail::isPortablePackageId("vendor..foundation"));
+    EXPECT_FALSE(detail::isPortablePackageId("vendor."));
+    EXPECT_FALSE(detail::isPortablePackageId("vendor "));
+    EXPECT_FALSE(detail::isPortablePackageId("vendor.foundati\u00f3n"));
+    EXPECT_FALSE(detail::isPortablePackageId("vendor.con"));
+    EXPECT_FALSE(detail::isPortablePackageId("vendor.com1"));
+    EXPECT_FALSE(detail::isPortablePackageId("vendor.com\u00b9"));
+    EXPECT_FALSE(detail::isPortablePackageId(
+        std::string(129U, 'a')));
+
+    EXPECT_TRUE(detail::isCanonicalPackageVersion("0.0.0"));
+    EXPECT_TRUE(detail::isCanonicalPackageVersion("1.2.3-alpha.1+build-7"));
+    EXPECT_FALSE(detail::isCanonicalPackageVersion("01.2.3"));
+    EXPECT_FALSE(detail::isCanonicalPackageVersion("1.02.3"));
+    EXPECT_FALSE(detail::isCanonicalPackageVersion("1.2.03"));
+    EXPECT_FALSE(detail::isCanonicalPackageVersion("1.2"));
+    EXPECT_FALSE(detail::isCanonicalPackageVersion("v1.2.3"));
+    EXPECT_FALSE(detail::isCanonicalPackageVersion("1.2.3-ALPHA"));
+    EXPECT_FALSE(detail::isCanonicalPackageVersion("1.2.3+BUILD"));
+    EXPECT_FALSE(detail::isCanonicalPackageVersion("1.2.3/escape"));
+    EXPECT_FALSE(detail::isCanonicalPackageVersion("1.2.3\\escape"));
+    EXPECT_FALSE(detail::isCanonicalPackageVersion("1.2.3:escape"));
+    EXPECT_FALSE(detail::isCanonicalPackageVersion(
+        std::string(129U, '1')));
+}
+
 class FileAvatarCatalogTest : public ::testing::Test {
 protected:
     void SetUp() override {
         root_ = fs::temp_directory_path() /
                 ("creator-avatar-catalog-" + core::generateUuidV4());
         ASSERT_TRUE(fs::create_directories(root_));
+#ifndef _WIN32
+        fs::permissions(root_, fs::perms::owner_all,
+                        fs::perm_options::replace);
+#endif
         fixture_ =
             std::make_unique<SignedAvatarPackFixture>(root_ / "packs");
     }
@@ -174,7 +218,9 @@ std::error_code createDirectoryJunction(const fs::path& junction,
     return {static_cast<int>(code), std::system_category()};
 }
 
-DWORD grantEveryoneWriteAccess(const fs::path& path) {
+DWORD grantEveryoneWriteAccess(const fs::path& path,
+                               DWORD inheritance =
+                                   SUB_CONTAINERS_AND_OBJECTS_INHERIT) {
     std::array<std::uint8_t, SECURITY_MAX_SID_SIZE> everyone{};
     DWORD sidBytes = static_cast<DWORD>(everyone.size());
     if (CreateWellKnownSid(WinWorldSid, nullptr, everyone.data(),
@@ -192,7 +238,7 @@ DWORD grantEveryoneWriteAccess(const fs::path& path) {
     access.grfAccessPermissions =
         FILE_GENERIC_WRITE | DELETE | WRITE_DAC;
     access.grfAccessMode = GRANT_ACCESS;
-    access.grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+    access.grfInheritance = inheritance;
     access.Trustee.TrusteeForm = TRUSTEE_IS_SID;
     access.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
     access.Trustee.ptstrName =
@@ -210,6 +256,52 @@ DWORD grantEveryoneWriteAccess(const fs::path& path) {
 }
 #endif
 
+TEST_F(FileAvatarCatalogTest, OpenNeverCreatesMissingIntermediateAncestors) {
+    const auto missing = root_ / "missing" / "ancestor";
+
+    auto opened = FileAvatarCatalog::open(
+        missing / "catalog", {fixture_->trustedKey()});
+
+    EXPECT_FALSE(opened.hasValue());
+    EXPECT_FALSE(fs::exists(root_ / "missing"));
+}
+
+TEST_F(FileAvatarCatalogTest,
+       RetainedLockAuthorityRejectsAnInodeSplit) {
+    auto catalog = openCatalog();
+    const auto lockPath = root_ / "catalog" / "catalog.lock";
+    ASSERT_TRUE(fs::remove(lockPath));
+    {
+        std::ofstream replacement{lockPath, std::ios::binary};
+        replacement << "replacement";
+    }
+#ifndef _WIN32
+    fs::permissions(lockPath, fs::perms::owner_read | fs::perms::owner_write,
+                    fs::perm_options::replace);
+#endif
+
+    const auto listed = catalog.list();
+
+    EXPECT_FALSE(listed.hasValue());
+}
+
+#ifndef _WIN32
+TEST_F(FileAvatarCatalogTest,
+       RetainedRootAuthorityRejectsRenameAndReplacement) {
+    auto catalog = openCatalog();
+    const auto catalogRoot = root_ / "catalog";
+    const auto displaced = root_ / "catalog-displaced";
+    fs::rename(catalogRoot, displaced);
+    ASSERT_TRUE(fs::create_directory(catalogRoot));
+    fs::permissions(catalogRoot, fs::perms::owner_all,
+                    fs::perm_options::replace);
+
+    const auto listed = catalog.list();
+
+    EXPECT_FALSE(listed.hasValue());
+}
+#endif
+
 TEST_F(FileAvatarCatalogTest, InstallsARealSignedPackAndPublishesItAtomically) {
     auto catalog = openCatalog();
     const auto package = fixture_->writePack();
@@ -223,6 +315,93 @@ TEST_F(FileAvatarCatalogTest, InstallsARealSignedPackAndPublishesItAtomically) {
     ASSERT_EQ(manifests.value().size(), 1U);
     EXPECT_EQ(manifests.value()[0].assetId().value(),
               "core.body.humanoid");
+}
+
+TEST_F(FileAvatarCatalogTest,
+       RejectsSignedPackageIdentityBeforeUsingItAsAPath) {
+    auto catalog = openCatalog();
+    const std::array<std::string_view, 14U> unsafeIds{
+        "/absolute",
+        "C:/absolute",
+        "..",
+        "../escape",
+        "vendor/pack",
+        "vendor\\pack",
+        "vendor:pack",
+        "Vendor.foundation",
+        "vendor.foundati\u00f3n",
+        "vendor.foundatio\u0301n",
+        "vendor.con",
+        "vendor.com\u00b9",
+        "vendor.",
+        "vendor ",
+    };
+    for (const auto unsafeId : unsafeIds) {
+        SCOPED_TRACE(unsafeId);
+        SignedPackOptions unsafe;
+        unsafe.packageId = unsafeId;
+        const auto rejected =
+            catalog.install(fixture_->writePack(std::move(unsafe)));
+        EXPECT_FALSE(rejected.hasValue());
+        EXPECT_TRUE(fs::is_empty(root_ / "catalog" / "installed"));
+        EXPECT_TRUE(fs::is_empty(root_ / "catalog" / "staging"));
+    }
+    EXPECT_FALSE(fs::exists(root_ / "catalog" / "escape"));
+    const auto listed = catalog.list();
+    ASSERT_TRUE(listed.hasValue()) << listed.error().message();
+    EXPECT_TRUE(listed.value().empty());
+}
+
+TEST_F(FileAvatarCatalogTest,
+       RejectsAnActuallySignedNonCanonicalPackageVersion) {
+    auto catalog = openCatalog();
+    SignedPackOptions unsafe;
+    unsafe.rawManifestPackageVersion = "1.0.0-ALPHA";
+
+    const auto rejected =
+        catalog.install(fixture_->writePack(std::move(unsafe)));
+
+    EXPECT_FALSE(rejected.hasValue());
+    EXPECT_TRUE(fs::is_empty(root_ / "catalog" / "installed"));
+    EXPECT_TRUE(fs::is_empty(root_ / "catalog" / "staging"));
+}
+
+TEST_F(FileAvatarCatalogTest,
+       InstallPreflightsEveryPhysicalPackageAlias) {
+    auto catalog = openCatalog();
+    const auto installed = root_ / "catalog" / "installed";
+    const std::array<fs::path, 4U> aliases{
+        L"Vendor.foundation",
+        L"vendor.foundati\u00f3n",
+        L"vendor.foundatio\u0301n",
+        L"vendor.con",
+    };
+
+    for (std::size_t index = 0U; index < aliases.size(); ++index) {
+        SCOPED_TRACE(index);
+        const auto aliasPath = installed / aliases[index];
+        ASSERT_TRUE(fs::create_directory(aliasPath));
+        const auto rejected = catalog.install(fixture_->writePack());
+        EXPECT_FALSE(rejected.hasValue());
+        EXPECT_FALSE(fs::exists(installedVersion(root_)));
+        EXPECT_TRUE(fs::is_empty(root_ / "catalog" / "staging"));
+        ASSERT_TRUE(fs::remove(aliasPath));
+    }
+}
+
+TEST_F(FileAvatarCatalogTest,
+       InstallPreflightsEveryPhysicalVersionAlias) {
+    auto catalog = openCatalog();
+    const auto package =
+        root_ / "catalog" / "installed" / "vendor.foundation";
+    ASSERT_TRUE(fs::create_directory(package));
+    ASSERT_TRUE(fs::create_directory(package / "1.0.0-ALPHA"));
+
+    const auto rejected = catalog.install(fixture_->writePack());
+
+    EXPECT_FALSE(rejected.hasValue());
+    EXPECT_FALSE(fs::exists(installedVersion(root_)));
+    EXPECT_TRUE(fs::is_empty(root_ / "catalog" / "staging"));
 }
 
 TEST_F(FileAvatarCatalogTest, FailedSignedUpgradeLeavesPreviousVersionUsable) {
@@ -428,6 +607,38 @@ TEST_F(FileAvatarCatalogTest,
 }
 
 #ifdef _WIN32
+TEST_F(FileAvatarCatalogTest,
+       RejectsAnOtherUserWritableCatalogParent) {
+    const auto parent = root_ / "unsafe-parent";
+    const auto catalogRoot = parent / "catalog";
+    ASSERT_TRUE(fs::create_directories(catalogRoot));
+    ASSERT_EQ(grantEveryoneWriteAccess(parent, NO_INHERITANCE),
+              ERROR_SUCCESS);
+
+    auto opened = FileAvatarCatalog::open(
+        catalogRoot, {fixture_->trustedKey()});
+
+    EXPECT_FALSE(opened.hasValue());
+}
+
+TEST_F(FileAvatarCatalogTest,
+       RetainedRootAuthorityPreventsRenameAndReplacement) {
+    auto catalog = openCatalog();
+    const auto catalogRoot = root_ / "catalog";
+    const auto displaced = root_ / "catalog-displaced";
+
+    const auto renamed =
+        MoveFileExW(catalogRoot.c_str(), displaced.c_str(), 0U);
+
+    EXPECT_EQ(renamed, FALSE);
+    if (renamed != FALSE) {
+        ASSERT_NE(MoveFileExW(displaced.c_str(), catalogRoot.c_str(), 0U),
+                  FALSE);
+    }
+    const auto listed = catalog.list();
+    ASSERT_TRUE(listed.hasValue()) << listed.error().message();
+}
+
 TEST_F(FileAvatarCatalogTest,
        PayloadAuthorityRejectsAReparseDirectoryWithoutTraversal) {
     auto catalog = openCatalog();

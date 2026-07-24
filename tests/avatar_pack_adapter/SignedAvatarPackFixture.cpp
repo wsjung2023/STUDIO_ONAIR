@@ -129,8 +129,8 @@ AvatarAssetManifest manifestFor(const SignedPackOptions& options) {
 }
 
 std::vector<std::uint8_t> signatureMessage(
+    std::string_view canonical,
     const AvatarAssetManifest& manifest) {
-    const auto canonical = AvatarAssetManifestCodec{}.toJson(manifest).dump();
     std::vector<std::uint8_t> message{canonical.begin(), canonical.end()};
     auto payloads = manifest.values().payloads;
     std::sort(payloads.begin(), payloads.end(),
@@ -260,8 +260,13 @@ std::filesystem::path SignedAvatarPackFixture::writePack(
              .contents = bytes("real-avatar-model")});
     }
     const auto manifest = manifestFor(options);
-    const auto canonical = AvatarAssetManifestCodec{}.toJson(manifest).dump();
-    const auto message = signatureMessage(manifest);
+    auto manifestDocument = AvatarAssetManifestCodec{}.toJson(manifest);
+    if (options.rawManifestPackageVersion.has_value()) {
+        manifestDocument["packageVersion"] =
+            *options.rawManifestPackageVersion;
+    }
+    const auto canonical = manifestDocument.dump();
+    const auto message = signatureMessage(canonical, manifest);
     std::array<std::uint8_t, crypto_sign_BYTES> signature{};
     unsigned long long signatureBytes = 0;
     if (crypto_sign_detached(signature.data(), &signatureBytes,

@@ -172,6 +172,27 @@ if(CS_ENABLE_AVATAR_PACKS)
     )
     cs_apply_warnings(cs_avatar_catalog_lock_fixture)
 
+    if(UNIX)
+        add_executable(cs_avatar_catalog_authority_posix_fixture
+            helpers/CatalogRootAuthorityPosixFixture.cpp
+        )
+        target_link_libraries(cs_avatar_catalog_authority_posix_fixture PRIVATE
+            cs_avatar_pack_adapter
+            cs_core
+        )
+        set_target_properties(cs_avatar_catalog_authority_posix_fixture
+            PROPERTIES
+                AUTOMOC OFF
+                AUTOUIC OFF
+                AUTORCC OFF
+        )
+        cs_apply_warnings(cs_avatar_catalog_authority_posix_fixture)
+        add_test(
+            NAME cs_avatar_catalog_authority_posix_fixture
+            COMMAND cs_avatar_catalog_authority_posix_fixture
+        )
+    endif()
+
     add_executable(cs_avatar_pack_tests
         avatar_pack_adapter/AvatarPackValidatorTest.cpp
         avatar_pack_adapter/FileAvatarCatalogTest.cpp

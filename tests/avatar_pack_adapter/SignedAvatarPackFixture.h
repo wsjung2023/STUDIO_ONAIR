@@ -23,6 +23,7 @@ struct SignedPackOptions final {
     std::string assetVersion{"1.0.0"};
     std::vector<SignedPackPayload> payloads;
     std::optional<std::uint64_t> declaredPayloadBytes;
+    std::optional<std::string> rawManifestPackageVersion;
     bool corruptSignature{false};
 };
 

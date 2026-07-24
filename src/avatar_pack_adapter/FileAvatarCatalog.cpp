@@ -1,13 +1,16 @@
 #include "avatar_pack_adapter/FileAvatarCatalog.h"
 #include "avatar_pack_adapter/FileAvatarCatalogInternal.h"
+#include "avatar_pack_adapter/CatalogRootAuthority.h"
 #include "avatar_pack_adapter/SodiumSignatureVerifier.h"
 
 #include "avatar/AvatarAssetManifestCodec.h"
 #include "core/Sha256.h"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
+#include <cstdint>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -17,14 +20,13 @@
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #define NOMINMAX
-#include <Aclapi.h>
 #include <Windows.h>
 #else
 #include <fcntl.h>
-#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -58,294 +60,8 @@ std::mutex& processCatalogMutex() {
     return mutex;
 }
 
-#ifdef _WIN32
-std::optional<std::vector<std::uint8_t>> currentUserSid() {
-    HANDLE token = INVALID_HANDLE_VALUE;
-    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) == FALSE)
-        return std::nullopt;
-    DWORD required = 0U;
-    (void)GetTokenInformation(token, TokenUser, nullptr, 0U, &required);
-    if (required == 0U || GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-        CloseHandle(token);
-        return std::nullopt;
-    }
-    std::vector<std::uint8_t> information(required);
-    if (GetTokenInformation(token, TokenUser, information.data(), required,
-                            &required) == FALSE) {
-        CloseHandle(token);
-        return std::nullopt;
-    }
-    CloseHandle(token);
-    const auto* user =
-        reinterpret_cast<const TOKEN_USER*>(information.data());
-    const auto sidLength = GetLengthSid(user->User.Sid);
-    if (sidLength == 0U) return std::nullopt;
-    std::vector<std::uint8_t> sid(sidLength);
-    if (CopySid(sidLength, sid.data(), user->User.Sid) == FALSE)
-        return std::nullopt;
-    return sid;
-}
-
-bool trustedPrivateHandle(HANDLE handle) {
-    PSID owner = nullptr;
-    PACL dacl = nullptr;
-    PSECURITY_DESCRIPTOR descriptor = nullptr;
-    if (GetSecurityInfo(
-            handle, SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-            &owner, nullptr, &dacl, nullptr, &descriptor) !=
-        ERROR_SUCCESS) {
-        return false;
-    }
-    auto currentUser = currentUserSid();
-    if (!currentUser.has_value() || owner == nullptr ||
-        IsValidSid(owner) == FALSE ||
-        EqualSid(owner, currentUser->data()) == FALSE || dacl == nullptr) {
-        if (descriptor != nullptr) (void)LocalFree(descriptor);
-        return false;
-    }
-
-    std::array<std::uint8_t, SECURITY_MAX_SID_SIZE> systemSid{};
-    std::array<std::uint8_t, SECURITY_MAX_SID_SIZE> administratorsSid{};
-    DWORD systemBytes = static_cast<DWORD>(systemSid.size());
-    DWORD administratorsBytes =
-        static_cast<DWORD>(administratorsSid.size());
-    if (CreateWellKnownSid(WinLocalSystemSid, nullptr, systemSid.data(),
-                           &systemBytes) == FALSE ||
-        CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr,
-                           administratorsSid.data(),
-                           &administratorsBytes) == FALSE) {
-        (void)LocalFree(descriptor);
-        return false;
-    }
-
-    ULONG entryCount = 0U;
-    PEXPLICIT_ACCESSW entries = nullptr;
-    if (GetExplicitEntriesFromAclW(dacl, &entryCount, &entries) !=
-        ERROR_SUCCESS) {
-        (void)LocalFree(descriptor);
-        return false;
-    }
-    bool trusted = true;
-    constexpr DWORD kDangerousRights =
-        FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA |
-        FILE_WRITE_ATTRIBUTES | FILE_DELETE_CHILD | DELETE | WRITE_DAC |
-        WRITE_OWNER;
-    constexpr GENERIC_MAPPING kFileMapping{
-        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE,
-        FILE_ALL_ACCESS};
-    for (ULONG index = 0U; index < entryCount; ++index) {
-        const auto& entry = entries[index];
-        if (entry.grfAccessMode != GRANT_ACCESS &&
-            entry.grfAccessMode != SET_ACCESS) {
-            continue;
-        }
-        DWORD rights = entry.grfAccessPermissions;
-        auto mapping = kFileMapping;
-        MapGenericMask(&rights, &mapping);
-        if ((rights & kDangerousRights) == 0U) continue;
-        if (entry.Trustee.TrusteeForm != TRUSTEE_IS_SID ||
-            entry.Trustee.ptstrName == nullptr) {
-            trusted = false;
-            break;
-        }
-        auto* sid =
-            reinterpret_cast<PSID>(entry.Trustee.ptstrName);
-        if (IsValidSid(sid) == FALSE ||
-            (EqualSid(sid, currentUser->data()) == FALSE &&
-             EqualSid(sid, systemSid.data()) == FALSE &&
-             EqualSid(sid, administratorsSid.data()) == FALSE)) {
-            trusted = false;
-            break;
-        }
-    }
-    if (entries != nullptr) (void)LocalFree(entries);
-    (void)LocalFree(descriptor);
-    return trusted;
-}
-
 bool trustedPrivateDirectory(const fs::path& path) {
-    const HANDLE handle = CreateFileW(
-        path.c_str(), READ_CONTROL | FILE_READ_ATTRIBUTES,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-        OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-    if (handle == INVALID_HANDLE_VALUE) return false;
-    BY_HANDLE_FILE_INFORMATION information{};
-    const bool trusted =
-        GetFileInformationByHandle(handle, &information) != FALSE &&
-        (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0U &&
-        (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0U &&
-        trustedPrivateHandle(handle);
-    const bool closed = CloseHandle(handle) != FALSE;
-    return trusted && closed;
-}
-#else
-bool trustedPrivateDirectory(const fs::path& path) {
-    struct stat information {};
-    return ::lstat(path.c_str(), &information) == 0 &&
-           S_ISDIR(information.st_mode) &&
-           information.st_uid == ::geteuid() &&
-           (information.st_mode & 0077) == 0 &&
-           (information.st_mode & 0700) == 0700;
-}
-#endif
-
-class CatalogLock final {
-public:
-    CatalogLock(CatalogLock&& other) noexcept {
-#ifdef _WIN32
-        handle_ = std::exchange(other.handle_, INVALID_HANDLE_VALUE);
-        overlap_ = other.overlap_;
-        locked_ = std::exchange(other.locked_, false);
-        other.overlap_ = {};
-#else
-        descriptor_ = std::exchange(other.descriptor_, -1);
-#endif
-    }
-
-    CatalogLock& operator=(CatalogLock&& other) noexcept {
-        if (this == &other) return *this;
-        release();
-#ifdef _WIN32
-        handle_ = std::exchange(other.handle_, INVALID_HANDLE_VALUE);
-        overlap_ = other.overlap_;
-        locked_ = std::exchange(other.locked_, false);
-        other.overlap_ = {};
-#else
-        descriptor_ = std::exchange(other.descriptor_, -1);
-#endif
-        return *this;
-    }
-
-    ~CatalogLock() { release(); }
-
-    CatalogLock(const CatalogLock&) = delete;
-    CatalogLock& operator=(const CatalogLock&) = delete;
-
-    [[nodiscard]] static Result<CatalogLock> acquire(
-        const fs::path& path) {
-#ifdef _WIN32
-        const HANDLE handle = CreateFileW(
-            path.c_str(), GENERIC_READ | GENERIC_WRITE | READ_CONTROL, 0,
-            nullptr,
-            OPEN_ALWAYS,
-            FILE_ATTRIBUTE_HIDDEN | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-        if (handle == INVALID_HANDLE_VALUE) {
-            const auto code = GetLastError();
-            return ioError(code == ERROR_SHARING_VIOLATION ||
-                                   code == ERROR_LOCK_VIOLATION
-                               ? "avatar.catalog.lock.busy"
-                               : "avatar.catalog.lock");
-        }
-        BY_HANDLE_FILE_INFORMATION information{};
-        const bool regular =
-            GetFileInformationByHandle(handle, &information) != FALSE &&
-            (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0U &&
-            (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ==
-                0U &&
-            trustedPrivateHandle(handle);
-        if (!regular) {
-            CloseHandle(handle);
-            return ioError("avatar.catalog.lock");
-        }
-        CatalogLock result{handle};
-        if (LockFileEx(handle,
-                       LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
-                       0U, MAXDWORD, MAXDWORD, &result.overlap_) == FALSE) {
-            const auto code = GetLastError();
-            result.release();
-            return ioError(code == ERROR_LOCK_VIOLATION
-                               ? "avatar.catalog.lock.busy"
-                               : "avatar.catalog.lock");
-        }
-        result.locked_ = true;
-        return result;
-#else
-        const int descriptor =
-            ::open(path.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC,
-                   0600);
-        if (descriptor < 0) return ioError("avatar.catalog.lock");
-        struct stat information {};
-        if (::fstat(descriptor, &information) != 0 ||
-            !S_ISREG(information.st_mode) ||
-            information.st_uid != ::geteuid() ||
-            (information.st_mode & 0077) != 0) {
-            ::close(descriptor);
-            return ioError("avatar.catalog.lock");
-        }
-        if (::flock(descriptor, LOCK_EX | LOCK_NB) != 0) {
-            const auto code = errno;
-            ::close(descriptor);
-            return ioError(code == EWOULDBLOCK || code == EAGAIN
-                               ? "avatar.catalog.lock.busy"
-                               : "avatar.catalog.lock");
-        }
-        return CatalogLock{descriptor};
-#endif
-    }
-
-private:
-#ifdef _WIN32
-    explicit CatalogLock(HANDLE handle) noexcept : handle_(handle) {}
-#else
-    explicit CatalogLock(int descriptor) noexcept
-        : descriptor_(descriptor) {}
-#endif
-
-    void release() noexcept {
-#ifdef _WIN32
-        if (handle_ == INVALID_HANDLE_VALUE) return;
-        if (locked_)
-            (void)UnlockFileEx(handle_, 0U, MAXDWORD, MAXDWORD, &overlap_);
-        (void)CloseHandle(std::exchange(handle_, INVALID_HANDLE_VALUE));
-        locked_ = false;
-#else
-        if (descriptor_ < 0) return;
-        (void)::flock(descriptor_, LOCK_UN);
-        (void)::close(std::exchange(descriptor_, -1));
-#endif
-    }
-
-#ifdef _WIN32
-    HANDLE handle_{INVALID_HANDLE_VALUE};
-    OVERLAPPED overlap_{};
-    bool locked_{false};
-#else
-    int descriptor_{-1};
-#endif
-};
-
-Result<void> makePrivateDirectory(const fs::path& path) {
-#ifdef _WIN32
-    const auto existingAttributes = GetFileAttributesW(path.c_str());
-    if (existingAttributes != INVALID_FILE_ATTRIBUTES) {
-        if ((existingAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0U ||
-            (existingAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U)
-            return ioError("avatar.catalog.directory");
-    } else if (const auto reason = GetLastError();
-               reason != ERROR_FILE_NOT_FOUND &&
-               reason != ERROR_PATH_NOT_FOUND) {
-        return ioError("avatar.catalog.directory");
-    }
-#else
-    struct stat existing {};
-    if (::lstat(path.c_str(), &existing) == 0) {
-        if (!S_ISDIR(existing.st_mode))
-            return ioError("avatar.catalog.directory");
-    } else if (errno != ENOENT) {
-        return ioError("avatar.catalog.directory");
-    }
-#endif
-    std::error_code error;
-    if (!fs::create_directories(path, error) && error)
-        return ioError("avatar.catalog.directory");
-    fs::permissions(path, fs::perms::owner_all, fs::perm_options::replace,
-                    error);
-    if (error) return ioError("avatar.catalog.directory");
-    if (!trustedPrivateDirectory(path))
-        return ioError("avatar.catalog.directory");
-    return core::ok();
+    return detail::isTrustedPrivateDirectory(path);
 }
 
 bool isNoFollowDirectory(const fs::path& path) {
@@ -753,8 +469,11 @@ Result<void> verifyPayloads(const CatalogEntry& entry) {
          end;
          !error && iterator != end; iterator.increment(error)) {
         const auto relative =
-            fs::relative(iterator->path(), entry.versionRoot, error);
-        if (error) break;
+            iterator->path().lexically_relative(entry.versionRoot);
+        if (relative.empty() || relative.is_absolute() ||
+            relative.begin()->string() == "..") {
+            return ioError("avatar.catalog.topology");
+        }
         const auto status = iterator->symlink_status(error);
         if (error) break;
         const auto name = relative.generic_string();
@@ -798,6 +517,11 @@ Result<void> verifyPayloads(const CatalogEntry& entry) {
     return core::ok();
 }
 
+std::string utf8Filename(const fs::path& path) {
+    const auto value = path.filename().u8string();
+    return {reinterpret_cast<const char*>(value.data()), value.size()};
+}
+
 Result<std::vector<CatalogEntry>> scanCatalog(
     const fs::path& installed,
     const std::vector<TrustedAvatarKey>& trustedKeys) {
@@ -807,6 +531,10 @@ Result<std::vector<CatalogEntry>> scanCatalog(
     for (fs::directory_iterator packageIterator{installed, error}, packageEnd;
          !error && packageIterator != packageEnd;
          packageIterator.increment(error)) {
+        const auto packageSpelling =
+            utf8Filename(packageIterator->path());
+        if (!detail::isPortablePackageId(packageSpelling))
+            return ioError("avatar.catalog.layout");
         if (!trustedPrivateDirectory(packageIterator->path()))
             return ioError("avatar.catalog.layout");
         for (fs::directory_iterator versionIterator{
@@ -814,6 +542,10 @@ Result<std::vector<CatalogEntry>> scanCatalog(
              versionEnd;
              !error && versionIterator != versionEnd;
              versionIterator.increment(error)) {
+            const auto versionSpelling =
+                utf8Filename(versionIterator->path());
+            if (!detail::isCanonicalPackageVersion(versionSpelling))
+                return ioError("avatar.catalog.layout");
             if (!trustedPrivateDirectory(versionIterator->path())) {
                 return ioError("avatar.catalog.layout");
             }
@@ -822,9 +554,9 @@ Result<std::vector<CatalogEntry>> scanCatalog(
             if (!manifest.hasValue()) return manifest.error();
             const auto& values = manifest.value().values();
             if (values.packageId.value() !=
-                    packageIterator->path().filename().string() ||
+                    packageSpelling ||
                 values.packageVersion !=
-                    versionIterator->path().filename().string()) {
+                    versionSpelling) {
                 return ioError("avatar.catalog.layout");
             }
             const auto assetKey =
@@ -879,8 +611,10 @@ Result<CatalogEntry> findEntry(const fs::path& installed,
 
 class FileAvatarCatalog::Impl final {
 public:
-    Impl(fs::path root, std::vector<TrustedAvatarKey> trustedKeys)
-        : root_(std::move(root)),
+    Impl(detail::CatalogRootAuthority authority,
+         std::vector<TrustedAvatarKey> trustedKeys)
+        : authority_(std::move(authority)),
+          root_(authority_.rootPath()),
           installed_(root_ / "installed"),
           staging_(root_ / "staging"),
           quarantine_(root_ / "quarantine"),
@@ -888,6 +622,8 @@ public:
           validator_(std::move(trustedKeys), staging_) {}
 
     [[nodiscard]] Result<void> verifyDirectories() const {
+        auto authority = authority_.revalidate();
+        if (!authority.hasValue()) return authority.error();
         for (const auto& path :
              {root_, installed_, staging_, quarantine_}) {
             if (!trustedPrivateDirectory(path))
@@ -896,6 +632,7 @@ public:
         return core::ok();
     }
 
+    detail::CatalogRootAuthority authority_;
     fs::path root_;
     fs::path installed_;
     fs::path staging_;
@@ -917,24 +654,25 @@ Result<FileAvatarCatalog> FileAvatarCatalog::open(
     std::vector<TrustedAvatarKey> trustedKeys) noexcept {
     try {
         std::lock_guard lock{processCatalogMutex()};
-        auto root = makePrivateDirectory(catalogRoot);
-        if (!root.hasValue()) return root.error();
-        auto acquired = CatalogLock::acquire(catalogRoot / "catalog.lock");
+        auto openedAuthority =
+            detail::CatalogRootAuthority::open(std::move(catalogRoot));
+        if (!openedAuthority.hasValue())
+            return openedAuthority.error();
+        auto authority = std::move(openedAuthority).value();
+        auto acquired = authority.lock();
         if (!acquired.hasValue()) return acquired.error();
         auto catalogLock = std::move(acquired).value();
         (void)catalogLock;
-        for (const auto& child :
-             {catalogRoot / "installed", catalogRoot / "staging",
-              catalogRoot / "quarantine"}) {
-            auto created = makePrivateDirectory(child);
+        for (const auto child :
+             {"installed", "staging", "quarantine"}) {
+            auto created = authority.ensurePrivateChild(child);
             if (!created.hasValue()) return created.error();
         }
-        auto rootFlushed = flushDirectory(catalogRoot);
-        if (!rootFlushed.hasValue()) return rootFlushed.error();
-        auto cleaned = cleanupAbandonedStaging(catalogRoot / "staging");
+        auto cleaned =
+            cleanupAbandonedStaging(authority.rootPath() / "staging");
         if (!cleaned.hasValue()) return cleaned.error();
         auto implementation = std::make_unique<Impl>(
-            std::move(catalogRoot), std::move(trustedKeys));
+            std::move(authority), std::move(trustedKeys));
         auto entries = scanCatalog(implementation->installed_,
                                    implementation->trustedKeys_);
         if (!entries.hasValue()) return entries.error();
@@ -952,8 +690,7 @@ Result<CatalogInstallOutcome> FileAvatarCatalog::install(
     const fs::path& packagePath) noexcept {
     try {
         std::lock_guard lock{processCatalogMutex()};
-        auto acquired =
-            CatalogLock::acquire(implementation_->root_ / "catalog.lock");
+        auto acquired = implementation_->authority_.lock();
         if (!acquired.hasValue()) return acquired.error();
         auto catalogLock = std::move(acquired).value();
         (void)catalogLock;
@@ -964,9 +701,36 @@ Result<CatalogInstallOutcome> FileAvatarCatalog::install(
         if (!validated.hasValue()) return validated.error();
 
         const auto& values = validated.value().manifest.values();
+        if (!detail::isPortablePackageId(values.packageId.value()) ||
+            !detail::isCanonicalPackageVersion(values.packageVersion)) {
+            auto cleaned = validated.value().staging.cleanup();
+            return cleaned.hasValue()
+                       ? Result<CatalogInstallOutcome>{catalogError(
+                             ErrorCode::InvalidArgument,
+                             "avatar package identity is not portable",
+                             "avatar.catalog.package-path")}
+                       : Result<CatalogInstallOutcome>{cleaned.error()};
+        }
         const auto packageRoot =
             implementation_->installed_ / values.packageId.value();
         const auto finalRoot = packageRoot / values.packageVersion;
+        if (packageRoot.parent_path() != implementation_->installed_ ||
+            finalRoot.parent_path() != packageRoot ||
+            finalRoot.lexically_normal() != finalRoot) {
+            auto cleaned = validated.value().staging.cleanup();
+            return cleaned.hasValue()
+                       ? Result<CatalogInstallOutcome>{ioError(
+                             "avatar.catalog.package-path")}
+                       : Result<CatalogInstallOutcome>{cleaned.error()};
+        }
+        auto existing = scanCatalog(implementation_->installed_,
+                                    implementation_->trustedKeys_);
+        if (!existing.hasValue()) {
+            auto cleaned = validated.value().staging.cleanup();
+            return cleaned.hasValue()
+                       ? Result<CatalogInstallOutcome>{existing.error()}
+                       : Result<CatalogInstallOutcome>{cleaned.error()};
+        }
         std::error_code error;
         if (fs::exists(finalRoot, error)) {
             auto installed = loadVerifiedManifest(
@@ -998,14 +762,6 @@ Result<CatalogInstallOutcome> FileAvatarCatalog::install(
                        : Result<CatalogInstallOutcome>{cleaned.error()};
         }
 
-        auto existing = scanCatalog(implementation_->installed_,
-                                    implementation_->trustedKeys_);
-        if (!existing.hasValue()) {
-            auto cleaned = validated.value().staging.cleanup();
-            return cleaned.hasValue()
-                       ? Result<CatalogInstallOutcome>{existing.error()}
-                       : Result<CatalogInstallOutcome>{cleaned.error()};
-        }
         const auto duplicate =
             std::find_if(existing.value().begin(), existing.value().end(),
                          [&](const auto& entry) {
@@ -1020,22 +776,14 @@ Result<CatalogInstallOutcome> FileAvatarCatalog::install(
             return ioError("avatar.catalog.duplicate");
         }
 
-        auto packageDirectory = makePrivateDirectory(packageRoot);
+        auto packageDirectory = detail::ensurePrivateDirectoryChild(
+            implementation_->installed_, values.packageId.value());
         if (!packageDirectory.hasValue()) {
             auto cleaned = validated.value().staging.cleanup();
             return cleaned.hasValue() ? Result<CatalogInstallOutcome>{
                                             packageDirectory.error()}
                                       : Result<CatalogInstallOutcome>{
                                             cleaned.error()};
-        }
-        auto installedFlushed =
-            flushDirectory(implementation_->installed_);
-        if (!installedFlushed.hasValue()) {
-            auto cleaned = validated.value().staging.cleanup();
-            return cleaned.hasValue()
-                       ? Result<CatalogInstallOutcome>{
-                             installedFlushed.error()}
-                       : Result<CatalogInstallOutcome>{cleaned.error()};
         }
         auto promoted =
             std::move(validated.value().staging).promoteTo(finalRoot);
@@ -1064,8 +812,7 @@ Result<CatalogInstallOutcome> FileAvatarCatalog::install(
 Result<std::vector<AvatarAssetManifest>> FileAvatarCatalog::list() const {
     try {
         std::lock_guard lock{processCatalogMutex()};
-        auto acquired =
-            CatalogLock::acquire(implementation_->root_ / "catalog.lock");
+        auto acquired = implementation_->authority_.lock();
         if (!acquired.hasValue()) return acquired.error();
         auto catalogLock = std::move(acquired).value();
         (void)catalogLock;
@@ -1088,8 +835,7 @@ Result<AvatarAssetManifest> FileAvatarCatalog::find(
     const avatar::AvatarAssetId& id, std::string_view version) const {
     try {
         std::lock_guard lock{processCatalogMutex()};
-        auto acquired =
-            CatalogLock::acquire(implementation_->root_ / "catalog.lock");
+        auto acquired = implementation_->authority_.lock();
         if (!acquired.hasValue()) return acquired.error();
         auto catalogLock = std::move(acquired).value();
         (void)catalogLock;
@@ -1108,8 +854,7 @@ Result<fs::path> FileAvatarCatalog::payloadRoot(
     const avatar::AvatarAssetId& id, std::string_view version) const {
     try {
         std::lock_guard lock{processCatalogMutex()};
-        auto acquired =
-            CatalogLock::acquire(implementation_->root_ / "catalog.lock");
+        auto acquired = implementation_->authority_.lock();
         if (!acquired.hasValue()) return acquired.error();
         auto catalogLock = std::move(acquired).value();
         (void)catalogLock;

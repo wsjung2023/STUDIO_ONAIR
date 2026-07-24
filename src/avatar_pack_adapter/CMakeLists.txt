@@ -9,6 +9,10 @@ cs_add_qtfree_library(cs_avatar_pack_adapter
         SodiumSignatureVerifier.cpp
         AvatarPackValidator.h
         AvatarPackValidator.cpp
+        CatalogPathPolicy.h
+        CatalogPathPolicy.cpp
+        CatalogRootAuthority.h
+        CatalogRootAuthority.cpp
         FileAvatarCatalog.h
         FileAvatarCatalogInternal.h
         FileAvatarCatalog.cpp

@@ -26,6 +26,15 @@ enum class CatalogInstallOutcome {
 ///
 /// Installed roots are private to the current OS user. A malicious process
 /// running as that same user is outside the authority model.
+///
+/// The immediate parent of `catalogRoot` is a caller-owned durability
+/// precondition: it must already exist as a private current-user directory,
+/// and the caller is responsible for having made that parent's own creation
+/// durable. `open` creates at most the final `catalogRoot` child, flushes the
+/// parent entry, and retains no-follow parent and root handles for the
+/// lifetime of this object (with no-delete sharing on Windows and identity
+/// revalidation on POSIX). Paths returned by `payloadRoot` are valid authority
+/// only for that same lifetime.
 class FileAvatarCatalog final : public avatar::IAvatarCatalog {
 public:
     [[nodiscard]] static core::Result<FileAvatarCatalog> open(

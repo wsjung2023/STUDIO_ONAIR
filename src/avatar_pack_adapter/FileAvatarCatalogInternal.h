@@ -1,5 +1,6 @@
 #pragma once
 
+#include "avatar_pack_adapter/CatalogPathPolicy.h"
 #include "avatar_pack_adapter/FileAvatarCatalog.h"
 
 #include <chrono>
