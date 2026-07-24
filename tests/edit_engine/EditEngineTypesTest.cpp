@@ -235,6 +235,21 @@ TEST(EditEngineTypesTest, RejectsPreviewTimestampMismatchAndInvalidSurface) {
     EXPECT_FALSE(invalid.hasValue());
 }
 
+TEST(EditEngineTypesTest, VerticalPresetsHavePortraitDimensions) {
+    auto a = RenderPreset::h2641080x1920p30();
+    ASSERT_TRUE(a.hasValue()) << a.error().message();
+    EXPECT_EQ(a.value().id(), "h264-1080x1920p30");
+    EXPECT_EQ(a.value().width(), 1080u);
+    EXPECT_EQ(a.value().height(), 1920u);
+    EXPECT_GT(a.value().height(), a.value().width());  // portrait
+    auto b = RenderPreset::h264720x1280p30();
+    ASSERT_TRUE(b.hasValue()) << b.error().message();
+    EXPECT_EQ(b.value().id(), "h264-720x1280p30");
+    EXPECT_EQ(b.value().width(), 720u);
+    EXPECT_EQ(b.value().height(), 1280u);
+    EXPECT_GT(b.value().height(), b.value().width());
+}
+
 TEST(EditEngineTypesTest, ValidatesRenderPresetRequestAndProgress) {
     auto preset = RenderPreset::create(
         "h264-1080p30", 1920, 1080, FrameRate::create(30, 1).value(),

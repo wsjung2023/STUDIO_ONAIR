@@ -121,10 +121,14 @@ void ExportController::exportTo(const QUrl& destination,
     core::Result<edit_engine::RenderPreset> preset =
         presetId == QStringLiteral("h264-1080p30")
             ? edit_engine::RenderPreset::h2641080p30()
-            : presetId == QStringLiteral("h264-2160p30")
-                  ? edit_engine::RenderPreset::h2642160p30()
-                  : core::AppError{core::ErrorCode::InvalidArgument,
-                                   "unsupported export preset"};
+        : presetId == QStringLiteral("h264-2160p30")
+            ? edit_engine::RenderPreset::h2642160p30()
+        : presetId == QStringLiteral("h264-1080x1920p30")
+            ? edit_engine::RenderPreset::h2641080x1920p30()
+        : presetId == QStringLiteral("h264-720x1280p30")
+            ? edit_engine::RenderPreset::h264720x1280p30()
+            : core::AppError{core::ErrorCode::InvalidArgument,
+                             "unsupported export preset"};
     if (!preset.hasValue()) {
         setStatus(QString::fromStdString(preset.error().message()));
         return;

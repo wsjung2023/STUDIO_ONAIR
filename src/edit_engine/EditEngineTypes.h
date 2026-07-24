@@ -162,6 +162,9 @@ public:
 
     [[nodiscard]] static core::Result<RenderPreset> h2641080p30();
     [[nodiscard]] static core::Result<RenderPreset> h2642160p30();
+    // Vertical 9:16 (shorts) presets — portrait dimensions for a portrait project.
+    [[nodiscard]] static core::Result<RenderPreset> h2641080x1920p30();
+    [[nodiscard]] static core::Result<RenderPreset> h264720x1280p30();
 
     [[nodiscard]] const std::string& id() const noexcept { return id_; }
     [[nodiscard]] std::uint32_t width() const noexcept { return width_; }

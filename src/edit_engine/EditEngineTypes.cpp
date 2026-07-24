@@ -273,6 +273,21 @@ Result<RenderPreset> RenderPreset::h2642160p30() {
                   256'000, RenderFallbackPolicy::HardwareThenSoftware);
 }
 
+Result<RenderPreset> RenderPreset::h2641080x1920p30() {
+    auto frameRate = core::FrameRate::create(30, 1);
+    if (!frameRate.hasValue()) return frameRate.error();
+    return create("h264-1080x1920p30", 1080, 1920, frameRate.value(),
+                  12'000'000, 192'000,
+                  RenderFallbackPolicy::HardwareThenSoftware);
+}
+
+Result<RenderPreset> RenderPreset::h264720x1280p30() {
+    auto frameRate = core::FrameRate::create(30, 1);
+    if (!frameRate.hasValue()) return frameRate.error();
+    return create("h264-720x1280p30", 720, 1280, frameRate.value(), 8'000'000,
+                  192'000, RenderFallbackPolicy::HardwareThenSoftware);
+}
+
 Result<RenderRequest> RenderRequest::create(
     domain::ProjectId projectId, TimelineSnapshot snapshot,
     std::filesystem::path destination, RenderPreset preset,
