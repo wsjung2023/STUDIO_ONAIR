@@ -14,12 +14,16 @@
 #include <QImage>
 #include <QObject>
 #include <QString>
-#include <QTimer>
 #include <QVariantList>
 
+#include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <stop_token>
+#include <thread>
 
 namespace creator::app {
 
@@ -86,7 +90,9 @@ public:
     [[nodiscard]] QString trackingLabel() const { return trackingLabel_; }
     [[nodiscard]] quint32 avatarWidth() const noexcept { return width_; }
     [[nodiscard]] quint32 avatarHeight() const noexcept { return height_; }
-    [[nodiscard]] quint64 producedFrames() const noexcept { return producedFrames_; }
+    [[nodiscard]] quint64 producedFrames() const noexcept {
+        return producedFrames_.load(std::memory_order_relaxed);
+    }
 
     [[nodiscard]] QVariantList avatarCharacters() const;
     [[nodiscard]] bool avatarStyleSelectable() const noexcept {
@@ -143,8 +149,19 @@ signals:
     void previewFrameReady();
 
 private:
-    void tick();
+    // One rendered avatar frame (tracking poll -> map -> render -> fanout push).
+    // Runs on the dedicated render thread, NOT the UI thread, so a busy UI
+    // (recording, MLT, QML) can no longer starve the ~30 fps avatar and freeze it
+    // in the recording (CLAUDE.md 9: no heavy work on the UI thread).
+    void renderOnce();
+    // The render thread's body: paces renderOnce() at ~30 fps until stop.
+    void renderLoop(std::stop_token stop);
+    void startRenderThread();
+    void stopRenderThread() noexcept;
     void publishStatus(QString message);
+    // Thread-safe status update: marshals publishStatus + stateChanged onto the
+    // owning (UI) thread so the render thread never writes status_ directly.
+    void postStatus(QString message);
     void persistStyle();
     void syncTransformFromRenderer();
 
@@ -172,15 +189,25 @@ private:
     std::shared_ptr<creator::capture::LatestVideoFrameMailbox> previewMailbox_;
     std::shared_ptr<creator::capture::VideoFrameFanoutSink> fanout_;
     std::shared_ptr<creator::capture::IVideoFrameSink> recordingSink_;
-    QTimer timer_;
+
+    // Serialises the tracking-provider + render chain so the render thread and a
+    // UI-thread renderDiagnosticImage() can never poll the provider or rasterise
+    // concurrently. The renderer's own live controls (character/placement/scale/
+    // position) are already atomic, so the QML mutators do NOT take this lock.
+    std::mutex pipelineMutex_;
+    // Render-thread pacing/wake. condition_variable_any so the wait can be
+    // interrupted by the jthread's stop_token for immediate, clean cancellation.
+    std::mutex wakeMutex_;
+    std::condition_variable_any wakeCv_;
+    std::jthread renderThread_;
 
     bool enabled_{false};
     bool capturing_{false};
     QString status_;
     QString trackingLabel_;
-    creator::core::DurationNs animationPhase_{0};
-    std::optional<creator::core::TimestampNs> lastTick_;
-    quint64 producedFrames_{0};
+    creator::core::DurationNs animationPhase_{0};  // guarded by pipelineMutex_
+    std::optional<creator::core::TimestampNs> lastTick_;  // guarded by pipelineMutex_
+    std::atomic<quint64> producedFrames_{0};
 };
 
 }  // namespace creator::app

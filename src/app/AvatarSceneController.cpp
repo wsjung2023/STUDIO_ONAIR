@@ -12,7 +12,9 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <mutex>
 #include <utility>
 
 namespace creator::app {
@@ -93,11 +95,9 @@ AvatarSceneController::AvatarSceneController(
                                                        : tr("placeholder avatar"));
     trackingLabel_ = tr("%1 · %2").arg(trackingKind, modelKind);
     status_ = tr("Avatar idle");
-    timer_.setInterval(33);  // ~30 fps
-    connect(&timer_, &QTimer::timeout, this, [this] { tick(); });
 }
 
-AvatarSceneController::~AvatarSceneController() { timer_.stop(); }
+AvatarSceneController::~AvatarSceneController() { stopRenderThread(); }
 
 void AvatarSceneController::setAvatarRecordingSink(
     std::shared_ptr<creator::capture::IVideoFrameSink> sink) noexcept {
@@ -115,19 +115,61 @@ void AvatarSceneController::setAvatarEnabled(bool enabled) {
             previewMailbox_);
         fanout_->setSecondary(recordingSink_);
         fanout_->onCaptureStarted();
-        animationPhase_ = creator::core::DurationNs{0};
-        lastTick_.reset();
+        {
+            std::lock_guard lock{pipelineMutex_};
+            animationPhase_ = creator::core::DurationNs{0};
+            lastTick_.reset();
+        }
         capturing_ = true;
         publishStatus(tr("Avatar live — %1").arg(trackingLabel_));
-        timer_.start();
+        // Start the render thread AFTER the fanout/mailbox exist so the worker
+        // always sees a valid sink; stop it BEFORE they are reset on disable.
+        startRenderThread();
     } else {
-        timer_.stop();
+        stopRenderThread();
         capturing_ = false;
         fanout_.reset();
         previewMailbox_.reset();
         publishStatus(tr("Avatar stopped"));
     }
     emit stateChanged();
+}
+
+void AvatarSceneController::startRenderThread() {
+    stopRenderThread();  // ensure no prior worker is running
+    renderThread_ = std::jthread([this](std::stop_token stop) { renderLoop(stop); });
+}
+
+void AvatarSceneController::stopRenderThread() noexcept {
+    if (!renderThread_.joinable()) return;
+    renderThread_.request_stop();
+    wakeCv_.notify_all();  // wake the pacing wait immediately for a clean join
+    renderThread_.join();
+}
+
+void AvatarSceneController::renderLoop(std::stop_token stop) {
+    // Steady ~30 fps pacing, independent of the UI thread's load. The frame's
+    // real timestamp still comes from ProjectClock::now() inside renderOnce().
+    constexpr auto kPeriod = std::chrono::milliseconds{33};
+    while (!stop.stop_requested()) {
+        renderOnce();
+        std::unique_lock lock{wakeMutex_};
+        // Interruptible wait: returns early when stop is requested, so join is
+        // immediate rather than up to one frame late.
+        wakeCv_.wait_for(lock, stop, kPeriod, [] { return false; });
+    }
+}
+
+void AvatarSceneController::postStatus(QString message) {
+    // Marshal onto the owning (UI) thread: status_ is read by QML there, so the
+    // render thread must never write it directly.
+    QMetaObject::invokeMethod(
+        this,
+        [this, message = std::move(message)]() mutable {
+            publishStatus(std::move(message));
+            emit stateChanged();
+        },
+        Qt::QueuedConnection);
 }
 
 void AvatarSceneController::publishStatus(QString message) {
@@ -245,6 +287,9 @@ void AvatarSceneController::syncTransformFromRenderer() {
 QImage AvatarSceneController::renderDiagnosticImage(double extraSeconds) {
     const auto extra = std::chrono::duration_cast<creator::core::DurationNs>(
         std::chrono::duration<double>(extraSeconds));
+    // Serialise against the render thread: both this and renderOnce() poll the
+    // same provider and rasterise through the same pipeline.
+    std::lock_guard lock{pipelineMutex_};
     creator::media::VideoFrame phaseFrame{};
     phaseFrame.timestamp = creator::core::TimestampNs{} + animationPhase_ + extra;
     phaseFrame.width = width_;
@@ -268,87 +313,103 @@ QImage AvatarSceneController::renderDiagnosticImage(double extraSeconds) {
     return view.copy();
 }
 
-void AvatarSceneController::tick() {
-    if (!enabled_ || !fanout_) return;
+void AvatarSceneController::renderOnce() {
+    // fanout_ is created before this thread starts and reset only after it joins,
+    // so reading it here is safe; copy it so a push happens off the pipeline lock.
+    const auto fanout = fanout_;
+    if (!fanout) return;
 
     const auto now = creator::core::ProjectClock::now();
+    // Only gates whether the SYNTHETIC provider's phase advances (the real
+    // OpenSeeFace path passes a constant `true`). For synthetic, this reads the
+    // device controller's camera state from this thread; that enum read is an
+    // aligned, single-instruction load on every target, so at worst the gate is
+    // one frame stale when the camera starts/stops — harmless for a "breathe
+    // while the camera is on" cue, and never affects the recorded avatar.
     const bool live = cameraLive_ ? cameraLive_() : true;
-    // Advance the synthetic expression's phase only while the webcam is
-    // capturing, so the camera's presence drives the avatar's motion. A frozen
-    // phase holds the last pose when the camera is not live.
-    if (lastTick_.has_value() && live) {
-        animationPhase_ += now - *lastTick_;
-    }
-    lastTick_ = now;
 
-    // The provider reads only the frame timestamp (it ignores pixels); feed it
-    // the small, camera-gated phase so the animation is well-conditioned.
-    creator::media::VideoFrame phaseFrame{};
-    phaseFrame.timestamp = creator::core::TimestampNs{} + animationPhase_;
-    phaseFrame.width = width_;
-    phaseFrame.height = height_;
-    phaseFrame.pixelFormat = creator::media::PixelFormat::Bgra8;
+    creator::media::VideoFrame out{};
+    {
+        // Serialise the provider poll + rasterise against renderDiagnosticImage()
+        // (which polls/renders on the UI thread). The renderer's live controls are
+        // atomic and are NOT covered here.
+        std::lock_guard lock{pipelineMutex_};
 
-    auto tracked = provider_->process(phaseFrame);
-    if (!tracked.hasValue()) {
-        publishStatus(tr("Avatar tracking error: %1")
-                          .arg(QString::fromStdString(tracked.error().message())));
-        emit stateChanged();
-        return;
-    }
-    const avatar::AvatarMotionSample sample{
-        .timestamp = phaseFrame.timestamp,
-        .parameters = tracked.value().raw,
-        .provider = provider_->providerId(),
-    };
-    auto rendered = pipeline_.render(sample);
-    if (!rendered.hasValue()) {
-        publishStatus(tr("Avatar render error: %1")
-                          .arg(QString::fromStdString(rendered.error().message())));
-        emit stateChanged();
-        return;
-    }
-    const auto& frame = rendered.value();
-    const auto bytes = frame.bytes();
+        // Advance the synthetic expression's phase only while the webcam is
+        // capturing, so the camera's presence drives the avatar's motion. A frozen
+        // phase holds the last pose when the camera is not live.
+        if (lastTick_.has_value() && live) {
+            animationPhase_ += now - *lastTick_;
+        }
+        lastTick_ = now;
+
+        // The provider reads only the frame timestamp (it ignores pixels); feed it
+        // the small, camera-gated phase so the animation is well-conditioned.
+        creator::media::VideoFrame phaseFrame{};
+        phaseFrame.timestamp = creator::core::TimestampNs{} + animationPhase_;
+        phaseFrame.width = width_;
+        phaseFrame.height = height_;
+        phaseFrame.pixelFormat = creator::media::PixelFormat::Bgra8;
+
+        auto tracked = provider_->process(phaseFrame);
+        if (!tracked.hasValue()) {
+            postStatus(tr("Avatar tracking error: %1")
+                           .arg(QString::fromStdString(tracked.error().message())));
+            return;
+        }
+        const avatar::AvatarMotionSample sample{
+            .timestamp = phaseFrame.timestamp,
+            .parameters = tracked.value().raw,
+            .provider = provider_->providerId(),
+        };
+        auto rendered = pipeline_.render(sample);
+        if (!rendered.hasValue()) {
+            postStatus(tr("Avatar render error: %1")
+                           .arg(QString::fromStdString(rendered.error().message())));
+            return;
+        }
+        const auto& frame = rendered.value();
+        const auto bytes = frame.bytes();
 
 #if defined(CS_APP_ENABLE_FFMPEG)
-    // Wrap the packed BGRA in the CpuBgraFrameBuffer the preview node and the
-    // recording encoder both expect (mirrors the camera's Windows frame handle).
-    auto buffer = creator::ffmpeg_adapter::CpuBgraFrameBuffer::create(
-        frame.width(), frame.height());
-    if (!buffer.hasValue()) {
-        publishStatus(tr("Avatar frame buffer error"));
-        emit stateChanged();
-        return;
-    }
-    auto storage = std::move(buffer).value();
-    const auto copyBytes = std::min(bytes.size(), storage->size());
-    std::memcpy(storage->data(), bytes.data(), copyBytes);
-    creator::media::VideoFrame out{};
-    out.timestamp = now;
-    out.width = frame.width();
-    out.height = frame.height();
-    out.visibleRect = creator::media::PixelRect{0, 0, frame.width(), frame.height()};
-    out.contentWidth = frame.width();
-    out.contentHeight = frame.height();
-    out.pixelFormat = creator::media::PixelFormat::Bgra8;
-    out.platformHandle = std::move(storage);
-    fanout_->onVideoFrame(std::move(out));
-    ++producedFrames_;
-    emit previewFrameReady();
+        // Wrap the packed BGRA in the CpuBgraFrameBuffer the preview node and the
+        // recording encoder both expect (mirrors the camera's Windows frame
+        // handle). The copy makes `out` self-contained so it survives the lock.
+        auto buffer = creator::ffmpeg_adapter::CpuBgraFrameBuffer::create(
+            frame.width(), frame.height());
+        if (!buffer.hasValue()) {
+            postStatus(tr("Avatar frame buffer error"));
+            return;
+        }
+        auto storage = std::move(buffer).value();
+        const auto copyBytes = std::min(bytes.size(), storage->size());
+        std::memcpy(storage->data(), bytes.data(), copyBytes);
+        out.timestamp = now;
+        out.width = frame.width();
+        out.height = frame.height();
+        out.visibleRect =
+            creator::media::PixelRect{0, 0, frame.width(), frame.height()};
+        out.contentWidth = frame.width();
+        out.contentHeight = frame.height();
+        out.pixelFormat = creator::media::PixelFormat::Bgra8;
+        out.platformHandle = std::move(storage);
 #else
-    auto out = frame.toVideoFrame();
-    if (!out.hasValue()) {
-        publishStatus(tr("Avatar frame handoff error"));
-        emit stateChanged();
-        return;
-    }
-    auto outFrame = std::move(out).value();
-    outFrame.timestamp = now;
-    fanout_->onVideoFrame(std::move(outFrame));
-    ++producedFrames_;
-    emit previewFrameReady();
+        auto handoff = frame.toVideoFrame();
+        if (!handoff.hasValue()) {
+            postStatus(tr("Avatar frame handoff error"));
+            return;
+        }
+        out = std::move(handoff).value();
+        out.timestamp = now;
 #endif
+    }  // pipelineMutex_ released before the (thread-safe) fanout push
+
+    fanout->onVideoFrame(std::move(out));
+    producedFrames_.fetch_add(1, std::memory_order_relaxed);
+    // stateChanged fires too rarely to drive a moving avatar; this per-frame
+    // repaint trigger is marshalled onto the UI thread (queued) from here.
+    QMetaObject::invokeMethod(
+        this, [this] { emit previewFrameReady(); }, Qt::QueuedConnection);
 }
 
 }  // namespace creator::app
