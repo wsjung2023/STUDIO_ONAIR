@@ -37,7 +37,7 @@ public:
     static constexpr std::size_t kMaximumPathBytes = 1024U;
 
     [[nodiscard]] static core::Result<AvatarPackArchive> open(
-        const std::filesystem::path& packagePath);
+        const std::filesystem::path& packagePath) noexcept;
 
     AvatarPackArchive(AvatarPackArchive&&) noexcept;
     AvatarPackArchive& operator=(AvatarPackArchive&&) noexcept;
@@ -49,12 +49,12 @@ public:
     [[nodiscard]] const std::vector<AvatarPackArchiveEntry>& entries()
         const noexcept;
     [[nodiscard]] core::Result<std::vector<std::uint8_t>> read(
-        const AvatarPackArchiveEntry& entry, std::size_t maximumBytes);
+        const AvatarPackArchiveEntry& entry, std::size_t maximumBytes) noexcept;
     using ChunkWriter = std::function<core::Result<void>(
         std::span<const std::uint8_t>)>;
     [[nodiscard]] core::Result<std::string> stream(
         const AvatarPackArchiveEntry& entry,
-        std::uint64_t maximumExpandedBytes, const ChunkWriter& writer);
+        std::uint64_t maximumExpandedBytes, const ChunkWriter& writer) noexcept;
 
 private:
     class Impl;

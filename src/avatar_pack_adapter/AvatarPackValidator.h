@@ -1,6 +1,7 @@
 #pragma once
 
 #include "avatar/AvatarAssetManifest.h"
+#include "avatar_pack_adapter/AvatarPackStaging.h"
 #include "core/Result.h"
 
 #include <sodium.h>
@@ -20,8 +21,8 @@ struct TrustedAvatarKey final {
 
 struct ValidatedAvatarPack final {
     avatar::AvatarAssetManifest manifest;
-    /// Owned by the successful caller, which must delete this tree after use.
-    std::filesystem::path stagingRoot;
+    /// Move-only retained filesystem authority for the verified staged tree.
+    AvatarPackStaging staging;
 };
 
 /// Preflights, authenticates, and transactionally stages one avatar pack.
@@ -31,7 +32,7 @@ public:
                         std::filesystem::path stagingParent);
 
     [[nodiscard]] core::Result<ValidatedAvatarPack> validateAndExtract(
-        const std::filesystem::path& packagePath) const;
+        const std::filesystem::path& packagePath) const noexcept;
 
 private:
     std::vector<TrustedAvatarKey> trustedKeys_;

@@ -1,4 +1,5 @@
 #include "avatar/AvatarAssetManifestCodec.h"
+#include "avatar_pack_adapter/AvatarPackArchive.h"
 #include "avatar_pack_adapter/AvatarPackValidator.h"
 #include "core/Sha256.h"
 #include "core/Uuid.h"
@@ -25,6 +26,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -48,6 +50,21 @@ using avatar::AvatarPayloadHash;
 using avatar::AvatarRepresentation;
 using avatar::AvatarRight;
 using avatar::AvatarSlot;
+
+static_assert(!std::is_copy_constructible_v<AvatarPackStaging>);
+static_assert(std::is_nothrow_move_constructible_v<AvatarPackStaging>);
+static_assert(!std::is_copy_constructible_v<ValidatedAvatarPack>);
+static_assert(std::is_nothrow_move_constructible_v<ValidatedAvatarPack>);
+static_assert(
+    noexcept(AvatarPackArchive::open(std::declval<const fs::path&>())));
+static_assert(noexcept(std::declval<AvatarPackArchive&>().read(
+    std::declval<const AvatarPackArchiveEntry&>(), 1U)));
+static_assert(noexcept(std::declval<AvatarPackArchive&>().stream(
+    std::declval<const AvatarPackArchiveEntry&>(), 1U,
+    std::declval<const AvatarPackArchive::ChunkWriter&>())));
+static_assert(
+    noexcept(std::declval<const AvatarPackValidator&>().validateAndExtract(
+        std::declval<const fs::path&>())));
 using avatar::GrantState;
 using avatar::LicenseGrant;
 using avatar::RigFamily;
@@ -342,6 +359,18 @@ void addArchiveComment(const fs::path& path, std::size_t size) {
     write16(archive, eocd + 20U, static_cast<std::uint16_t>(size));
     archive.insert(archive.begin() + static_cast<std::ptrdiff_t>(eocd + 22U),
                    size, 0x41U);
+    writeBytes(path, archive);
+}
+
+void addSecondStructurallyValidEocd(const fs::path& path) {
+    auto archive = readBytes(path);
+    const auto trueEocd = eocdOffset(archive);
+    constexpr std::size_t kEocdBytes = 22U;
+    write16(archive, trueEocd + 20U, static_cast<std::uint16_t>(kEocdBytes));
+    std::vector<std::uint8_t> falseEocd(kEocdBytes);
+    write32(falseEocd, 0U, 0x06054b50U);
+    write32(falseEocd, 16U, static_cast<std::uint32_t>(trueEocd + kEocdBytes));
+    archive.insert(archive.end(), falseEocd.begin(), falseEocd.end());
     writeBytes(path, archive);
 }
 
@@ -868,14 +897,25 @@ TEST_F(AvatarPackValidatorTest, ExtractsARealValidSignedFixture) {
     ASSERT_TRUE(result.hasValue()) << result.error().message();
     EXPECT_EQ(result.value().manifest.assetId().value(),
               "core.body.humanoid");
-    EXPECT_TRUE(fs::is_regular_file(result.value().stagingRoot /
-                                    "manifest.json"));
-    EXPECT_EQ(readBytes(result.value().stagingRoot / "signature.ed25519")
+    auto manifestExists = result.value().staging.exists(
+                                    "manifest.json");
+    ASSERT_TRUE(manifestExists.hasValue());
+    EXPECT_TRUE(manifestExists.value());
+    auto signature =
+        result.value().staging.read("signature.ed25519", crypto_sign_BYTES);
+    ASSERT_TRUE(signature.hasValue());
+    EXPECT_EQ(signature.value()
                   .size(),
               crypto_sign_BYTES);
-    EXPECT_EQ(readBytes(result.value().stagingRoot / "signing-key-id.txt"),
+    auto keyId =
+        result.value().staging.read("signing-key-id.txt", 128U);
+    ASSERT_TRUE(keyId.hasValue());
+    EXPECT_EQ(keyId.value(),
               bytes("test.release"));
-    EXPECT_EQ(readBytes(result.value().stagingRoot / "payload/model.bin"),
+    auto payload =
+        result.value().staging.read("payload/model.bin", 1024U);
+    ASSERT_TRUE(payload.hasValue());
+    EXPECT_EQ(payload.value(),
               bytes("real-avatar-model"));
 }
 
@@ -887,9 +927,9 @@ TEST_F(AvatarPackValidatorTest,
     const auto result = validator().validateAndExtract(package);
 
     ASSERT_TRUE(result.hasValue()) << result.error().message();
-    const std::u8string nativePath{
-        reinterpret_cast<const char8_t*>(utf8Path.data()), utf8Path.size()};
-    EXPECT_EQ(readBytes(result.value().stagingRoot / fs::path{nativePath}),
+    auto payload = result.value().staging.read(utf8Path, 1024U);
+    ASSERT_TRUE(payload.hasValue());
+    EXPECT_EQ(payload.value(),
               bytes("model"));
 }
 
@@ -1257,6 +1297,19 @@ TEST_F(AvatarPackValidatorTest,
 }
 
 TEST_F(AvatarPackValidatorTest,
+       RejectsMultipleStructurallyValidEocdCandidates) {
+    const auto package = writeSignedPack();
+    addSecondStructurallyValidEocd(package);
+
+    const auto result = validator().validateAndExtract(package);
+
+    ASSERT_FALSE(result.hasValue());
+    ASSERT_TRUE(result.error().issueCode().has_value());
+    EXPECT_EQ(*result.error().issueCode(), "avatar.pack.archive.envelope");
+    EXPECT_TRUE(directoryEmpty(staging_));
+}
+
+TEST_F(AvatarPackValidatorTest,
        RejectsZip64SentinelsLocatorsAndRecordsBeforeMinizInitialization) {
     const auto expectEnvelope = [&](const fs::path& package) {
         const auto result = validator().validateAndExtract(package);
@@ -1361,8 +1414,23 @@ TEST_F(AvatarPackValidatorTest,
     }
 }
 
+#ifdef _WIN32
+
+TEST_F(AvatarPackValidatorTest, RejectsAPreOpenedWritableArchiveHandle) {
+    const auto package = writeSignedPack();
+    WritableFixtureFile mutablePackage{package};
+    ASSERT_TRUE(mutablePackage.valid());
+
+    const auto result = validator().validateAndExtract(package);
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), core::ErrorCode::IoFailure);
+    EXPECT_TRUE(directoryEmpty(staging_));
+}
+#endif
+
 TEST_F(AvatarPackValidatorTest,
-       StagesTheExactPreReadMetadataWhenTheSourceArchiveChanges) {
+       KeepsOneImmutableArchiveSourceDuringValidation) {
     const std::vector<Payload> payloads{
         {.path = "payload/model.bin", .contents = bytes("model")}};
     const auto manifest = manifestFor(payloads);
@@ -1374,38 +1442,100 @@ TEST_F(AvatarPackValidatorTest,
     const auto package =
         writeSignedPackWithRawManifest(payloads, manifest, rawManifest);
     const auto archive = readBytes(package);
-    const auto manifestEntry = findCentral(archive, "manifest.json");
-    const auto localNameBytes =
-        read16(archive, manifestEntry.localOffset + 26U);
-    const auto localExtraBytes =
-        read16(archive, manifestEntry.localOffset + 28U);
-    const auto manifestDataOffset =
-        manifestEntry.localOffset + 30U + localNameBytes +
-        localExtraBytes;
-    WritableFixtureFile mutablePackage{package};
-    ASSERT_TRUE(mutablePackage.valid());
+    const auto central = findCentral(archive, "manifest.json");
+    const auto eocd = eocdOffset(archive);
+    const auto movedPackage = root_ / "moved-source.csavatarpack";
 
     std::atomic_bool mutationAttempted{false};
+    std::atomic_bool writerOpened{false};
     std::atomic_bool mutationSucceeded{false};
+    std::atomic_bool moveSucceeded{false};
     std::thread mutator{[&] {
         const auto observed = waitForStagingRoot(staging_);
         if (!observed.has_value()) return;
         mutationAttempted.store(true, std::memory_order_release);
-        mutationSucceeded.store(
-            mutablePackage.overwriteByte(
-                manifestDataOffset + rawManifest.size() - 1U,
-                static_cast<std::uint8_t>('\n')),
+        {
+            WritableFixtureFile mutablePackage{package};
+            writerOpened.store(
+            mutablePackage.valid(),
+                               std::memory_order_release);
+            if (mutablePackage.valid()) {
+                const bool centralChanged = mutablePackage.overwriteByte(
+                    central.offset + 38U,
+                static_cast<std::uint8_t>(archive.at(central.offset + 38U) ^
+                                              0x40U));
+                const bool eocdChanged = mutablePackage.overwriteByte(
+                    eocd + 4U,
+                    static_cast<std::uint8_t>(archive.at(eocd + 4U) ^ 0x01U));
+                mutationSucceeded.store(centralChanged && eocdChanged,
             std::memory_order_release);
+            }
+        }
+#ifdef _WIN32
+        moveSucceeded.store(
+            MoveFileExW(package.c_str(), movedPackage.c_str(), 0U) != FALSE,
+            std::memory_order_release);
+#else
+        std::error_code error;
+        fs::rename(package, movedPackage, error);
+        moveSucceeded.store(!error, std::memory_order_release);
+#endif
     }};
 
     const auto result = validator().validateAndExtract(package);
     mutator.join();
 
     ASSERT_TRUE(mutationAttempted.load(std::memory_order_acquire));
+#ifdef _WIN32
+    EXPECT_FALSE(writerOpened.load(std::memory_order_acquire));
+    EXPECT_FALSE(mutationSucceeded.load(std::memory_order_acquire));
+    EXPECT_FALSE(moveSucceeded.load(std::memory_order_acquire));
+#else
+    EXPECT_TRUE(writerOpened.load(std::memory_order_acquire));
     ASSERT_TRUE(mutationSucceeded.load(std::memory_order_acquire));
+    EXPECT_TRUE(moveSucceeded.load(std::memory_order_acquire));
+#endif
     ASSERT_TRUE(result.hasValue()) << result.error().message();
-    EXPECT_EQ(readBytes(result.value().stagingRoot / "manifest.json"),
-              rawManifest);
+    auto stagedManifest =
+        result.value().staging.read("manifest.json", rawManifest.size());
+    ASSERT_TRUE(stagedManifest.hasValue());
+    EXPECT_EQ(stagedManifest.value(), rawManifest);
+}
+
+TEST_F(AvatarPackValidatorTest,
+       SealedStagingCapabilityNeverReadsAPathReplacement) {
+    auto result = validator().validateAndExtract(writeSignedPack());
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    auto& staging = result.value().staging;
+    const auto displayPath = staging.displayPath();
+    const auto moved = root_ / "moved-sealed-staging";
+
+#ifdef _WIN32
+    EXPECT_FALSE(MoveFileExW(displayPath.c_str(), moved.c_str(), 0U) != FALSE);
+#else
+    std::error_code renameError;
+    fs::rename(displayPath, moved, renameError);
+    ASSERT_FALSE(renameError) << renameError.message();
+    ASSERT_TRUE(fs::create_directories(displayPath / "payload"));
+    writeBytes(displayPath / "payload/model.bin", bytes("replacement"));
+#endif
+
+    auto payload = staging.read("payload/model.bin", 1024U);
+    ASSERT_TRUE(payload.hasValue()) << payload.error().message();
+    EXPECT_EQ(payload.value(), bytes("real-avatar-model"));
+
+    auto cleaned = staging.cleanup();
+#ifdef _WIN32
+    EXPECT_TRUE(cleaned.hasValue())
+        << (cleaned.hasValue() ? "" : cleaned.error().message());
+    EXPECT_FALSE(fs::exists(displayPath));
+#else
+    ASSERT_FALSE(cleaned.hasValue());
+    ASSERT_TRUE(cleaned.error().issueCode().has_value());
+    EXPECT_EQ(*cleaned.error().issueCode(), "avatar.pack.staging.cleanup");
+    EXPECT_EQ(readBytes(displayPath / "payload/model.bin"),
+              bytes("replacement"));
+#endif
 }
 
 #ifdef _WIN32

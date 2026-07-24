@@ -12,6 +12,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <new>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -42,6 +43,18 @@ AppError packError(ErrorCode code, std::string message,
 AppError invalidPack(std::string message, std::string issueCode) {
     return packError(ErrorCode::InvalidArgument, std::move(message),
                      std::move(issueCode), "avatar.validation.pack");
+}
+
+AppError allocationError() {
+    return packError(ErrorCode::InsufficientStorage,
+                     "avatar pack validation allocation failed",
+                     "avatar.pack.allocation", "avatar.validation.io");
+}
+
+AppError exceptionError() {
+    return packError(ErrorCode::IoFailure,
+                     "avatar pack validation failed safely",
+                     "avatar.pack.exception", "avatar.validation.io");
 }
 
 bool validKeyId(std::string_view keyId) noexcept {
@@ -119,6 +132,8 @@ Result<nlohmann::json> parseManifest(
                 "avatar.pack.manifest.duplicate-member");
         }
         return document;
+    } catch (const std::bad_alloc&) {
+        return allocationError();
     } catch (const std::exception&) {
         return invalidPack("avatar pack manifest JSON is invalid",
                            "avatar.pack.manifest.parse");
@@ -174,37 +189,43 @@ Result<const TrustedAvatarKey*> findTrustedKey(
     return match;
 }
 
-std::vector<std::uint8_t> signatureMessage(
-    const AvatarAssetManifest& manifest) {
+std::vector<std::uint8_t>
+signatureMessage(const AvatarAssetManifest& manifest) {
     const auto canonical = AvatarAssetManifestCodec{}.toJson(manifest).dump();
     std::vector<std::uint8_t> message{canonical.begin(), canonical.end()};
-    auto payloads = manifest.values().payloads;
+    std::vector<const avatar::AvatarPayloadHash*> payloads;
+    payloads.reserve(manifest.values().payloads.size());
+    for (const auto& payload : manifest.values().payloads)
+        payloads.push_back(&payload);
     std::sort(payloads.begin(), payloads.end(),
-              [](const auto& left, const auto& right) {
-                  return ordinalLess(left.path, right.path);
+              [](const auto* left, const auto* right) {
+                  return ordinalLess(left->path, right->path);
               });
-    for (const auto& payload : payloads) {
-        message.insert(message.end(), payload.path.begin(),
-                       payload.path.end());
+    for (const auto* payload : payloads) {
+        message.insert(message.end(), payload->path.begin(),
+                       payload->path.end());
         message.push_back(0U);
-        const auto hash = decodeHash(payload.sha256);
+        const auto hash = decodeHash(payload->sha256);
         if (!hash.has_value()) continue;
         message.insert(message.end(), hash->begin(), hash->end());
     }
     return message;
 }
 
-Result<void> validatePayloadParity(
-    const AvatarAssetManifest& manifest,
-    const std::vector<AvatarPackArchiveEntry>& entries) {
+Result<void>
+validatePayloadParity(const AvatarAssetManifest& manifest,
+                      const std::vector<AvatarPackArchiveEntry>& entries) {
     std::vector<const AvatarPackArchiveEntry*> archivePayloads;
     for (const auto& entry : entries) {
         if (!metadataPath(entry.path)) archivePayloads.push_back(&entry);
     }
-    auto declared = manifest.values().payloads;
+    std::vector<const avatar::AvatarPayloadHash*> declared;
+    declared.reserve(manifest.values().payloads.size());
+    for (const auto& payload : manifest.values().payloads)
+        declared.push_back(&payload);
     std::sort(declared.begin(), declared.end(),
-              [](const auto& left, const auto& right) {
-                  return ordinalLess(left.path, right.path);
+              [](const auto* left, const auto* right) {
+                  return ordinalLess(left->path, right->path);
               });
     std::sort(archivePayloads.begin(), archivePayloads.end(),
               [](const auto* left, const auto* right) {
@@ -217,14 +238,13 @@ Result<void> validatePayloadParity(
     }
     std::uint64_t actualBytes = 0;
     for (std::size_t index = 0; index < declared.size(); ++index) {
-        if (archivePayloads[index]->path != declared[index].path) {
+        if (archivePayloads[index]->path != declared[index]->path) {
             return invalidPack(
                 "avatar pack payload entries do not match the manifest",
                 "avatar.pack.payload.parity");
         }
-        if (actualBytes >
-            std::numeric_limits<std::uint64_t>::max() -
-                archivePayloads[index]->uncompressedBytes) {
+        if (actualBytes > std::numeric_limits<std::uint64_t>::max() -
+                              archivePayloads[index]->uncompressedBytes) {
             return invalidPack("avatar pack payload size overflowed",
                                "avatar.pack.payload.bytes");
         }
@@ -247,118 +267,131 @@ AvatarPackValidator::AvatarPackValidator(
       stagingParent_(std::move(stagingParent)) {}
 
 Result<ValidatedAvatarPack> AvatarPackValidator::validateAndExtract(
-    const std::filesystem::path& packagePath) const {
-    auto opened = AvatarPackArchive::open(packagePath);
-    if (!opened.hasValue()) return opened.error();
-    auto archive = std::move(opened).value();
-    const auto& entries = archive.entries();
+    const std::filesystem::path& packagePath) const noexcept {
+    try {
+        auto opened = AvatarPackArchive::open(packagePath);
+        if (!opened.hasValue()) return opened.error();
+        auto archive = std::move(opened).value();
+        const auto& entries = archive.entries();
 
-    const auto* manifestEntry = findEntry(entries, kManifestPath);
-    const auto* signatureEntry = findEntry(entries, kSignaturePath);
-    const auto* keyIdEntry = findEntry(entries, kKeyIdPath);
-    if (manifestEntry == nullptr || signatureEntry == nullptr ||
-        keyIdEntry == nullptr) {
-        return invalidPack("avatar pack required metadata is missing",
-                           "avatar.pack.metadata.required");
-    }
-
-    auto rawManifest = archive.read(*manifestEntry, kMaximumManifestBytes);
-    if (!rawManifest.hasValue()) return rawManifest.error();
-    auto rawSignature = archive.read(*signatureEntry, crypto_sign_BYTES);
-    if (!rawSignature.hasValue()) return rawSignature.error();
-    if (rawSignature.value().size() != crypto_sign_BYTES) {
-        return invalidPack("avatar pack signature length is invalid",
-                           "avatar.pack.signature.length");
-    }
-    auto rawKeyId = archive.read(*keyIdEntry, kMaximumKeyIdBytes);
-    if (!rawKeyId.hasValue()) return rawKeyId.error();
-    const std::string keyId{
-        reinterpret_cast<const char*>(rawKeyId.value().data()),
-        rawKeyId.value().size()};
-
-    auto document = parseManifest(rawManifest.value());
-    if (!document.hasValue()) return document.error();
-    auto decoded = AvatarAssetManifestCodec{}.fromJson(document.value());
-    if (!decoded.hasValue()) {
-        return invalidPack("avatar pack manifest failed schema validation",
-                           "avatar.pack.manifest.schema");
-    }
-    auto manifest = std::move(decoded).value();
-    if (auto parity = validatePayloadParity(manifest, entries);
-        !parity.hasValue()) {
-        return parity.error();
-    }
-
-    const SodiumSignatureVerifier verifier;
-    auto trusted = findTrustedKey(keyId, trustedKeys_, verifier);
-    if (!trusted.hasValue()) return trusted.error();
-    std::array<std::byte, crypto_sign_BYTES> signature{};
-    std::transform(rawSignature.value().begin(),
-                   rawSignature.value().end(), signature.begin(),
-                   [](std::uint8_t value) {
-                       return static_cast<std::byte>(value);
-                   });
-    const auto message = signatureMessage(manifest);
-    if (auto verified =
-            verifier.verifyDetached(signature, message,
-                                    trusted.value()->publicKey);
-        !verified.hasValue()) {
-        return verified.error();
-    }
-
-    auto createdStaging = AvatarPackStaging::create(stagingParent_);
-    if (!createdStaging.hasValue()) return createdStaging.error();
-    auto staging = std::move(createdStaging).value();
-    const auto failAfterStaging =
-        [&staging](AppError original) -> Result<ValidatedAvatarPack> {
-        auto cleaned = staging.cleanup();
-        return cleaned.hasValue()
-                   ? Result<ValidatedAvatarPack>{std::move(original)}
-                   : Result<ValidatedAvatarPack>{cleaned.error()};
-    };
-
-    for (const auto& metadata :
-         std::array{
-             std::pair{kManifestPath,
-                       std::span<const std::uint8_t>{rawManifest.value()}},
-             std::pair{kSignaturePath,
-                       std::span<const std::uint8_t>{rawSignature.value()}},
-             std::pair{kKeyIdPath,
-                       std::span<const std::uint8_t>{rawKeyId.value()}}}) {
-        auto written = staging.writeNewFile(metadata.first, metadata.second);
-        if (!written.hasValue())
-            return failAfterStaging(written.error());
-    }
-
-    auto payloads = manifest.values().payloads;
-    std::sort(payloads.begin(), payloads.end(),
-              [](const auto& left, const auto& right) {
-                  return ordinalLess(left.path, right.path);
-              });
-    for (const auto& payload : payloads) {
-        const auto* entry = findEntry(entries, payload.path);
-        if (entry == nullptr) {
-            return failAfterStaging(invalidPack(
-                "avatar pack payload disappeared before extraction",
-                "avatar.pack.payload.parity"));
+        const auto* manifestEntry = findEntry(entries, kManifestPath);
+        const auto* signatureEntry = findEntry(entries, kSignaturePath);
+        const auto* keyIdEntry = findEntry(entries, kKeyIdPath);
+        if (manifestEntry == nullptr || signatureEntry == nullptr ||
+            keyIdEntry == nullptr) {
+            return invalidPack("avatar pack required metadata is missing",
+                               "avatar.pack.metadata.required");
         }
-        auto extracted = staging.extractNewFile(
-            archive, *entry, AvatarPackArchive::kMaximumEntryBytes);
-        if (!extracted.hasValue())
-            return failAfterStaging(extracted.error());
-        if (extracted.value() != payload.sha256) {
-            return failAfterStaging(invalidPack(
-                "avatar pack payload hash is invalid",
-                "avatar.pack.payload.hash"));
-        }
-    }
 
-    auto finished = staging.finish();
-    if (!finished.hasValue())
-        return failAfterStaging(finished.error());
-    return ValidatedAvatarPack{.manifest = std::move(manifest),
-                               .stagingRoot =
-                                   std::move(finished).value()};
+        auto rawManifest = archive.read(*manifestEntry, kMaximumManifestBytes);
+        if (!rawManifest.hasValue()) return rawManifest.error();
+        auto rawSignature = archive.read(*signatureEntry, crypto_sign_BYTES);
+        if (!rawSignature.hasValue()) return rawSignature.error();
+        if (rawSignature.value().size() != crypto_sign_BYTES) {
+            return invalidPack("avatar pack signature length is invalid",
+                               "avatar.pack.signature.length");
+        }
+        auto rawKeyId = archive.read(*keyIdEntry, kMaximumKeyIdBytes);
+        if (!rawKeyId.hasValue()) return rawKeyId.error();
+        const std::string keyId{
+            reinterpret_cast<const char*>(rawKeyId.value().data()),
+            rawKeyId.value().size()};
+
+        auto document = parseManifest(rawManifest.value());
+        if (!document.hasValue()) return document.error();
+        auto decoded = AvatarAssetManifestCodec{}.fromJson(document.value());
+        if (!decoded.hasValue()) {
+            return invalidPack("avatar pack manifest failed schema validation",
+                               "avatar.pack.manifest.schema");
+        }
+        auto manifest = std::move(decoded).value();
+        if (auto parity = validatePayloadParity(manifest, entries);
+            !parity.hasValue()) {
+            return parity.error();
+        }
+
+        const SodiumSignatureVerifier verifier;
+        auto trusted = findTrustedKey(keyId, trustedKeys_, verifier);
+        if (!trusted.hasValue()) return trusted.error();
+        std::array<std::byte, crypto_sign_BYTES> signature{};
+        std::transform(rawSignature.value().begin(), rawSignature.value().end(),
+                       signature.begin(), [](std::uint8_t value) {
+                           return static_cast<std::byte>(value);
+                       });
+        const auto message = signatureMessage(manifest);
+        if (auto verified = verifier.verifyDetached(signature, message,
+                                                    trusted.value()->publicKey);
+            !verified.hasValue()) {
+            return verified.error();
+        }
+
+        auto createdStaging = AvatarPackStaging::create(stagingParent_);
+        if (!createdStaging.hasValue()) return createdStaging.error();
+        auto staging = std::move(createdStaging).value();
+        const auto failAfterStaging =
+            [&staging](AppError original) -> Result<ValidatedAvatarPack> {
+            auto cleaned = staging.cleanup();
+            return cleaned.hasValue()
+                       ? Result<ValidatedAvatarPack>{std::move(original)}
+                       : Result<ValidatedAvatarPack>{cleaned.error()};
+        };
+
+        try {
+            for (const auto& metadata : std::array{
+                     std::pair{
+                         kManifestPath,
+                         std::span<const std::uint8_t>{rawManifest.value()}},
+                     std::pair{
+                         kSignaturePath,
+                         std::span<const std::uint8_t>{rawSignature.value()}},
+                     std::pair{kKeyIdPath, std::span<const std::uint8_t>{
+                                               rawKeyId.value()}}}) {
+                auto written =
+                    staging.writeNewFile(metadata.first, metadata.second);
+                if (!written.hasValue())
+                    return failAfterStaging(written.error());
+            }
+
+            std::vector<const avatar::AvatarPayloadHash*> payloads;
+            payloads.reserve(manifest.values().payloads.size());
+            for (const auto& payload : manifest.values().payloads)
+                payloads.push_back(&payload);
+            std::sort(payloads.begin(), payloads.end(),
+                      [](const auto* left, const auto* right) {
+                          return ordinalLess(left->path, right->path);
+                      });
+            for (const auto* payload : payloads) {
+                const auto* entry = findEntry(entries, payload->path);
+                if (entry == nullptr) {
+                    return failAfterStaging(invalidPack(
+                        "avatar pack payload disappeared before extraction",
+                        "avatar.pack.payload.parity"));
+                }
+                auto extracted = staging.extractNewFile(
+                    archive, *entry, AvatarPackArchive::kMaximumEntryBytes);
+                if (!extracted.hasValue())
+                    return failAfterStaging(extracted.error());
+                if (extracted.value() != payload->sha256) {
+                    return failAfterStaging(
+                        invalidPack("avatar pack payload hash is invalid",
+                                    "avatar.pack.payload.hash"));
+                }
+            }
+
+            auto sealed = staging.seal();
+            if (!sealed.hasValue()) return failAfterStaging(sealed.error());
+            return ValidatedAvatarPack{.manifest = std::move(manifest),
+                                       .staging = std::move(staging)};
+        } catch (const std::bad_alloc&) {
+            return failAfterStaging(allocationError());
+        } catch (...) {
+            return failAfterStaging(exceptionError());
+        }
+    } catch (const std::bad_alloc&) {
+        return allocationError();
+    } catch (...) {
+        return exceptionError();
+    }
 }
 
 }  // namespace creator::avatar_pack_adapter
