@@ -9,6 +9,9 @@ cs_add_qtfree_library(cs_avatar_pack_adapter
         SodiumSignatureVerifier.cpp
         AvatarPackValidator.h
         AvatarPackValidator.cpp
+        FileAvatarCatalog.h
+        FileAvatarCatalogInternal.h
+        FileAvatarCatalog.cpp
     DEPENDS
         cs_core
         cs_avatar

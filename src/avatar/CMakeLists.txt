@@ -1,6 +1,7 @@
 cs_add_qtfree_library(cs_avatar
     SOURCES
         AvatarIdentifiers.h
+        IAvatarCatalog.h
         AvatarTypes.h
         AvatarSpec.h
         AvatarSpec.cpp

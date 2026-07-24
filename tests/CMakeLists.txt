@@ -162,8 +162,20 @@ cs_apply_warnings(cs_tests)
 gtest_discover_tests(cs_tests)
 
 if(CS_ENABLE_AVATAR_PACKS)
+    add_executable(cs_avatar_catalog_lock_fixture
+        helpers/AvatarCatalogLockFixture.cpp
+    )
+    set_target_properties(cs_avatar_catalog_lock_fixture PROPERTIES
+        AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF
+    )
+    cs_apply_warnings(cs_avatar_catalog_lock_fixture)
+
     add_executable(cs_avatar_pack_tests
         avatar_pack_adapter/AvatarPackValidatorTest.cpp
+        avatar_pack_adapter/FileAvatarCatalogTest.cpp
+        avatar_pack_adapter/SignedAvatarPackFixture.cpp
     )
     target_link_libraries(cs_avatar_pack_tests PRIVATE
         cs_avatar_pack_adapter
@@ -178,6 +190,10 @@ if(CS_ENABLE_AVATAR_PACKS)
         AUTOUIC OFF
         AUTORCC OFF
     )
+    target_compile_definitions(cs_avatar_pack_tests PRIVATE
+        CS_AVATAR_CATALOG_LOCK_FIXTURE_PATH="$<TARGET_FILE:cs_avatar_catalog_lock_fixture>"
+    )
+    add_dependencies(cs_avatar_pack_tests cs_avatar_catalog_lock_fixture)
     add_custom_command(TARGET cs_avatar_pack_tests POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:Sodium::Sodium>
