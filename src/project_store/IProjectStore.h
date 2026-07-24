@@ -29,7 +29,8 @@ public:
     /// Fails with AlreadyExists if a manifest is already there - never
     /// overwrites, because that would discard someone's recording.
     [[nodiscard]] virtual creator::core::Result<creator::domain::ProjectManifest> create(
-        const std::filesystem::path& packageDirectory, const std::string& name) = 0;
+        const std::filesystem::path& packageDirectory, const std::string& name,
+        creator::domain::CanvasSettings canvas = {}) = 0;
 
     /// Fails with NotFound if there is no manifest, ParseFailure if it is not
     /// readable JSON, or UnsupportedVersion if it was written by a newer build.

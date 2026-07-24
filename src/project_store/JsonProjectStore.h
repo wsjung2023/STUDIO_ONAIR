@@ -21,7 +21,8 @@ public:
     static constexpr std::string_view kManifestFileName = "manifest.json";
 
     [[nodiscard]] creator::core::Result<creator::domain::ProjectManifest> create(
-        const std::filesystem::path& packageDirectory, const std::string& name) override;
+        const std::filesystem::path& packageDirectory, const std::string& name,
+        creator::domain::CanvasSettings canvas = {}) override;
 
     [[nodiscard]] creator::core::Result<creator::domain::ProjectManifest> load(
         const std::filesystem::path& packageDirectory) override;

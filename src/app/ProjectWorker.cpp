@@ -47,8 +47,9 @@ ProjectWorker::ProjectWorker(std::unique_ptr<project_store::IProjectPackageStore
                              RecentProjectRegistry registry)
     : store_(std::move(store)), registry_(std::move(registry)) {}
 
-void ProjectWorker::createProject(std::filesystem::path path, std::string name) {
-    publishOpen(store_->create(path, name));
+void ProjectWorker::createProject(std::filesystem::path path, std::string name,
+                                  domain::CanvasSettings canvas) {
+    publishOpen(store_->create(path, name, canvas));
 }
 
 void ProjectWorker::openProject(std::filesystem::path path) {

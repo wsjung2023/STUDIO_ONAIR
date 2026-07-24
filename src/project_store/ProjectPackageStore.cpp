@@ -595,7 +595,8 @@ Result<std::vector<fs::path>> orphanPartCandidates(const fs::path& packagePath) 
 }  // namespace
 
 Result<OpenProjectResult> ProjectPackageStore::create(const fs::path& packagePath,
-                                                      const std::string& name) {
+                                                      const std::string& name,
+                                                      domain::CanvasSettings canvas) {
     if (packagePath.filename().empty()) {
         return AppError{ErrorCode::InvalidArgument, "project package path needs a filename"};
     }
@@ -612,7 +613,7 @@ Result<OpenProjectResult> ProjectPackageStore::create(const fs::path& packagePat
     if (ec) return filesystemError("inspect staging", ec);
 
     JsonProjectStore manifests;
-    auto manifest = manifests.create(staging, name);
+    auto manifest = manifests.create(staging, name, canvas);
     if (!manifest.hasValue()) {
         removeGeneratedStaging(staging, packagePath);
         return manifest.error();

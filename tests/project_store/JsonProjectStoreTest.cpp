@@ -54,6 +54,21 @@ protected:
     JsonProjectStore store_;
 };
 
+TEST_F(JsonProjectStoreTest, CreateUsesRequestedPortraitCanvas) {
+    const auto created = store_.create(
+        packageDir_, "Shorts",
+        creator::domain::CanvasSettings{.width = 1080, .height = 1920});
+    ASSERT_TRUE(created.hasValue()) << created.error().message();
+    EXPECT_EQ(created.value().canvas.width, 1080);
+    EXPECT_EQ(created.value().canvas.height, 1920);
+    // Default (no canvas arg) stays landscape so existing callers are unchanged.
+    fs::path landscapeDir = packageDir_.parent_path() / "landscape.cstudio";
+    const auto landscape = store_.create(landscapeDir, "Wide");
+    ASSERT_TRUE(landscape.hasValue()) << landscape.error().message();
+    EXPECT_EQ(landscape.value().canvas.width, 1920);
+    EXPECT_EQ(landscape.value().canvas.height, 1080);
+}
+
 TEST_F(JsonProjectStoreTest, CreateWritesManifestAndDirectories) {
     const auto created = store_.create(packageDir_, "MyTutorial");
 

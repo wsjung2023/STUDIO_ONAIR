@@ -20,7 +20,8 @@ public:
     ProjectWorker(std::unique_ptr<project_store::IProjectPackageStore> store,
                   RecentProjectRegistry registry);
 
-    void createProject(std::filesystem::path path, std::string name);
+    void createProject(std::filesystem::path path, std::string name,
+                       domain::CanvasSettings canvas = {});
     void openProject(std::filesystem::path path);
     void recoverSession(std::filesystem::path path, domain::SessionId sessionId);
     void refreshRecentProjects();

@@ -39,7 +39,8 @@ public:
     IProjectPackageStore& operator=(IProjectPackageStore&&) = delete;
 
     [[nodiscard]] virtual core::Result<OpenProjectResult> create(
-        const std::filesystem::path& packagePath, const std::string& name) = 0;
+        const std::filesystem::path& packagePath, const std::string& name,
+        domain::CanvasSettings canvas = {}) = 0;
     [[nodiscard]] virtual core::Result<OpenProjectResult> open(
         const std::filesystem::path& packagePath) = 0;
     [[nodiscard]] virtual core::Result<void> beginRecording(

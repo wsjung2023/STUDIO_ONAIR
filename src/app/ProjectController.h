@@ -54,7 +54,11 @@ public:
     [[nodiscard]] QUrl defaultProjectFolder() const;
     [[nodiscard]] std::optional<std::filesystem::path> recordingPackagePath() const;
 
-    Q_INVOKABLE void createProject(const QUrl& packageUrl, const QString& displayName);
+    /// `portrait` selects a 9:16 (1080x1920) shorts canvas; false (default)
+    /// keeps the 16:9 (1920x1080) landscape canvas and existing QML callers.
+    Q_INVOKABLE void createProject(const QUrl& packageUrl,
+                                   const QString& displayName,
+                                   bool portrait = false);
     Q_INVOKABLE void openProject(const QUrl& packageUrl);
     Q_INVOKABLE void recoverSession(const QString& sessionId);
     Q_INVOKABLE void leaveRecoveryForLater();

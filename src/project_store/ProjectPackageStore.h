@@ -7,7 +7,8 @@ namespace creator::project_store {
 class ProjectPackageStore final : public IProjectPackageStore {
 public:
     [[nodiscard]] core::Result<OpenProjectResult> create(
-        const std::filesystem::path& packagePath, const std::string& name) override;
+        const std::filesystem::path& packagePath, const std::string& name,
+        domain::CanvasSettings canvas = {}) override;
     [[nodiscard]] core::Result<OpenProjectResult> open(
         const std::filesystem::path& packagePath) override;
     [[nodiscard]] core::Result<void> beginRecording(
