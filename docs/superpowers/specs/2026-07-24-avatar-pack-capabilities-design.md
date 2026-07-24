@@ -28,14 +28,15 @@ source writes and renames irrelevant to validation.
 All archive allocation, filesystem, and library exceptions become
 `core::Result` errors. No path reopen occurs after the initial no-follow open.
 
-## EOCD candidate selection
+## EOCD parity with miniz
 
-The bounded tail scan collects every EOCD signature whose declared comment
-ends exactly at the snapshot boundary. Each candidate is independently checked
-against the complete raw ZIP structural contract, including disk/count,
-central-directory, ZIP64, local-header, and overlap rules. Validation succeeds
-only when exactly one candidate is structurally valid. Zero or multiple valid
-candidates return the stable archive-envelope error.
+The bounded tail scan rejects any archive whose searchable tail contains more
+than one EOCD signature. This strict policy makes the only accepted signature
+the same last signature miniz will select. That candidate must end exactly at
+the immutable source boundary and pass the complete raw ZIP structural
+contract, including comment, disk/count, central-directory, ZIP64,
+local-header, overlap, and configured-cap checks. A later invalid or oversized
+signature is never ignored in favor of an earlier valid candidate.
 
 ## Sealed staging capability
 
@@ -47,25 +48,47 @@ descriptors. The previous bare `stagingRoot` field is removed.
 
 The public lease contract is:
 
-- `displayPath()` returns a non-authoritative path for diagnostics and UI only;
+- no filesystem path or path-like diagnostic is exposed;
 - bounded `exists(relativePath)` and `read(relativePath, maximumBytes)` access
   files through retained OS capabilities with no-follow and identity checks;
 - `cleanup()` explicitly removes owned content and returns a stable
   `avatar.pack.staging.cleanup` I/O error when ownership cannot be proved;
+- `promoteTo(finalPath) &&` flushes the full tree, validates the destination
+  parent, performs a no-replace atomic rename through retained source
+  authority, flushes the destination parent, and disarms cleanup only after
+  success;
 - move construction and move assignment transfer ownership, allowing Task 6
   to accept and extend the capability for secure promotion without converting
   it back to a path.
 
-On Windows, retained no-delete-share handles prevent root/directory rename.
-Lease reads open beneath verified final paths and require exact final-handle
-identity and containment. On POSIX, reads use `openat` from the retained root
-descriptor with `O_NOFOLLOW`; a root rename does not redirect the descriptor.
+On Windows, retained root and parent handles include delete authority.
+Lease reads reopen files beneath the verified root and require exact
+final-handle identity and containment. Cleanup opens each recorded object with
+delete authority, verifies its stored identity, and applies handle-relative
+disposition deepest-first. Promotion renames the retained root handle with
+no-replace semantics.
+
+On POSIX, the supplied staging parent is accepted only when it is owned by the
+effective user, is a directory, and has no group/other access bits. Reads
+reopen with `openat` and `O_NOFOLLOW`, then verify identity and content hash.
+Cleanup uses retained root/parent descriptors and refuses to unlink the root
+name if the trusted-private parent or root identity no longer matches.
+Promotion opens and validates a trusted destination parent and uses
+`renameat2(..., RENAME_NOREPLACE)` where available; a platform without an
+atomic no-replace primitive fails closed.
 
 Before cleanup touches content, the current `parent/name` object must have the
 same Windows file identity or POSIX device/inode as the retained root. A
 missing, renamed, or replaced root produces cleanup failure. Cleanup must never
-delete a replacement at the display path. The destructor performs only
+delete a replacement at the former root name. The destructor performs only
 best-effort fallback cleanup; callers that need the result call `cleanup()`.
+
+Sealing does not retain one handle per archive entry. It stores bounded entry
+metadata (relative name, identity, byte count, and authenticated SHA-256) and
+keeps only the root/parent capability plus the bounded directory descriptors
+needed during construction. Public reads reopen the requested file and verify
+identity, size, and hash before returning bytes. This prevents a valid-shape
+10,000-entry package from exhausting the process descriptor table.
 
 ## Exception and ownership boundaries
 
@@ -84,10 +107,18 @@ Real local fixtures, without production hooks or filesystem mocks, cover:
 - concurrent central-directory/EOCD mutation and package replacement;
 - the POSIX private-snapshot behavior where supported;
 - two structurally valid EOCD candidates;
+- a valid EOCD whose comment contains a later invalid, oversized fake EOCD
+  signature, proving preflight rejects the signature miniz would select;
 - a successful lease subjected to root rename/replacement, proving capability
   reads return the original object or fail closed and never read replacement;
 - cleanup identity mismatch preserving replacement and returning the stable
   cleanup error;
+- repeated cleanup replacement races preserving every replacement;
+- successful no-replace promotion, existing-destination rejection, unsafe
+  destination-parent rejection, and retry after failed promotion;
+- compile-time absence of `displayPath()` and rvalue-only promotion;
+- a valid-shape 10,000-entry staging tree without one retained descriptor per
+  entry;
 - compile-time and runtime no-exception public contracts;
 - the existing 27 validator/fuzz tests, repeated focused gates, MSVC ASan, the
   enabled full build, and the complete CTest matrix.
