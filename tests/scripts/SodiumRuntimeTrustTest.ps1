@@ -169,6 +169,26 @@ if ($LibraryResult.exit_code -eq 0) {
     $WrongFailureCases += "import library plus manifest hash change"
 }
 
+$PercentCase = New-CasePrefix -Name "literal-percent-header-and-manifest"
+$OriginalHeader = "include/sodium/crypto_sign.h"
+$PercentHeader = "include/sodium/%63rypto_sign.h"
+Move-Item `
+    -LiteralPath (Join-Path $PercentCase $OriginalHeader) `
+    -Destination (Join-Path $PercentCase $PercentHeader)
+$PercentManifest = Read-Manifest -CaseRoot $PercentCase
+foreach ($Entry in @($PercentManifest.files)) {
+    if ($Entry.path -eq $OriginalHeader) {
+        $Entry.path = $PercentHeader
+    }
+}
+Write-Manifest -CaseRoot $PercentCase -Manifest $PercentManifest
+$PercentResult = Invoke-Verifier -CaseRoot $PercentCase
+if ($PercentResult.exit_code -eq 0) {
+    $AcceptedCases += "literal percent header rename plus manifest path change"
+} elseif ($PercentResult.output -notmatch "pinned trust anchor") {
+    $WrongFailureCases += "literal percent header rename plus manifest path change"
+}
+
 if ($AcceptedCases.Count -gt 0) {
     throw "Verifier accepted tampered canonical tree cases: $($AcceptedCases -join '; ')"
 }

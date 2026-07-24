@@ -597,6 +597,13 @@ endif()
 
 if(WIN32 AND CS_ENABLE_AVATAR_PACKS)
     add_test(
+        NAME CanonicalTreeDigest
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/CanonicalTreeDigestTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+            -ScratchRoot "${PROJECT_BINARY_DIR}/canonical-tree-digest-ctest"
+    )
+    add_test(
         NAME SodiumRuntimeTrust
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tests/scripts/SodiumRuntimeTrustTest.ps1"
@@ -614,10 +621,22 @@ if(WIN32 AND CS_ENABLE_AVATAR_PACKS)
             -MinizSourceRoot "${miniz_SOURCE_DIR}"
             -ScratchRoot "${PROJECT_BINARY_DIR}/avatar-pack-cmake-trust-ctest"
     )
+    add_test(
+        NAME AvatarPackPostConfigureBuildAudit
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tests/scripts/AvatarPackPostConfigureBuildAuditTest.ps1"
+            -RepositoryRoot "${PROJECT_SOURCE_DIR}"
+            -RuntimeRoot "${CS_SODIUM_ROOT}"
+            -Qt6Dir "${Qt6_DIR}"
+            -ScratchRoot
+                "${PROJECT_SOURCE_DIR}/build/avatar-pack-post-configure-audit-ctest"
+    )
     set_tests_properties(
+        CanonicalTreeDigest
         SodiumRuntimeTrust
         AvatarPackCMakeTrust
-        PROPERTIES TIMEOUT 300
+        AvatarPackPostConfigureBuildAudit
+        PROPERTIES TIMEOUT 600
     )
 endif()
 

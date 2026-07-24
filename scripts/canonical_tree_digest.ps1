@@ -19,11 +19,35 @@ function Get-CanonicalTreeDigest {
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
         throw "Canonical tree root is missing: $Root"
     }
+    $RootItem = Get-Item -LiteralPath $Root -Force
+    if (($RootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Canonical tree root must not be a reparse point: $Root"
+    }
+    $Root = [System.IO.Path]::GetFullPath($RootItem.FullName).TrimEnd('\', '/')
+    $RootPrefix = $Root + [System.IO.Path]::DirectorySeparatorChar
+    $PathComparison = if (
+        [System.Environment]::OSVersion.Platform -eq
+            [System.PlatformID]::Win32NT
+    ) {
+        [System.StringComparison]::OrdinalIgnoreCase
+    } else {
+        [System.StringComparison]::Ordinal
+    }
 
     $Excluded = New-Object 'System.Collections.Generic.HashSet[string]' (
         [System.StringComparer]::Ordinal
     )
     foreach ($Relative in $ExcludedRelativePaths) {
+        if ([string]::IsNullOrEmpty($Relative) -or
+            $Relative -match '[\x00-\x1F\x7F]' -or
+            $Relative.Contains('\') -or
+            [System.IO.Path]::IsPathRooted($Relative) -or
+            $Relative.StartsWith('/') -or
+            $Relative.EndsWith('/') -or
+            $Relative.Contains('//') -or
+            $Relative -match '(^|/)(\.|\.\.)(/|$)') {
+            throw "Invalid canonical tree exclusion: $Relative"
+        }
         if (-not $Excluded.Add($Relative)) {
             throw "Duplicate canonical tree exclusion: $Relative"
         }
@@ -38,9 +62,6 @@ function Get-CanonicalTreeDigest {
         }
     }
 
-    $RootPrefix = $Root.TrimEnd('\', '/') +
-        [System.IO.Path]::DirectorySeparatorChar
-    $RootUri = New-Object System.Uri($RootPrefix)
     $Paths = New-Object 'System.Collections.Generic.List[string]'
     $FilesByPath = @{}
 
@@ -54,14 +75,30 @@ function Get-CanonicalTreeDigest {
         if (($File.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
             throw "Reparse file is forbidden in canonical tree: $($File.FullName)"
         }
-        $FileUri = New-Object System.Uri([System.IO.Path]::GetFullPath($File.FullName))
-        $Relative = [System.Uri]::UnescapeDataString(
-            $RootUri.MakeRelativeUri($FileUri).ToString()
-        ).Replace('\', '/')
-        if ([string]::IsNullOrWhiteSpace($Relative) -or
+        $FullPath = [System.IO.Path]::GetFullPath($File.FullName)
+        if (-not $FullPath.StartsWith($RootPrefix, $PathComparison)) {
+            throw "Canonical tree file escaped its root: $FullPath"
+        }
+        $Relative = $FullPath.Substring($RootPrefix.Length)
+        $Relative = $Relative.Replace(
+            [System.IO.Path]::DirectorySeparatorChar,
+            '/'
+        )
+        if ([System.IO.Path]::AltDirectorySeparatorChar -ne
+            [System.IO.Path]::DirectorySeparatorChar) {
+            $Relative = $Relative.Replace(
+                [System.IO.Path]::AltDirectorySeparatorChar,
+                '/'
+            )
+        }
+        if ([string]::IsNullOrEmpty($Relative) -or
+            $Relative -match '[\x00-\x1F\x7F]' -or
             $Relative.Contains('\') -or
             [System.IO.Path]::IsPathRooted($Relative) -or
-            $Relative -match '(^|/)\.\.(/|$)') {
+            $Relative.StartsWith('/') -or
+            $Relative.EndsWith('/') -or
+            $Relative.Contains('//') -or
+            $Relative -match '(^|/)(\.|\.\.)(/|$)') {
             throw "Invalid canonical tree path: $Relative"
         }
         if ($Excluded.Contains($Relative)) {
@@ -75,7 +112,7 @@ function Get-CanonicalTreeDigest {
             throw "Duplicate canonical tree path: $Relative"
         }
         $Paths.Add($Relative)
-        $FilesByPath[$Relative] = $File.FullName
+        $FilesByPath[$Relative] = $FullPath
     }
     $Paths.Sort([System.StringComparer]::Ordinal)
 

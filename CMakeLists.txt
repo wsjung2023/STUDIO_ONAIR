@@ -147,7 +147,20 @@ if(CS_ENABLE_AVATAR_PACKS)
     set_target_properties(miniz PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
 
     find_package(Sodium REQUIRED)
+    add_custom_target(cs_avatar_pack_dependency_audit
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_sodium_runtime.ps1"
+            -RuntimeRoot "${CS_SODIUM_ROOT}"
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_miniz_source.ps1"
+            -SourceRoot "${miniz_SOURCE_DIR}"
+        COMMENT "Auditing avatar pack dependency content"
+        VERBATIM
+    )
+    add_dependencies(miniz cs_avatar_pack_dependency_audit)
+    add_dependencies(Sodium::Sodium cs_avatar_pack_dependency_audit)
     add_subdirectory(src/avatar_pack_adapter)
+    add_dependencies(cs_avatar_pack_adapter cs_avatar_pack_dependency_audit)
 endif()
 
 # nlohmann/json is MIT, which is in the LICENSE_POLICY 허용 기본군. It is used

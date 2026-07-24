@@ -20,6 +20,10 @@ $CanonicalTreePath = Join-Path $RepositoryRoot "scripts/canonical_tree_digest.ps
 $MinizVerifierPath = Join-Path $RepositoryRoot "scripts/verify_miniz_source.ps1"
 $RuntimeTrustTestPath = Join-Path $RepositoryRoot "tests/scripts/SodiumRuntimeTrustTest.ps1"
 $CMakeTrustTestPath = Join-Path $RepositoryRoot "tests/scripts/AvatarPackCMakeTrustTest.ps1"
+$CanonicalTestPath = Join-Path $RepositoryRoot "tests/scripts/CanonicalTreeDigestTest.ps1"
+$PostConfigureAuditTestPath = Join-Path $RepositoryRoot `
+    "tests/scripts/AvatarPackPostConfigureBuildAuditTest.ps1"
+$TestsCMakePath = Join-Path $RepositoryRoot "tests/CMakeLists.txt"
 
 $Text = ""
 foreach ($Path in @($RootCMakePath, $BootstrapPath, $VerifierPath)) {
@@ -49,7 +53,10 @@ foreach ($Path in @(
     $CanonicalTreePath,
     $MinizVerifierPath,
     $RuntimeTrustTestPath,
-    $CMakeTrustTestPath
+    $CMakeTrustTestPath,
+    $CanonicalTestPath,
+    $PostConfigureAuditTestPath,
+    $TestsCMakePath
 )) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Missing avatar pack dependency policy artifact: $Path"
@@ -68,7 +75,11 @@ foreach ($Pattern in @(
     'FetchContent_GetProperties\(miniz\)',
     'verify_miniz_source\.ps1',
     'find_package\(Sodium REQUIRED\)',
-    'add_subdirectory\(src/avatar_pack_adapter\)'
+    'add_custom_target\(cs_avatar_pack_dependency_audit',
+    'add_dependencies\(miniz cs_avatar_pack_dependency_audit\)',
+    'add_dependencies\(Sodium::Sodium cs_avatar_pack_dependency_audit\)',
+    'add_subdirectory\(src/avatar_pack_adapter\)',
+    'add_dependencies\(cs_avatar_pack_adapter cs_avatar_pack_dependency_audit\)'
 )) {
     if ($RootCMake -notmatch $Pattern) {
         throw "Root CMake is missing avatar pack dependency policy: $Pattern"
@@ -143,26 +154,49 @@ foreach ($Pattern in @(
     'UTF8Encoding\(\$false\)',
     'WriteByte\(0\)',
     'ComputeHash',
-    'ToArray'
+    'ToArray',
+    'GetFullPath',
+    'Substring\(\$RootPrefix\.Length\)',
+    '\\x00-\\x1F\\x7F',
+    'FileAttributes\]::ReparsePoint'
 )) {
     if ($CanonicalTree -notmatch $Pattern) {
         throw "Canonical tree serializer is missing required framing: $Pattern"
     }
 }
+if ($CanonicalTree -match 'System\.Uri|UnescapeDataString') {
+    throw "Canonical tree serializer must preserve literal filesystem names"
+}
 
 $TrustTests = (Get-Content -LiteralPath $RuntimeTrustTestPath -Raw -Encoding utf8) +
-    (Get-Content -LiteralPath $CMakeTrustTestPath -Raw -Encoding utf8)
+    (Get-Content -LiteralPath $CMakeTrustTestPath -Raw -Encoding utf8) +
+    (Get-Content -LiteralPath $CanonicalTestPath -Raw -Encoding utf8) +
+    (Get-Content -LiteralPath $PostConfigureAuditTestPath -Raw -Encoding utf8)
 foreach ($Pattern in @(
     'DLL plus manifest hash change',
     'header removal plus manifest list change',
     'import library plus manifest hash change',
+    'literal percent header rename plus manifest path change',
     'Sodium_LIBRARY command-line cache escaped',
     'Stale Sodium cache paths survived',
     'FETCHCONTENT_SOURCE_DIR_MINIZ bypass was accepted',
-    'FETCHCONTENT_FULLY_DISCONNECTED bypass was accepted'
+    'FETCHCONTENT_FULLY_DISCONNECTED bypass was accepted',
+    'Physical names A and %41 produced the same canonical digest',
+    'accepted a reparse-point root',
+    'Post-configure dependency mutations built successfully'
 )) {
     if ($TrustTests -notmatch $Pattern) {
         throw "Avatar pack behavioral trust tests are missing: $Pattern"
+    }
+}
+
+$TestsCMake = Get-Content -LiteralPath $TestsCMakePath -Raw -Encoding utf8
+foreach ($Pattern in @(
+    'NAME CanonicalTreeDigest',
+    'NAME AvatarPackPostConfigureBuildAudit'
+)) {
+    if ($TestsCMake -notmatch $Pattern) {
+        throw "Avatar pack trust regression is not registered with CTest: $Pattern"
     }
 }
 
