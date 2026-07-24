@@ -54,6 +54,7 @@ struct ProjectDirectories final {
     std::string autosave{"autosave"};
     std::string renders{"renders"};
     std::string logs{"logs"};
+    std::string avatars{"avatars"};
 
     friend bool operator==(const ProjectDirectories&, const ProjectDirectories&) = default;
 };

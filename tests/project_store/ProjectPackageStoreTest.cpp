@@ -168,6 +168,7 @@ TEST_F(ProjectPackageStoreTest, CreatePublishesCompletePackageAtOnce) {
     EXPECT_TRUE(fs::exists(packagePath_ / "manifest.json"));
     EXPECT_TRUE(fs::exists(packagePath_ / "project.db"));
     EXPECT_TRUE(fs::is_directory(packagePath_ / "media"));
+    EXPECT_TRUE(fs::is_directory(packagePath_ / "avatars"));
     EXPECT_TRUE(store_.open(packagePath_).hasValue());
     EXPECT_TRUE(creatingEntries().empty());
 }

@@ -340,7 +340,7 @@ void removeGeneratedStaging(const fs::path& staging, const fs::path& target) noe
 
     fs::path expectedPrefix = target.filename();
     expectedPrefix += ".creating-";
-    const auto& actual = staging.filename().native();
+    const auto actual = staging.filename().native();
     const auto& prefix = expectedPrefix.native();
     if (actual.size() < prefix.size() || !std::equal(prefix.begin(), prefix.end(), actual.begin())) {
         return;
@@ -616,6 +616,12 @@ Result<OpenProjectResult> ProjectPackageStore::create(const fs::path& packagePat
     if (!manifest.hasValue()) {
         removeGeneratedStaging(staging, packagePath);
         return manifest.error();
+    }
+    if (auto avatars = ensureSafeDirectory(
+            staging, fs::path{manifest.value().directories.avatars});
+        !avatars.hasValue()) {
+        removeGeneratedStaging(staging, packagePath);
+        return avatars.error();
     }
     {
         auto database = SqliteProjectDatabase::create(

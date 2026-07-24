@@ -51,6 +51,7 @@ TEST(ProjectManifestTest, DefaultDirectoriesMatchPackageLayout) {
     EXPECT_EQ(manifest.directories.autosave, "autosave");
     EXPECT_EQ(manifest.directories.renders, "renders");
     EXPECT_EQ(manifest.directories.logs, "logs");
+    EXPECT_EQ(manifest.directories.avatars, "avatars");
 }
 
 TEST(ProjectManifestTest, AcceptsValidManifest) {
@@ -198,6 +199,16 @@ TEST(ProjectManifestTest, RejectsNonPositiveFrameRate) {
 TEST(ProjectManifestTest, RejectsEmptyDirectoryName) {
     ProjectManifest manifest = makeValidManifest();
     manifest.directories.media = "";
+
+    const auto result = validate(manifest);
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+}
+
+TEST(ProjectManifestTest, RejectsEmptyAvatarDirectoryName) {
+    ProjectManifest manifest = makeValidManifest();
+    manifest.directories.avatars = "";
 
     const auto result = validate(manifest);
 

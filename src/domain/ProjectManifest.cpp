@@ -112,7 +112,7 @@ Result<void> validate(const ProjectManifest& manifest) {
         return AppError{ErrorCode::InvalidArgument, "updatedAt must not precede createdAt"};
     }
 
-    const std::array<std::pair<std::string_view, const std::string*>, 8> directories{{
+    const std::array<std::pair<std::string_view, const std::string*>, 9> directories{{
         {"media", &manifest.directories.media},
         {"audio", &manifest.directories.audio},
         {"telemetry", &manifest.directories.telemetry},
@@ -121,6 +121,7 @@ Result<void> validate(const ProjectManifest& manifest) {
         {"autosave", &manifest.directories.autosave},
         {"renders", &manifest.directories.renders},
         {"logs", &manifest.directories.logs},
+        {"avatars", &manifest.directories.avatars},
     }};
     for (const auto& [label, value] : directories) {
         if (auto result = validateDirectory(label, *value); !result.hasValue()) {

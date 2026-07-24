@@ -1,6 +1,7 @@
 cs_add_qtfree_library(cs_project_store
     SOURCES
         IProjectStore.h
+        IAvatarSpecStore.h
         ITimelineStore.h
         IProjectPackageStore.h
         IStudioStore.h
@@ -11,6 +12,8 @@ cs_add_qtfree_library(cs_project_store
         RenderJobRecovery.cpp
         JsonProjectStore.h
         JsonProjectStore.cpp
+        AvatarSpecFileStore.h
+        AvatarSpecFileStore.cpp
         ManifestSchemaValidator.h
         ManifestSchemaValidator.cpp
         MigrationRunner.h
@@ -38,6 +41,7 @@ cs_add_qtfree_library(cs_project_store
         internal/DurableFile.cpp
     DEPENDS
         cs_domain
+        cs_avatar
         cs_edit_engine
         nlohmann_json::nlohmann_json
         nlohmann_json_schema_validator::validator

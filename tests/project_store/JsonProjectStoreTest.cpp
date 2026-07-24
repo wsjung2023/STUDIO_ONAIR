@@ -67,6 +67,35 @@ TEST_F(JsonProjectStoreTest, CreateWritesManifestAndDirectories) {
     EXPECT_TRUE(fs::is_directory(packageDir_ / "autosave"));
     EXPECT_TRUE(fs::is_directory(packageDir_ / "renders"));
     EXPECT_TRUE(fs::is_directory(packageDir_ / "logs"));
+    EXPECT_TRUE(fs::is_directory(packageDir_ / "avatars"));
+}
+
+TEST_F(JsonProjectStoreTest, OlderManifestWithoutAvatarsUsesDefaultDirectory) {
+    auto created = store_.create(packageDir_, "Old project");
+    ASSERT_TRUE(created.hasValue());
+    const fs::path manifestPath = packageDir_ / JsonProjectStore::kManifestFileName;
+    std::ifstream input{manifestPath, std::ios::binary};
+    auto document = nlohmann::json::parse(input);
+    input.close();
+    document["directories"].erase("avatars");
+    writeManifestText(document.dump(2));
+
+    const auto loaded = store_.load(packageDir_);
+
+    ASSERT_TRUE(loaded.hasValue()) << loaded.error().message();
+    EXPECT_EQ(loaded.value().directories.avatars, "avatars");
+}
+
+TEST_F(JsonProjectStoreTest, SaveAlwaysWritesAvatarDirectory) {
+    auto created = store_.create(packageDir_, "Current project");
+    ASSERT_TRUE(created.hasValue());
+    created.value().directories.avatars = "characters";
+    ASSERT_TRUE(store_.save(packageDir_, created.value()).hasValue());
+    std::ifstream input{packageDir_ / JsonProjectStore::kManifestFileName,
+                        std::ios::binary};
+    const auto document = nlohmann::json::parse(input);
+
+    EXPECT_EQ(document.at("directories").at("avatars"), "characters");
 }
 
 TEST_F(JsonProjectStoreTest, CreateGeneratesUuidProjectId) {

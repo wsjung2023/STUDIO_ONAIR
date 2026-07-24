@@ -66,7 +66,8 @@ nlohmann::json toJson(const ProjectManifest& manifest) {
           {"thumbnails", manifest.directories.thumbnails},
           {"autosave", manifest.directories.autosave},
           {"renders", manifest.directories.renders},
-          {"logs", manifest.directories.logs}}},
+          {"logs", manifest.directories.logs},
+          {"avatars", manifest.directories.avatars}}},
         {"requiredFeatures", manifest.requiredFeatures},
     };
 }
@@ -147,6 +148,14 @@ Result<ProjectDirectories> parseDirectories(const nlohmann::json& json) {
         auto value = requireField<std::string>(json, key);
         if (!value.hasValue()) return value.error();
         *target = std::move(value).value();
+    }
+    if (const auto avatars = json.find("avatars"); avatars != json.end()) {
+        try {
+            directories.avatars = avatars->get<std::string>();
+        } catch (const nlohmann::json::exception&) {
+            return AppError{ErrorCode::ParseFailure,
+                            "manifest field 'avatars' has the wrong type"};
+        }
     }
     return directories;
 }
@@ -282,7 +291,8 @@ Result<ProjectManifest> JsonProjectStore::create(const fs::path& packageDirector
          {&manifest.directories.media, &manifest.directories.audio,
           &manifest.directories.telemetry, &manifest.directories.proxies,
           &manifest.directories.thumbnails, &manifest.directories.autosave,
-          &manifest.directories.renders, &manifest.directories.logs}) {
+          &manifest.directories.renders, &manifest.directories.logs,
+          &manifest.directories.avatars}) {
         fs::create_directories(packageDirectory / *directory, ec);
         if (ec) {
             return AppError{ErrorCode::IoFailure,

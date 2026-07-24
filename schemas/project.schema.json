@@ -45,7 +45,8 @@
         "thumbnails": { "type": "string" },
         "autosave": { "type": "string" },
         "renders": { "type": "string" },
-        "logs": { "type": "string" }
+        "logs": { "type": "string" },
+        "avatars": { "type": "string" }
       }
     },
     "requiredFeatures": {

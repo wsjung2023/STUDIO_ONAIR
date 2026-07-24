@@ -108,6 +108,7 @@ add_executable(cs_tests
     recorder/AsyncTrackRecorderTest.cpp
     project_store/ManifestSchemaValidatorTest.cpp
     project_store/JsonProjectStoreTest.cpp
+    project_store/AvatarSpecFileStoreTest.cpp
     project_store/SqliteConnectionTest.cpp
     project_store/MigrationRunnerTest.cpp
     project_store/SqliteProjectDatabaseTest.cpp
