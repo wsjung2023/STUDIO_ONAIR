@@ -20,6 +20,7 @@ struct TrustedAvatarKey final {
 
 struct ValidatedAvatarPack final {
     avatar::AvatarAssetManifest manifest;
+    /// Owned by the successful caller, which must delete this tree after use.
     std::filesystem::path stagingRoot;
 };
 

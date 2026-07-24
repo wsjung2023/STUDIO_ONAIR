@@ -2,6 +2,8 @@ cs_add_qtfree_library(cs_avatar_pack_adapter
     SOURCES
         AvatarPackArchive.h
         AvatarPackArchive.cpp
+        AvatarPackStaging.h
+        AvatarPackStaging.cpp
         SodiumSignatureVerifier.h
         SodiumSignatureVerifier.cpp
         AvatarPackValidator.h

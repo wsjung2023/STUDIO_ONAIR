@@ -7,11 +7,12 @@
 
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -19,9 +20,7 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <Windows.h>
-#else
-#include <fcntl.h>
-#include <unistd.h>
+#include <share.h>
 #endif
 
 namespace creator::avatar_pack_adapter {
@@ -45,6 +44,337 @@ AppError archiveError(ErrorCode code, std::string message,
 AppError invalidArchive(std::string message, std::string issueCode) {
     return archiveError(ErrorCode::InvalidArgument, std::move(message),
                         std::move(issueCode));
+}
+
+AppError invalidEnvelope(std::string message) {
+    return invalidArchive(std::move(message),
+                          "avatar.pack.archive.envelope");
+}
+
+std::uint16_t little16(std::span<const std::uint8_t> value,
+                       std::size_t offset) noexcept {
+    return static_cast<std::uint16_t>(value[offset]) |
+           static_cast<std::uint16_t>(
+               static_cast<std::uint16_t>(value[offset + 1U]) << 8U);
+}
+
+std::uint32_t little32(std::span<const std::uint8_t> value,
+                       std::size_t offset) noexcept {
+    return static_cast<std::uint32_t>(value[offset]) |
+           (static_cast<std::uint32_t>(value[offset + 1U]) << 8U) |
+           (static_cast<std::uint32_t>(value[offset + 2U]) << 16U) |
+           (static_cast<std::uint32_t>(value[offset + 3U]) << 24U);
+}
+
+bool readFileExact(std::FILE* file, std::uint64_t offset,
+                   std::span<std::uint8_t> output) {
+#ifdef _WIN32
+    if (offset >
+            static_cast<std::uint64_t>(
+                std::numeric_limits<__int64>::max()) ||
+        _fseeki64(file, static_cast<__int64>(offset), SEEK_SET) != 0) {
+        return false;
+    }
+#else
+    if (offset >
+            static_cast<std::uint64_t>(
+                std::numeric_limits<off_t>::max()) ||
+        ::fseeko(file, static_cast<off_t>(offset), SEEK_SET) != 0) {
+        return false;
+    }
+#endif
+    return output.empty() ||
+           std::fread(output.data(), 1U, output.size(), file) ==
+               output.size();
+}
+
+bool validBoundedExtra(std::span<const std::uint8_t> extra) {
+    std::size_t offset = 0;
+    while (offset < extra.size()) {
+        if (extra.size() - offset < 4U) return false;
+        const auto identifier = little16(extra, offset);
+        const auto size =
+            static_cast<std::size_t>(little16(extra, offset + 2U));
+        offset += 4U;
+        if (size > extra.size() - offset || identifier == 0x0001U)
+            return false;
+        offset += size;
+    }
+    return true;
+}
+
+struct RawCentralEntry final {
+    std::uint32_t localOffset{};
+    std::uint16_t flags{};
+    std::uint16_t method{};
+    std::uint16_t modifiedTime{};
+    std::uint16_t modifiedDate{};
+    std::uint32_t crc{};
+    std::uint32_t compressedBytes{};
+    std::uint32_t expandedBytes{};
+    std::vector<std::uint8_t> name;
+};
+
+Result<void> preflightRawZip(std::FILE* file, std::uint64_t archiveSize) {
+    constexpr std::uint32_t kEocdSignature = 0x06054b50U;
+    constexpr std::uint32_t kCentralSignature = 0x02014b50U;
+    constexpr std::uint32_t kLocalSignature = 0x04034b50U;
+    constexpr std::uint32_t kZip64LocatorSignature = 0x07064b50U;
+    constexpr std::size_t kEocdBytes = 22U;
+    constexpr std::size_t kCentralHeaderBytes = 46U;
+    constexpr std::size_t kLocalHeaderBytes = 30U;
+    constexpr std::uint16_t kDataDescriptorFlag = 0x0008U;
+
+    if (archiveSize < kEocdBytes) {
+        return invalidEnvelope("avatar pack ZIP envelope is truncated");
+    }
+    const auto tailBytes = static_cast<std::size_t>(
+        std::min<std::uint64_t>(
+            archiveSize,
+            kEocdBytes + AvatarPackArchive::kMaximumZipCommentBytes));
+    std::vector<std::uint8_t> tail(tailBytes);
+    const auto tailOffset = archiveSize - tailBytes;
+    if (!readFileExact(file, tailOffset, tail)) {
+        return archiveError(ErrorCode::IoFailure,
+                            "avatar pack ZIP envelope could not be read",
+                            "avatar.pack.archive.envelope");
+    }
+
+    std::optional<std::size_t> relativeEocd;
+    for (std::size_t offset = tail.size() - kEocdBytes;; --offset) {
+        if (little32(tail, offset) == kEocdSignature) {
+            const auto commentBytes =
+                static_cast<std::size_t>(little16(tail, offset + 20U));
+            if (commentBytes <=
+                    AvatarPackArchive::kMaximumZipCommentBytes &&
+                offset + kEocdBytes + commentBytes == tail.size()) {
+                relativeEocd = offset;
+                break;
+            }
+        }
+        if (offset == 0U) break;
+    }
+    if (!relativeEocd.has_value()) {
+        return invalidEnvelope(
+            "avatar pack ZIP EOCD is missing, ambiguous, or trailing");
+    }
+    const auto eocdOffset =
+        tailOffset + static_cast<std::uint64_t>(*relativeEocd);
+    const auto eocd =
+        std::span<const std::uint8_t>{tail}.subspan(*relativeEocd,
+                                                   kEocdBytes);
+    const auto disk = little16(eocd, 4U);
+    const auto centralDisk = little16(eocd, 6U);
+    const auto diskEntries = little16(eocd, 8U);
+    const auto totalEntries = little16(eocd, 10U);
+    const auto centralBytes = little32(eocd, 12U);
+    const auto centralOffset = little32(eocd, 16U);
+    if (disk == 0xffffU || centralDisk == 0xffffU ||
+        diskEntries == 0xffffU || totalEntries == 0xffffU ||
+        centralBytes == 0xffffffffU || centralOffset == 0xffffffffU) {
+        return invalidEnvelope("avatar pack ZIP64 is not supported");
+    }
+    if (disk != 0U || centralDisk != 0U ||
+        diskEntries != totalEntries) {
+        return invalidEnvelope(
+            "avatar pack multi-disk ZIP is not supported");
+    }
+    if (totalEntries > AvatarPackArchive::kMaximumEntryCount) {
+        return invalidArchive("avatar pack contains too many entries",
+                              "avatar.pack.archive.entry-count");
+    }
+    if (centralBytes >
+        AvatarPackArchive::kMaximumCentralDirectoryBytes) {
+        return invalidEnvelope(
+            "avatar pack central directory exceeds its limit");
+    }
+    if (static_cast<std::uint64_t>(centralOffset) >
+            eocdOffset ||
+        static_cast<std::uint64_t>(centralBytes) >
+            eocdOffset - centralOffset ||
+        static_cast<std::uint64_t>(centralOffset) + centralBytes !=
+            eocdOffset) {
+        return invalidEnvelope(
+            "avatar pack central directory bounds are invalid");
+    }
+    if (static_cast<std::uint64_t>(totalEntries) *
+            kCentralHeaderBytes >
+        centralBytes) {
+        return invalidEnvelope(
+            "avatar pack central directory is too small");
+    }
+    if (eocdOffset >= 20U) {
+        std::array<std::uint8_t, 20> locator{};
+        if (!readFileExact(file, eocdOffset - locator.size(), locator)) {
+            return archiveError(
+                ErrorCode::IoFailure,
+                "avatar pack ZIP64 locator could not be inspected",
+                "avatar.pack.archive.envelope");
+        }
+        if (little32(locator, 0U) == kZip64LocatorSignature) {
+            return invalidEnvelope("avatar pack ZIP64 is not supported");
+        }
+    }
+
+    std::vector<std::uint8_t> central(centralBytes);
+    if (!readFileExact(file, centralOffset, central)) {
+        return archiveError(
+            ErrorCode::IoFailure,
+            "avatar pack central directory could not be read",
+            "avatar.pack.archive.envelope");
+    }
+    std::vector<RawCentralEntry> entries;
+    entries.reserve(totalEntries);
+    std::size_t cursor = 0;
+    for (std::size_t index = 0; index < totalEntries; ++index) {
+        if (central.size() - cursor < kCentralHeaderBytes ||
+            little32(central, cursor) != kCentralSignature) {
+            return invalidEnvelope(
+                "avatar pack central directory record is invalid");
+        }
+        const auto header =
+            std::span<const std::uint8_t>{central}.subspan(
+                cursor, kCentralHeaderBytes);
+        const auto nameBytes =
+            static_cast<std::size_t>(little16(header, 28U));
+        const auto extraBytes =
+            static_cast<std::size_t>(little16(header, 30U));
+        const auto commentBytes =
+            static_cast<std::size_t>(little16(header, 32U));
+        if (nameBytes == 0U ||
+            nameBytes > AvatarPackArchive::kMaximumPathBytes ||
+            extraBytes > AvatarPackArchive::kMaximumZipExtraBytes ||
+            commentBytes > AvatarPackArchive::kMaximumZipCommentBytes) {
+            return invalidEnvelope(
+                "avatar pack central record fields exceed their limits");
+        }
+        const auto following = nameBytes + extraBytes + commentBytes;
+        if (following > central.size() - cursor -
+                            kCentralHeaderBytes) {
+            return invalidEnvelope(
+                "avatar pack central record is truncated");
+        }
+        if (little16(header, 34U) != 0U ||
+            (little16(header, 8U) & kDataDescriptorFlag) != 0U) {
+            return invalidEnvelope(
+                "avatar pack central record uses unsupported indirection");
+        }
+        const auto compressedBytes = little32(header, 20U);
+        const auto expandedBytes = little32(header, 24U);
+        const auto localOffset = little32(header, 42U);
+        if (compressedBytes == 0xffffffffU ||
+            expandedBytes == 0xffffffffU ||
+            localOffset == 0xffffffffU) {
+            return invalidEnvelope("avatar pack ZIP64 is not supported");
+        }
+        const auto nameOffset = cursor + kCentralHeaderBytes;
+        const auto extraOffset = nameOffset + nameBytes;
+        if (!validBoundedExtra(
+                std::span<const std::uint8_t>{central}.subspan(
+                    extraOffset, extraBytes))) {
+            return invalidEnvelope(
+                "avatar pack central extra data is invalid or ZIP64");
+        }
+        entries.push_back(
+            {.localOffset = localOffset,
+             .flags = little16(header, 8U),
+             .method = little16(header, 10U),
+             .modifiedTime = little16(header, 12U),
+             .modifiedDate = little16(header, 14U),
+             .crc = little32(header, 16U),
+             .compressedBytes = compressedBytes,
+             .expandedBytes = expandedBytes,
+             .name =
+                 std::vector<std::uint8_t>(
+                     central.begin() +
+                         static_cast<std::ptrdiff_t>(nameOffset),
+                     central.begin() +
+                         static_cast<std::ptrdiff_t>(nameOffset +
+                                                     nameBytes))});
+        cursor += kCentralHeaderBytes + following;
+    }
+    if (cursor != central.size()) {
+        return invalidEnvelope(
+            "avatar pack central directory has unclaimed bytes");
+    }
+
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> localRanges;
+    localRanges.reserve(entries.size());
+    for (const auto& entry : entries) {
+        if (entry.localOffset >
+            static_cast<std::uint64_t>(centralOffset) -
+                std::min<std::uint64_t>(centralOffset,
+                                        kLocalHeaderBytes)) {
+            return invalidEnvelope(
+                "avatar pack local header offset is invalid");
+        }
+        std::array<std::uint8_t, kLocalHeaderBytes> local{};
+        if (!readFileExact(file, entry.localOffset, local) ||
+            little32(local, 0U) != kLocalSignature) {
+            return invalidEnvelope(
+                "avatar pack local header is missing or invalid");
+        }
+        const auto nameBytes =
+            static_cast<std::size_t>(little16(local, 26U));
+        const auto extraBytes =
+            static_cast<std::size_t>(little16(local, 28U));
+        if (nameBytes != entry.name.size() ||
+            nameBytes > AvatarPackArchive::kMaximumPathBytes ||
+            extraBytes > AvatarPackArchive::kMaximumZipExtraBytes ||
+            little16(local, 6U) != entry.flags ||
+            little16(local, 8U) != entry.method ||
+            little16(local, 10U) != entry.modifiedTime ||
+            little16(local, 12U) != entry.modifiedDate ||
+            little32(local, 14U) != entry.crc ||
+            little32(local, 18U) != entry.compressedBytes ||
+            little32(local, 22U) != entry.expandedBytes ||
+            (little16(local, 6U) & kDataDescriptorFlag) != 0U) {
+            return invalidEnvelope(
+                "avatar pack local and central headers disagree");
+        }
+        const auto following = nameBytes + extraBytes;
+        const auto dataOffset =
+            static_cast<std::uint64_t>(entry.localOffset) +
+            kLocalHeaderBytes + following;
+        if (dataOffset >
+                static_cast<std::uint64_t>(centralOffset) ||
+            entry.compressedBytes >
+                static_cast<std::uint64_t>(centralOffset) -
+                    dataOffset) {
+            return invalidEnvelope(
+                "avatar pack local entry bounds are invalid");
+        }
+        std::vector<std::uint8_t> localFollowing(following);
+        if (!readFileExact(file,
+                           static_cast<std::uint64_t>(entry.localOffset) +
+                               kLocalHeaderBytes,
+                           localFollowing)) {
+            return invalidEnvelope(
+                "avatar pack local header fields are truncated");
+        }
+        if (!std::equal(entry.name.begin(), entry.name.end(),
+                        localFollowing.begin())) {
+            return invalidEnvelope(
+                "avatar pack local and central names disagree");
+        }
+        if (!validBoundedExtra(
+                std::span<const std::uint8_t>{localFollowing}.subspan(
+                    nameBytes, extraBytes))) {
+            return invalidEnvelope(
+                "avatar pack local extra data is invalid or ZIP64");
+        }
+        localRanges.emplace_back(entry.localOffset,
+                                 dataOffset + entry.compressedBytes);
+    }
+    std::sort(localRanges.begin(), localRanges.end());
+    for (std::size_t index = 1; index < localRanges.size(); ++index) {
+        if (localRanges[index].first <
+            localRanges[index - 1U].second) {
+            return invalidEnvelope(
+                "avatar pack local entries overlap");
+        }
+    }
+    return core::ok();
 }
 
 std::optional<std::vector<std::uint32_t>> decodeUtf8(
@@ -110,8 +440,20 @@ bool invalidWindowsComponent(std::string_view component) noexcept {
         "CON",  "PRN",  "AUX",  "NUL",  "COM1", "COM2", "COM3", "COM4",
         "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3",
         "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"};
-    return std::find(kReserved.begin(), kReserved.end(), stem) !=
-           kReserved.end();
+    if (std::find(kReserved.begin(), kReserved.end(), stem) !=
+        kReserved.end()) {
+        return true;
+    }
+    constexpr std::array<std::string_view, 3> kSuperscriptDigits{
+        "\xc2\xb9", "\xc2\xb2", "\xc2\xb3"};
+    if (stem.starts_with("COM") || stem.starts_with("LPT")) {
+        const std::string_view suffix{stem.data() + 3U,
+                                      stem.size() - 3U};
+        return std::find(kSuperscriptDigits.begin(),
+                         kSuperscriptDigits.end(),
+                         suffix) != kSuperscriptDigits.end();
+    }
+    return false;
 }
 
 bool validRelativePath(std::string_view path) {
@@ -275,94 +617,6 @@ private:
     mz_zip_reader_extract_iter_state* state_{};
 };
 
-class ExclusiveOutput final {
-public:
-    explicit ExclusiveOutput(const std::filesystem::path& path) {
-#ifdef _WIN32
-        handle_ = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
-                              CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-#else
-        descriptor_ =
-            ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
-                   0666);
-#endif
-    }
-
-    ~ExclusiveOutput() { closeIgnoringErrors(); }
-
-    ExclusiveOutput(const ExclusiveOutput&) = delete;
-    ExclusiveOutput& operator=(const ExclusiveOutput&) = delete;
-
-    [[nodiscard]] bool valid() const noexcept {
-#ifdef _WIN32
-        return handle_ != INVALID_HANDLE_VALUE;
-#else
-        return descriptor_ >= 0;
-#endif
-    }
-
-    bool write(std::span<const std::uint8_t> bytes) {
-        std::size_t written = 0;
-        while (written < bytes.size()) {
-#ifdef _WIN32
-            const auto chunk = static_cast<DWORD>(std::min<std::size_t>(
-                bytes.size() - written,
-                std::numeric_limits<DWORD>::max()));
-            DWORD count = 0;
-            if (!WriteFile(handle_, bytes.data() + written, chunk, &count,
-                           nullptr) ||
-                count == 0U) {
-                return false;
-            }
-#else
-            const auto chunk = std::min<std::size_t>(
-                bytes.size() - written,
-                static_cast<std::size_t>(
-                    std::numeric_limits<ssize_t>::max()));
-            const auto count =
-                ::write(descriptor_, bytes.data() + written, chunk);
-            if (count < 0 && errno == EINTR) continue;
-            if (count <= 0) return false;
-#endif
-            written += static_cast<std::size_t>(count);
-        }
-        return true;
-    }
-
-    bool flushAndClose() {
-#ifdef _WIN32
-        if (!FlushFileBuffers(handle_)) return false;
-        const auto handle = std::exchange(handle_, INVALID_HANDLE_VALUE);
-        return CloseHandle(handle) != FALSE;
-#else
-        if (::fsync(descriptor_) != 0) return false;
-        const auto descriptor = std::exchange(descriptor_, -1);
-        return ::close(descriptor) == 0;
-#endif
-    }
-
-private:
-    void closeIgnoringErrors() noexcept {
-#ifdef _WIN32
-        if (handle_ != INVALID_HANDLE_VALUE) {
-            CloseHandle(handle_);
-            handle_ = INVALID_HANDLE_VALUE;
-        }
-#else
-        if (descriptor_ >= 0) {
-            ::close(descriptor_);
-            descriptor_ = -1;
-        }
-#endif
-    }
-
-#ifdef _WIN32
-    HANDLE handle_{INVALID_HANDLE_VALUE};
-#else
-    int descriptor_{-1};
-#endif
-};
-
 }  // namespace
 
 class AvatarPackArchive::Impl final {
@@ -397,6 +651,7 @@ AvatarPackArchive::~AvatarPackArchive() = default;
 
 Result<AvatarPackArchive> AvatarPackArchive::open(
     const std::filesystem::path& packagePath) {
+    try {
     std::error_code error;
     const auto status = std::filesystem::symlink_status(packagePath, error);
     if (error) {
@@ -419,10 +674,14 @@ Result<AvatarPackArchive> AvatarPackArchive::open(
                             "avatar pack size could not be read",
                             "avatar.pack.archive.open");
     }
+    if (archiveSize > kMaximumArchiveBytes) {
+        return invalidArchive("avatar pack archive exceeds its size limit",
+                              "avatar.pack.archive.archive-size");
+    }
 
     std::FILE* file = nullptr;
 #ifdef _WIN32
-    if (_wfopen_s(&file, packagePath.c_str(), L"rb") != 0) file = nullptr;
+    file = _wfsopen(packagePath.c_str(), L"rb", _SH_DENYNO);
 #else
     file = std::fopen(packagePath.c_str(), "rb");
 #endif
@@ -431,7 +690,20 @@ Result<AvatarPackArchive> AvatarPackArchive::open(
                             "avatar pack could not be opened",
                             "avatar.pack.archive.open");
     }
-    auto implementation = std::make_unique<Impl>(file);
+    std::unique_ptr<std::FILE, decltype(&std::fclose)> guardedFile{
+        file, &std::fclose};
+    if (auto envelope = preflightRawZip(guardedFile.get(), archiveSize);
+        !envelope.hasValue()) {
+        return envelope.error();
+    }
+    if (!readFileExact(guardedFile.get(), 0U,
+                       std::span<std::uint8_t>{})) {
+        return archiveError(ErrorCode::IoFailure,
+                            "avatar pack could not be rewound",
+                            "avatar.pack.archive.open");
+    }
+    auto implementation =
+        std::make_unique<Impl>(guardedFile.release());
     if (!mz_zip_reader_init_cfile(&implementation->archive_, file,
                                   archiveSize, 0U)) {
         return invalidArchive("avatar pack ZIP structure is invalid",
@@ -530,6 +802,19 @@ Result<AvatarPackArchive> AvatarPackArchive::open(
     }
     return AvatarPackArchive{std::move(implementation),
                              std::move(entries)};
+    } catch (const std::bad_alloc&) {
+        return archiveError(
+            ErrorCode::InsufficientStorage,
+            "avatar pack validation allocation failed",
+            "avatar.pack.archive.allocation");
+    } catch (const std::length_error&) {
+        return invalidEnvelope(
+            "avatar pack ZIP envelope requests an invalid allocation");
+    } catch (const std::exception&) {
+        return archiveError(ErrorCode::IoFailure,
+                            "avatar pack validation failed safely",
+                            "avatar.pack.archive.exception");
+    }
 }
 
 const std::vector<AvatarPackArchiveEntry>& AvatarPackArchive::entries()
@@ -575,27 +860,12 @@ Result<std::vector<std::uint8_t>> AvatarPackArchive::read(
     return result;
 }
 
-Result<std::string> AvatarPackArchive::extractToNewFile(
+Result<std::string> AvatarPackArchive::stream(
     const AvatarPackArchiveEntry& entry,
-    const std::filesystem::path& destination,
-    std::uint64_t maximumExpandedBytes) {
+    std::uint64_t maximumExpandedBytes, const ChunkWriter& writer) {
     if (entry.uncompressedBytes > maximumExpandedBytes) {
         return invalidArchive("avatar pack entry exceeds extraction limit",
                               "avatar.pack.archive.entry-size");
-    }
-    std::error_code error;
-    const auto parent = destination.parent_path();
-    std::filesystem::create_directories(parent, error);
-    if (error) {
-        return archiveError(ErrorCode::IoFailure,
-                            "avatar pack staging directory could not be created",
-                            "avatar.pack.extract.directory");
-    }
-    ExclusiveOutput output{destination};
-    if (!output.valid()) {
-        return archiveError(ErrorCode::IoFailure,
-                            "avatar pack staging file could not be created",
-                            "avatar.pack.extract.create");
     }
     ExtractIterator iterator{implementation_->archive_, entry.index};
     if (!iterator.valid()) {
@@ -617,11 +887,8 @@ Result<std::string> AvatarPackArchive::extractToNewFile(
         }
         const auto chunk =
             std::span<const std::uint8_t>{buffer.data(), count};
-        if (!output.write(chunk)) {
-            return archiveError(ErrorCode::IoFailure,
-                                "avatar pack staging file write failed",
-                                "avatar.pack.extract.write");
-        }
+        auto written = writer(chunk);
+        if (!written.hasValue()) return written.error();
         hash.update(chunk);
         expanded += count;
     }
@@ -629,11 +896,6 @@ Result<std::string> AvatarPackArchive::extractToNewFile(
         return invalidArchive(
             "avatar pack entry failed CRC or expanded-size validation",
             "avatar.pack.archive.read");
-    }
-    if (!output.flushAndClose()) {
-        return archiveError(ErrorCode::IoFailure,
-                            "avatar pack staging file flush or close failed",
-                            "avatar.pack.extract.flush");
     }
     return hash.finish();
 }

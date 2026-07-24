@@ -2,6 +2,7 @@
 
 #include "avatar/AvatarAssetManifestCodec.h"
 #include "avatar_pack_adapter/AvatarPackArchive.h"
+#include "avatar_pack_adapter/AvatarPackStaging.h"
 #include "avatar_pack_adapter/SodiumSignatureVerifier.h"
 #include "core/AppError.h"
 
@@ -16,11 +17,6 @@
 #include <string_view>
 #include <unordered_set>
 #include <utility>
-
-#ifdef _WIN32
-#define NOMINMAX
-#include <Windows.h>
-#endif
 
 namespace creator::avatar_pack_adapter {
 namespace {
@@ -145,12 +141,6 @@ bool metadataPath(std::string_view path) noexcept {
            path == kKeyIdPath;
 }
 
-std::filesystem::path pathFromUtf8(std::string_view path) {
-    const std::u8string utf8{
-        reinterpret_cast<const char8_t*>(path.data()), path.size()};
-    return std::filesystem::path{utf8};
-}
-
 Result<const TrustedAvatarKey*> findTrustedKey(
     std::string_view keyId,
     const std::vector<TrustedAvatarKey>& trustedKeys,
@@ -202,77 +192,6 @@ std::vector<std::uint8_t> signatureMessage(
         message.insert(message.end(), hash->begin(), hash->end());
     }
     return message;
-}
-
-class StagingCleanup final {
-public:
-    explicit StagingCleanup(std::filesystem::path root)
-        : root_(std::move(root)) {}
-
-    ~StagingCleanup() {
-        if (!active_) return;
-        std::error_code ignored;
-        std::filesystem::remove_all(root_, ignored);
-    }
-
-    StagingCleanup(const StagingCleanup&) = delete;
-    StagingCleanup& operator=(const StagingCleanup&) = delete;
-
-    void release() noexcept { active_ = false; }
-
-private:
-    std::filesystem::path root_;
-    bool active_{true};
-};
-
-bool stagingParentSafe(const std::filesystem::path& parent) {
-    std::error_code error;
-    const auto status = std::filesystem::symlink_status(parent, error);
-    if (error || !std::filesystem::is_directory(status) ||
-        std::filesystem::is_symlink(status)) {
-        return false;
-    }
-#ifdef _WIN32
-    const auto attributes = GetFileAttributesW(parent.c_str());
-    if (attributes == INVALID_FILE_ATTRIBUTES ||
-        (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U) {
-        return false;
-    }
-#endif
-    return true;
-}
-
-Result<std::filesystem::path> createStaging(
-    const std::filesystem::path& parent) {
-    if (!stagingParentSafe(parent)) {
-        return packError(ErrorCode::IoFailure,
-                         "avatar pack staging parent is unavailable",
-                         "avatar.pack.staging.parent",
-                         "avatar.validation.io");
-    }
-    for (std::size_t attempt = 0; attempt < 32U; ++attempt) {
-        std::array<unsigned char, 16> random{};
-        randombytes_buf(random.data(), random.size());
-        std::array<char, 33> encoded{};
-        sodium_bin2hex(encoded.data(), encoded.size(), random.data(),
-                       random.size());
-        const auto candidate =
-            parent / (".avatar-pack-" + std::string{encoded.data()});
-        std::error_code error;
-        if (std::filesystem::create_directory(candidate, error))
-            return candidate;
-        if (error &&
-            error != std::errc::file_exists) {
-            return packError(ErrorCode::IoFailure,
-                             "avatar pack staging directory creation failed",
-                             "avatar.pack.staging.create",
-                             "avatar.validation.io");
-        }
-    }
-    return packError(ErrorCode::IoFailure,
-                     "avatar pack staging directory creation failed",
-                     "avatar.pack.staging.create",
-                     "avatar.validation.io");
 }
 
 Result<void> validatePayloadParity(
@@ -387,16 +306,28 @@ Result<ValidatedAvatarPack> AvatarPackValidator::validateAndExtract(
         return verified.error();
     }
 
-    auto staging = createStaging(stagingParent_);
-    if (!staging.hasValue()) return staging.error();
-    StagingCleanup cleanup{staging.value()};
+    auto createdStaging = AvatarPackStaging::create(stagingParent_);
+    if (!createdStaging.hasValue()) return createdStaging.error();
+    auto staging = std::move(createdStaging).value();
+    const auto failAfterStaging =
+        [&staging](AppError original) -> Result<ValidatedAvatarPack> {
+        auto cleaned = staging.cleanup();
+        return cleaned.hasValue()
+                   ? Result<ValidatedAvatarPack>{std::move(original)}
+                   : Result<ValidatedAvatarPack>{cleaned.error()};
+    };
 
-    for (const auto* metadata :
-         {manifestEntry, signatureEntry, keyIdEntry}) {
-        auto extracted = archive.extractToNewFile(
-            *metadata, staging.value() / metadata->path,
-            metadata->uncompressedBytes);
-        if (!extracted.hasValue()) return extracted.error();
+    for (const auto& metadata :
+         std::array{
+             std::pair{kManifestPath,
+                       std::span<const std::uint8_t>{rawManifest.value()}},
+             std::pair{kSignaturePath,
+                       std::span<const std::uint8_t>{rawSignature.value()}},
+             std::pair{kKeyIdPath,
+                       std::span<const std::uint8_t>{rawKeyId.value()}}}) {
+        auto written = staging.writeNewFile(metadata.first, metadata.second);
+        if (!written.hasValue())
+            return failAfterStaging(written.error());
     }
 
     auto payloads = manifest.values().payloads;
@@ -407,23 +338,27 @@ Result<ValidatedAvatarPack> AvatarPackValidator::validateAndExtract(
     for (const auto& payload : payloads) {
         const auto* entry = findEntry(entries, payload.path);
         if (entry == nullptr) {
-            return invalidPack(
+            return failAfterStaging(invalidPack(
                 "avatar pack payload disappeared before extraction",
-                "avatar.pack.payload.parity");
+                "avatar.pack.payload.parity"));
         }
-        auto extracted = archive.extractToNewFile(
-            *entry, staging.value() / pathFromUtf8(payload.path),
-            AvatarPackArchive::kMaximumEntryBytes);
-        if (!extracted.hasValue()) return extracted.error();
+        auto extracted = staging.extractNewFile(
+            archive, *entry, AvatarPackArchive::kMaximumEntryBytes);
+        if (!extracted.hasValue())
+            return failAfterStaging(extracted.error());
         if (extracted.value() != payload.sha256) {
-            return invalidPack("avatar pack payload hash is invalid",
-                               "avatar.pack.payload.hash");
+            return failAfterStaging(invalidPack(
+                "avatar pack payload hash is invalid",
+                "avatar.pack.payload.hash"));
         }
     }
 
-    cleanup.release();
+    auto finished = staging.finish();
+    if (!finished.hasValue())
+        return failAfterStaging(finished.error());
     return ValidatedAvatarPack{.manifest = std::move(manifest),
-                               .stagingRoot = std::move(staging).value()};
+                               .stagingRoot =
+                                   std::move(finished).value()};
 }
 
 }  // namespace creator::avatar_pack_adapter

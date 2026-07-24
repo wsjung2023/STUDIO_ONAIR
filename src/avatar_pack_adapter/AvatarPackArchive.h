@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -27,6 +28,12 @@ public:
         512ULL * 1024ULL * 1024ULL;
     static constexpr std::uint64_t kMaximumAggregateBytes =
         2ULL * 1024ULL * 1024ULL * 1024ULL;
+    static constexpr std::uint64_t kMaximumArchiveBytes =
+        kMaximumAggregateBytes + 80ULL * 1024ULL * 1024ULL;
+    static constexpr std::size_t kMaximumCentralDirectoryBytes =
+        16U * 1024U * 1024U;
+    static constexpr std::size_t kMaximumZipExtraBytes = 4096U;
+    static constexpr std::size_t kMaximumZipCommentBytes = 4096U;
     static constexpr std::size_t kMaximumPathBytes = 1024U;
 
     [[nodiscard]] static core::Result<AvatarPackArchive> open(
@@ -43,10 +50,11 @@ public:
         const noexcept;
     [[nodiscard]] core::Result<std::vector<std::uint8_t>> read(
         const AvatarPackArchiveEntry& entry, std::size_t maximumBytes);
-    [[nodiscard]] core::Result<std::string> extractToNewFile(
+    using ChunkWriter = std::function<core::Result<void>(
+        std::span<const std::uint8_t>)>;
+    [[nodiscard]] core::Result<std::string> stream(
         const AvatarPackArchiveEntry& entry,
-        const std::filesystem::path& destination,
-        std::uint64_t maximumExpandedBytes);
+        std::uint64_t maximumExpandedBytes, const ChunkWriter& writer);
 
 private:
     class Impl;
