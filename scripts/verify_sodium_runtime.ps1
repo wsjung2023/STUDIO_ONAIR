@@ -9,22 +9,18 @@ $ErrorActionPreference = "Stop"
 $ExpectedVersion = "1.0.22"
 $ExpectedSourceUrl = "https://download.libsodium.org/libsodium/releases/libsodium-1.0.22-msvc.zip"
 $ExpectedArchiveSha256 = "3e03a726fac4bc09cb61d8f29d658ef7a5eca0811de59082130414f7ca2e4279"
+$ExpectedTreeSha256 = "9e6dc4f9e295621388418ca22ee1ee3bbfb0632af1287a18ce91ad1842af22be"
+$ExpectedTreeFileCount = 79
+$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $ScriptRoot "canonical_tree_digest.ps1")
 $RuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
 if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
     $ManifestPath = Join-Path $RuntimeRoot "runtime-manifest.json"
 }
 $ManifestPath = [System.IO.Path]::GetFullPath($ManifestPath)
-
-function Get-CompatibleRelativePath {
-    param([string]$BasePath, [string]$FullPath)
-    $Base = [System.IO.Path]::GetFullPath($BasePath).TrimEnd('\', '/') +
-        [System.IO.Path]::DirectorySeparatorChar
-    $BaseUri = New-Object System.Uri($Base)
-    $FullUri = New-Object System.Uri([System.IO.Path]::GetFullPath($FullPath))
-    return [System.Uri]::UnescapeDataString(
-        $BaseUri.MakeRelativeUri($FullUri).ToString()
-    ).Replace('\', '/')
-}
+$ExpectedManifestPath = [System.IO.Path]::GetFullPath(
+    (Join-Path $RuntimeRoot "runtime-manifest.json")
+)
 
 function Resolve-ManifestPath {
     param([string]$RelativePath)
@@ -57,6 +53,25 @@ if (-not (Test-Path -LiteralPath $RuntimeRoot -PathType Container)) {
 if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
     throw "libsodium runtime manifest is missing: $ManifestPath"
 }
+if (-not $ManifestPath.Equals(
+    $ExpectedManifestPath,
+    [System.StringComparison]::OrdinalIgnoreCase
+)) {
+    throw "runtime-manifest.json is the only allowed untracked metadata"
+}
+$ManifestFile = Get-Item -LiteralPath $ManifestPath -Force
+if (($ManifestFile.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "libsodium runtime manifest must not be a reparse point"
+}
+
+$CanonicalTree = Get-CanonicalTreeDigest `
+    -Root $RuntimeRoot `
+    -ExcludedRelativePaths @("runtime-manifest.json") `
+    -AllowedExtensions @(".h", ".lib", ".dll")
+if ($CanonicalTree.digest -ne $ExpectedTreeSha256 -or
+    @($CanonicalTree.files).Count -ne $ExpectedTreeFileCount) {
+    throw "libsodium runtime canonical tree does not match the verifier's pinned trust anchor"
+}
 
 $Manifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding utf8 | ConvertFrom-Json
 if ($Manifest.abi -ne 1) {
@@ -73,6 +88,9 @@ if ($Manifest.source_url -ne $ExpectedSourceUrl) {
 }
 if ($Manifest.archive_sha256 -ne $ExpectedArchiveSha256) {
     throw "libsodium runtime archive_sha256 mismatch"
+}
+if ($Manifest.tree_sha256 -ne $ExpectedTreeSha256) {
+    throw "libsodium runtime tree_sha256 mismatch"
 }
 if ($Manifest.include_path -ne "include") {
     throw "libsodium runtime include_path mismatch"
@@ -111,6 +129,17 @@ foreach ($Entry in $Manifest.files) {
 if ($ExpectedFiles.Count -eq 0) {
     throw "libsodium runtime manifest contains no files"
 }
+if ($ExpectedFiles.Count -ne @($CanonicalTree.files).Count) {
+    throw "libsodium runtime manifest does not enumerate the pinned canonical tree"
+}
+foreach ($Entry in @($CanonicalTree.files)) {
+    $Key = ([string]$Entry.path).ToLowerInvariant()
+    if (-not $ExpectedFiles.ContainsKey($Key) -or
+        $ExpectedFiles[$Key].path -cne [string]$Entry.path -or
+        $ExpectedFiles[$Key].sha256 -ne [string]$Entry.sha256) {
+        throw "libsodium runtime manifest differs from the pinned canonical tree: $($Entry.path)"
+    }
+}
 
 $ExpectedDlls = @{}
 foreach ($Entry in $Manifest.dlls) {
@@ -137,46 +166,17 @@ if ($ExpectedDlls.Count -eq 0) {
     throw "libsodium runtime manifest contains no DLL hashes"
 }
 
-$ActualFiles = @{}
-foreach ($File in Get-ChildItem -LiteralPath $RuntimeRoot -Recurse -File -Force) {
-    if (($File.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Reparse point is forbidden in libsodium runtime: $($File.FullName)"
-    }
-    $Relative = Get-CompatibleRelativePath -BasePath $RuntimeRoot -FullPath $File.FullName
-    if ($Relative -eq "runtime-manifest.json") {
-        continue
-    }
-    $Key = $Relative.ToLowerInvariant()
-    if ($ActualFiles.ContainsKey($Key)) {
-        throw "Duplicate on-disk path in libsodium runtime: $Relative"
-    }
-    if (-not $ExpectedFiles.ContainsKey($Key)) {
-        throw "unexpected file in libsodium runtime: $Relative"
-    }
-    $ActualFiles[$Key] = $Relative
-}
-
-foreach ($Key in $ExpectedFiles.Keys) {
-    $Entry = $ExpectedFiles[$Key]
-    if (-not $ActualFiles.ContainsKey($Key) -or
-        -not (Test-Path -LiteralPath $Entry.full_path -PathType Leaf)) {
-        throw "missing file in libsodium runtime: $($Entry.path)"
-    }
-    $ActualHash = (Get-FileHash -LiteralPath $Entry.full_path -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($ActualHash -ne $Entry.sha256) {
-        throw "SHA256 change in libsodium runtime: $($Entry.path)"
-    }
-}
-
 $ActualDlls = @(
-    $ActualFiles.Keys | Where-Object { $_ -match '\.dll$' }
+    @($CanonicalTree.files) |
+        Where-Object { $_.path -match '(?i)\.dll$' } |
+        ForEach-Object { $_.path.ToLowerInvariant() }
 )
 if ($ActualDlls.Count -ne $ExpectedDlls.Count) {
     throw "missing or unexpected DLL in libsodium runtime"
 }
 foreach ($Key in $ActualDlls) {
     if (-not $ExpectedDlls.ContainsKey($Key)) {
-        throw "unexpected DLL in libsodium runtime: $($ActualFiles[$Key])"
+        throw "unexpected DLL in libsodium runtime: $Key"
     }
 }
 

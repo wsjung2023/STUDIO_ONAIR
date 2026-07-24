@@ -87,6 +87,26 @@ if(CS_ENABLE_AVATAR_PACKS)
     if(NOT CS_SODIUM_ROOT)
         message(FATAL_ERROR "CS_ENABLE_AVATAR_PACKS requires CS_SODIUM_ROOT")
     endif()
+    if(FETCHCONTENT_FULLY_DISCONNECTED)
+        message(FATAL_ERROR
+            "Audited miniz forbids FETCHCONTENT_FULLY_DISCONNECTED")
+    endif()
+    if(TARGET miniz)
+        message(FATAL_ERROR "Audited miniz forbids a pre-existing target")
+    endif()
+    foreach(_cs_miniz_override IN ITEMS
+        FETCHCONTENT_SOURCE_DIR_MINIZ
+        miniz_SOURCE_DIR
+        miniz_BINARY_DIR
+        miniz_POPULATED
+    )
+        if(DEFINED ${_cs_miniz_override}
+            AND NOT "${${_cs_miniz_override}}" STREQUAL "")
+            message(FATAL_ERROR
+                "Audited miniz forbids dependency override: "
+                "${_cs_miniz_override}")
+        endif()
+    endforeach()
     execute_process(
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_sodium_runtime.ps1"
@@ -102,7 +122,26 @@ if(CS_ENABLE_AVATAR_PACKS)
         URL_HASH SHA256=f0446d863f9c19926ad9483c523fdc42e42b8d4a6a431d27e09d49c79a140d9a
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
+    FetchContent_GetProperties(miniz)
+    if(miniz_POPULATED)
+        message(FATAL_ERROR "Audited miniz forbids pre-populated source")
+    endif()
     FetchContent_MakeAvailable(miniz)
+    execute_process(
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_miniz_source.ps1"
+            -SourceRoot "${miniz_SOURCE_DIR}"
+        RESULT_VARIABLE CS_MINIZ_VERIFY_RESULT
+    )
+    if(NOT CS_MINIZ_VERIFY_RESULT EQUAL 0)
+        message(FATAL_ERROR
+            "Fetched miniz source failed canonical tree verification")
+    endif()
+    file(GLOB_RECURSE CS_MINIZ_AUDITED_SOURCE_FILES
+        CONFIGURE_DEPENDS
+        LIST_DIRECTORIES FALSE
+        "${miniz_SOURCE_DIR}/*"
+    )
     add_library(miniz STATIC "${miniz_SOURCE_DIR}/miniz.c")
     target_include_directories(miniz PUBLIC "${miniz_SOURCE_DIR}")
     set_target_properties(miniz PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)

@@ -10,6 +10,9 @@ $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 $ExpectedVersion = "1.0.22"
 $OfficialSourceUrl = "https://download.libsodium.org/libsodium/releases/libsodium-1.0.22-msvc.zip"
 $ExpectedArchiveSha256 = "3e03a726fac4bc09cb61d8f29d658ef7a5eca0811de59082130414f7ca2e4279"
+$ExpectedTreeSha256 = "9e6dc4f9e295621388418ca22ee1ee3bbfb0632af1287a18ce91ad1842af22be"
+$ExpectedTreeFileCount = 79
+. (Join-Path $PSScriptRoot "canonical_tree_digest.ps1")
 
 if ([string]::IsNullOrWhiteSpace($BuildRoot)) {
     $BuildRoot = Join-Path $RepositoryRoot "build/sodium"
@@ -41,17 +44,6 @@ function Assert-ChildPath {
     )) {
         throw "$Description must remain inside the libsodium build root"
     }
-}
-
-function Get-CompatibleRelativePath {
-    param([string]$BasePath, [string]$FullPath)
-    $Base = [System.IO.Path]::GetFullPath($BasePath).TrimEnd('\', '/') +
-        [System.IO.Path]::DirectorySeparatorChar
-    $BaseUri = New-Object System.Uri($Base)
-    $FullUri = New-Object System.Uri([System.IO.Path]::GetFullPath($FullPath))
-    return [System.Uri]::UnescapeDataString(
-        $BaseUri.MakeRelativeUri($FullUri).ToString()
-    ).Replace('\', '/')
 }
 
 Assert-ChildPath -Path $InstallRoot -Parent $BuildRoot -Description "InstallRoot"
@@ -106,14 +98,15 @@ New-Item -ItemType Directory -Force -Path (Join-Path $InstallRoot "bin") | Out-N
 Copy-Item -LiteralPath $SourceLibrary -Destination (Join-Path $InstallRoot "lib/libsodium.lib")
 Copy-Item -LiteralPath $SourceDll -Destination (Join-Path $InstallRoot "bin/libsodium.dll")
 
-$ManifestFiles = @()
-foreach ($File in Get-ChildItem -LiteralPath $InstallRoot -Recurse -File | Sort-Object FullName) {
-    $Relative = Get-CompatibleRelativePath -BasePath $InstallRoot -FullPath $File.FullName
-    $ManifestFiles += [ordered]@{
-        path = $Relative
-        sha256 = (Get-FileHash -LiteralPath $File.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
+$CanonicalTree = Get-CanonicalTreeDigest `
+    -Root $InstallRoot `
+    -ExcludedRelativePaths @("runtime-manifest.json") `
+    -AllowedExtensions @(".h", ".lib", ".dll")
+if ($CanonicalTree.digest -ne $ExpectedTreeSha256 -or
+    @($CanonicalTree.files).Count -ne $ExpectedTreeFileCount) {
+    throw "Staged libsodium canonical tree does not match the pinned official package"
 }
+$ManifestFiles = @($CanonicalTree.files)
 $ManifestDlls = @(
     $ManifestFiles | Where-Object { $_.path -match '(?i)\.dll$' }
 )
@@ -127,6 +120,7 @@ $Manifest = [ordered]@{
     version = $ExpectedVersion
     source_url = $OfficialSourceUrl
     archive_sha256 = $ExpectedArchiveSha256
+    tree_sha256 = $ExpectedTreeSha256
     include_path = "include"
     library_path = "lib/libsodium.lib"
     dlls = $ManifestDlls

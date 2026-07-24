@@ -16,6 +16,10 @@ $VerifierPath = Join-Path $RepositoryRoot "scripts/verify_sodium_runtime.ps1"
 $FinderPath = Join-Path $RepositoryRoot "cmake/FindSodium.cmake"
 $AdapterCMakePath = Join-Path $RepositoryRoot "src/avatar_pack_adapter/CMakeLists.txt"
 $BomPath = Join-Path $RepositoryRoot "legal/OSS_BOM.csv"
+$CanonicalTreePath = Join-Path $RepositoryRoot "scripts/canonical_tree_digest.ps1"
+$MinizVerifierPath = Join-Path $RepositoryRoot "scripts/verify_miniz_source.ps1"
+$RuntimeTrustTestPath = Join-Path $RepositoryRoot "tests/scripts/SodiumRuntimeTrustTest.ps1"
+$CMakeTrustTestPath = Join-Path $RepositoryRoot "tests/scripts/AvatarPackCMakeTrustTest.ps1"
 
 $Text = ""
 foreach ($Path in @($RootCMakePath, $BootstrapPath, $VerifierPath)) {
@@ -41,7 +45,11 @@ foreach ($Path in @(
     $VerifierPath,
     $FinderPath,
     $AdapterCMakePath,
-    $BomPath
+    $BomPath,
+    $CanonicalTreePath,
+    $MinizVerifierPath,
+    $RuntimeTrustTestPath,
+    $CMakeTrustTestPath
 )) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Missing avatar pack dependency policy artifact: $Path"
@@ -55,6 +63,10 @@ foreach ($Pattern in @(
     'CS_ENABLE_AVATAR_PACKS requires CS_SODIUM_ROOT',
     'https://github\.com/richgel999/miniz/releases/download/3\.1\.2/miniz-3\.1\.2\.zip',
     'URL_HASH SHA256=f0446d863f9c19926ad9483c523fdc42e42b8d4a6a431d27e09d49c79a140d9a',
+    'FETCHCONTENT_SOURCE_DIR_MINIZ',
+    'FETCHCONTENT_FULLY_DISCONNECTED',
+    'FetchContent_GetProperties\(miniz\)',
+    'verify_miniz_source\.ps1',
     'find_package\(Sodium REQUIRED\)',
     'add_subdirectory\(src/avatar_pack_adapter\)'
 )) {
@@ -71,6 +83,8 @@ foreach ($Pattern in @(
     'runtime-manifest\.json',
     'source_url',
     'archive_sha256',
+    'tree_sha256',
+    '9e6dc4f9e295621388418ca22ee1ee3bbfb0632af1287a18ce91ad1842af22be',
     'include_path',
     'library_path',
     'dlls',
@@ -88,7 +102,10 @@ foreach ($Pattern in @(
     'unexpected',
     'missing',
     'archive_sha256',
-    'source_url'
+    'source_url',
+    'tree_sha256',
+    '9e6dc4f9e295621388418ca22ee1ee3bbfb0632af1287a18ce91ad1842af22be',
+    'Get-CanonicalTreeDigest'
 )) {
     if ($Verifier -notmatch $Pattern) {
         throw "libsodium verifier is missing a fail-closed check: $Pattern"
@@ -96,9 +113,56 @@ foreach ($Pattern in @(
 }
 
 $Finder = Get-Content -LiteralPath $FinderPath -Raw -Encoding utf8
-foreach ($Pattern in @('Sodium::Sodium', 'sodium\.h', 'libsodium')) {
+foreach ($Pattern in @(
+    'Sodium::Sodium',
+    'sodium\.h',
+    'libsodium',
+    'REAL_PATH',
+    'IS_PREFIX',
+    'unset\("\$\{_cs_sodium_variable\}" CACHE\)'
+)) {
     if ($Finder -notmatch $Pattern) {
         throw "FindSodium.cmake is missing imported target policy: $Pattern"
+    }
+}
+
+$MinizVerifier = Get-Content -LiteralPath $MinizVerifierPath -Raw -Encoding utf8
+foreach ($Pattern in @(
+    '1638d4237f6a050f05f7e1eb5928d302916717a4f9c6ccb0d01e75735d512a76',
+    'Get-CanonicalTreeDigest',
+    'ExpectedSourceFileCount'
+)) {
+    if ($MinizVerifier -notmatch $Pattern) {
+        throw "miniz verifier is missing canonical source policy: $Pattern"
+    }
+}
+
+$CanonicalTree = Get-Content -LiteralPath $CanonicalTreePath -Raw -Encoding utf8
+foreach ($Pattern in @(
+    'StringComparer\]::Ordinal',
+    'UTF8Encoding\(\$false\)',
+    'WriteByte\(0\)',
+    'ComputeHash',
+    'ToArray'
+)) {
+    if ($CanonicalTree -notmatch $Pattern) {
+        throw "Canonical tree serializer is missing required framing: $Pattern"
+    }
+}
+
+$TrustTests = (Get-Content -LiteralPath $RuntimeTrustTestPath -Raw -Encoding utf8) +
+    (Get-Content -LiteralPath $CMakeTrustTestPath -Raw -Encoding utf8)
+foreach ($Pattern in @(
+    'DLL plus manifest hash change',
+    'header removal plus manifest list change',
+    'import library plus manifest hash change',
+    'Sodium_LIBRARY command-line cache escaped',
+    'Stale Sodium cache paths survived',
+    'FETCHCONTENT_SOURCE_DIR_MINIZ bypass was accepted',
+    'FETCHCONTENT_FULLY_DISCONNECTED bypass was accepted'
+)) {
+    if ($TrustTests -notmatch $Pattern) {
+        throw "Avatar pack behavioral trust tests are missing: $Pattern"
     }
 }
 
