@@ -1,5 +1,6 @@
 #include "app/RecordingImportPlanner.h"
 
+#include "app/VerticalLayout.h"
 #include "core/AppError.h"
 
 #include <algorithm>
@@ -255,7 +256,16 @@ Result<SourceState> stateAt(
     }
     const auto* scene = findScene(request.scenes, event->sceneId);
     if (scene == nullptr) return notFound("recording scene snapshot was not found");
-    return stateInScene(*scene, sourceId, role);
+    SourceState state = stateInScene(*scene, sourceId, role);
+    // On a portrait (shorts) canvas, override the scene's landscape transform
+    // with the role-based default vertical layout (screen top, camera/avatar
+    // bottom). Landscape canvases return nullopt and keep the scene transform.
+    if (auto vertical = verticalDefaultTransform(role, request.canvasWidth,
+                                                 request.canvasHeight);
+        vertical.has_value()) {
+        state.transform = std::move(vertical);
+    }
+    return state;
 }
 
 std::string idPrefix(const domain::SessionId& sessionId) {

@@ -7,6 +7,8 @@
 add_library(cs_app STATIC
     RecordingImportPlanner.h
     RecordingImportPlanner.cpp
+    VerticalLayout.h
+    VerticalLayout.cpp
     RecordingTimelineReconciler.h
     RecordingTimelineReconciler.cpp
     IRecordingPersistence.h

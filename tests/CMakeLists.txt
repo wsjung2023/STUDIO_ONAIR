@@ -317,6 +317,7 @@ gtest_discover_tests(cs_cursor_emphasis_tests)
 # Qt on the include path.
 add_executable(cs_app_tests
     app/RecordingImportPlannerTest.cpp
+    app/VerticalLayoutTest.cpp
     app/RecordingTimelineReconcilerTest.cpp
     app/EditorModelsTest.cpp
     app/ShortcutSettingsControllerTest.cpp

@@ -277,7 +277,9 @@ Result<RecordingReconcileResult> RecordingTimelineReconciler::reconcile(
         .markers = markers.value(),
         .timeline = editService.snapshot(),
         .probes = probes,
-        .concatSources = concatSources.value()});
+        .concatSources = concatSources.value(),
+        .canvasWidth = openedPackage.value().package.manifest.canvas.width,
+        .canvasHeight = openedPackage.value().package.manifest.canvas.height});
     if (!plan.hasValue()) return plan.error();
 
     // Probing every segment a second time makes a long recording scale with

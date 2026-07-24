@@ -1,6 +1,8 @@
 #pragma once
 
 #include "core/Result.h"
+
+#include <cstdint>
 #include "domain/MediaAsset.h"
 #include "domain/Segment.h"
 #include "domain/StudioScene.h"
@@ -51,6 +53,11 @@ struct RecordingImportRequest final {
     domain::Timeline timeline;
     std::vector<RecordingSegmentProbe> probes;
     std::vector<RecordingConcatSource> concatSources;
+    // Project canvas dimensions. When portrait (height > width) each video
+    // source is laid out with a role-based default (verticalDefaultTransform);
+    // landscape (the default) keeps the recorded scene's own transform.
+    std::int32_t canvasWidth{1920};
+    std::int32_t canvasHeight{1080};
 };
 
 struct RecordingImportPlan final {
