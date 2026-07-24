@@ -106,6 +106,11 @@ using avatar::RigFamily;
 
 constexpr std::uint64_t kMiB = 1024ULL * 1024ULL;
 constexpr std::uint64_t kGiB = 1024ULL * kMiB;
+#if defined(_WIN32) || defined(__linux__) || defined(__APPLE__)
+constexpr bool kAtomicNoReplacePromotionSupported = true;
+#else
+constexpr bool kAtomicNoReplacePromotionSupported = false;
+#endif
 
 TEST(AvatarPackPromotionStateMachineTest,
      AttemptsBothDurabilityConfirmationsAndReturnsAValueOutcome) {
@@ -1792,6 +1797,9 @@ TEST_F(AvatarPackValidatorTest,
 
 TEST_F(AvatarPackValidatorTest,
        PromotesASealedCapabilityWithoutExposingItsSourcePath) {
+    if constexpr (!kAtomicNoReplacePromotionSupported) {
+        GTEST_SKIP() << "atomic no-replace promotion is unsupported";
+    }
     auto result = validator().validateAndExtract(writeSignedPack());
     ASSERT_TRUE(result.hasValue()) << result.error().message();
     const auto destinationParent = root_ / "installed";
@@ -1816,8 +1824,34 @@ TEST_F(AvatarPackValidatorTest,
     EXPECT_TRUE(directoryEmpty(staging_));
 }
 
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
+TEST_F(AvatarPackValidatorTest,
+       UnsupportedPosixPromotionFailsClosedAndKeepsTheLeaseActive) {
+    auto result = validator().validateAndExtract(writeSignedPack());
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    const auto destinationParent = root_ / "unsupported-installed";
+    ASSERT_TRUE(fs::create_directory(destinationParent));
+    ASSERT_FALSE(::chmod(destinationParent.c_str(), 0700));
+    const auto destination = destinationParent / "1.0.0";
+
+    auto promoted =
+        std::move(result.value().staging).promoteTo(destination);
+
+    ASSERT_FALSE(promoted.hasValue());
+    EXPECT_EQ(promoted.error().code(), core::ErrorCode::IoFailure);
+    EXPECT_FALSE(fs::exists(destination));
+    auto stillReadable =
+        result.value().staging.read("payload/model.bin", 1024U);
+    ASSERT_TRUE(stillReadable.hasValue());
+    EXPECT_EQ(stillReadable.value(), bytes("real-avatar-model"));
+}
+#endif
+
 TEST_F(AvatarPackValidatorTest,
        FailedPromotionKeepsTheCapabilityValidForRetry) {
+    if constexpr (!kAtomicNoReplacePromotionSupported) {
+        GTEST_SKIP() << "atomic no-replace promotion is unsupported";
+    }
     auto result = validator().validateAndExtract(writeSignedPack());
     ASSERT_TRUE(result.hasValue()) << result.error().message();
     const auto destinationParent = root_ / "installed";
@@ -1853,6 +1887,9 @@ TEST_F(AvatarPackValidatorTest,
 
 TEST_F(AvatarPackValidatorTest,
        RejectsInPlaceMutationBeforePromotionAndRemainsRetryable) {
+    if constexpr (!kAtomicNoReplacePromotionSupported) {
+        GTEST_SKIP() << "atomic no-replace promotion is unsupported";
+    }
     auto result = validator().validateAndExtract(writeSignedPack());
     ASSERT_TRUE(result.hasValue()) << result.error().message();
     const auto observed = waitForStagingRoot(staging_);
@@ -1877,6 +1914,9 @@ TEST_F(AvatarPackValidatorTest,
 
 TEST_F(AvatarPackValidatorTest,
        RejectsUnknownFileBeforePromotionAndRemainsRetryable) {
+    if constexpr (!kAtomicNoReplacePromotionSupported) {
+        GTEST_SKIP() << "atomic no-replace promotion is unsupported";
+    }
     auto result = validator().validateAndExtract(writeSignedPack());
     ASSERT_TRUE(result.hasValue()) << result.error().message();
     const auto observed = waitForStagingRoot(staging_);
@@ -1901,6 +1941,9 @@ TEST_F(AvatarPackValidatorTest,
 
 TEST_F(AvatarPackValidatorTest,
        RejectsUnknownDirectoryBeforePromotionAndRemainsRetryable) {
+    if constexpr (!kAtomicNoReplacePromotionSupported) {
+        GTEST_SKIP() << "atomic no-replace promotion is unsupported";
+    }
     auto result = validator().validateAndExtract(writeSignedPack());
     ASSERT_TRUE(result.hasValue()) << result.error().message();
     const auto observed = waitForStagingRoot(staging_);

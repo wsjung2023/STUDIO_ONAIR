@@ -30,6 +30,8 @@
 #include <sys/stat.h>
 #ifdef __linux__
 #include <sys/syscall.h>
+#elif defined(__APPLE__)
+#include <stdio.h>
 #endif
 #include <sys/types.h>
 #include <unistd.h>
@@ -1417,15 +1419,24 @@ public:
             (void)closeDescriptor(closing);
             return verified.error();
         }
+        if (::fsync(directories_.front().descriptor) != 0) {
+            int closing = destinationParent;
+            (void)closeDescriptor(closing);
+            return promotionErrorAt("staging root durability");
+        }
 #ifdef __linux__
         constexpr unsigned int kRenameNoReplace = 1U;
         const auto renamed = ::syscall(
             SYS_renameat2, parentDescriptor_,
             directories_.front().name.c_str(), destinationParent,
             destinationName.c_str(), kRenameNoReplace);
+#elif defined(__APPLE__)
+        const auto renamed = ::renameatx_np(
+            parentDescriptor_, directories_.front().name.c_str(),
+            destinationParent, destinationName.c_str(), RENAME_EXCL);
 #else
         errno = ENOTSUP;
-        const auto renamed = -1L;
+        const auto renamed = -1;
 #endif
         if (renamed != 0) {
             const auto code = errno;
@@ -1776,8 +1787,9 @@ private:
                     openDirectoryRelative(currentPath)};
                 if (current.get() < 0) return false;
                 ScopedDirectoryStream stream{
-                    ::fdopendir(current.release())};
+                    ::fdopendir(current.get())};
                 if (stream.get() == nullptr) return false;
+                (void)current.release();
                 for (;;) {
                     errno = 0;
                     auto* entry = ::readdir(stream.get());

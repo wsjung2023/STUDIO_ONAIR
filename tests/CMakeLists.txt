@@ -622,6 +622,16 @@ if(WIN32)
     )
 endif()
 
+if(CS_ENABLE_AVATAR_PACKS)
+    add_test(
+        NAME AvatarPackPromotionIntegrityAudit
+        COMMAND ${CMAKE_COMMAND}
+            -DRepositoryRoot=${PROJECT_SOURCE_DIR}
+            -P
+                "${PROJECT_SOURCE_DIR}/tests/scripts/AvatarPackPromotionIntegrityAuditTest.cmake"
+    )
+endif()
+
 if(WIN32 AND CS_ENABLE_AVATAR_PACKS)
     add_test(
         NAME CanonicalTreeDigest

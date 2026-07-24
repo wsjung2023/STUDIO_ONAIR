@@ -15,13 +15,13 @@ sharing through content verification, performs a final topology pass, and
 closes child handles immediately before the root-handle rename because those
 share modes otherwise prevent ancestor rename. POSIX traverses from the
 retained root descriptor inside a trusted-private same-euid parent. Rename
-consumes the lease, after which source and destination parent flush results map
-to a value outcome rather than an error. Cleanup owns every transient Windows
-handle with RAII.
+first requires a successful retained-root flush, then consumes the lease, after
+which source and destination parent flush results map to a value outcome rather
+than an error. Cleanup owns every transient Windows handle with RAII.
 
 **Tech Stack:** C++20, Win32 file handles and directory enumeration, POSIX
-`openat`/`fdopendir`/`renameat2`, libsodium SHA-256, GoogleTest, CMake/Ninja,
-MSVC AddressSanitizer.
+`openat`/`fdopendir`, Linux `renameat2`, macOS `renameatx_np`, libsodium
+SHA-256, GoogleTest, CMake/Ninja, MSVC AddressSanitizer.
 
 ## Global Constraints
 
@@ -39,6 +39,11 @@ MSVC AddressSanitizer.
   pass precedes immediate close-and-rename inside a current-user-owned
   trusted-private parent. Same-user malicious processes are outside scope.
 - POSIX construction retains only the staging parent and root descriptors.
+- POSIX promotion flushes the retained staging root after all files and child
+  directories and before atomic rename; failure preserves the active lease.
+- `fdopendir` failure leaves its input descriptor under RAII ownership.
+- Linux and macOS provide atomic no-replace promotion; unsupported POSIX
+  platforms fail closed and keep the lease active.
 - Allocations and exceptions inside public `noexcept` integrity paths are
   translated to `Result` errors.
 - No public test hooks or path exposure are introduced.
@@ -209,3 +214,40 @@ and create one separate fix commit:
 ```text
 fix(avatar): verify promotion integrity before commit
 ```
+
+---
+
+### Task 6: Close post-review POSIX promotion gaps
+
+**Files:**
+- Modify: `src/avatar_pack_adapter/AvatarPackStaging.cpp`
+- Modify: `tests/avatar_pack_adapter/AvatarPackValidatorTest.cpp`
+- Add: `tests/scripts/AvatarPackPromotionIntegrityAuditTest.cmake`
+- Modify: `tests/CMakeLists.txt`
+- Modify: `docs/superpowers/specs/2026-07-24-avatar-pack-capabilities-design.md`
+- Modify: `.superpowers/sdd/foundation-task-5-report.md` (ignored)
+
+- [x] **Step 1: Add RED structural regressions**
+
+Register a source audit that requires retained-root `fsync` between exact tree
+verification and rename/lease consumption, forbids releasing a descriptor
+inside the `fdopendir` argument, and requires a macOS exclusive rename branch.
+
+- [x] **Step 2: Prove RED**
+
+Run the audit against `5b48fa9`. It must report the missing staging-root flush,
+the `fdopendir(current.release())` ownership leak, and the absent
+`renameatx_np(..., RENAME_EXCL)` branch.
+
+- [x] **Step 3: Implement minimal POSIX fixes**
+
+Flush the retained staging root before rename and return an ordinary retryable
+error on failure. Borrow the descriptor for `fdopendir` and release it only
+after success. Use `renameatx_np(..., RENAME_EXCL)` on macOS while retaining
+the unsupported-platform fail-closed fallback.
+
+- [x] **Step 4: Verify and commit separately**
+
+Run the structural audit, Windows focused and full avatar-pack suites, and
+Docker GCC 14 production/test translation-unit `-Werror` checks. Update the
+design and report, inspect scoped diffs, and create a separate fix commit.

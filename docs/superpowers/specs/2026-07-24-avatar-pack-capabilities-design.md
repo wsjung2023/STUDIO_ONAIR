@@ -56,9 +56,10 @@ The public lease contract is:
   `avatar.pack.staging.cleanup` I/O error when ownership cannot be proved;
 - `promoteTo(finalPath) &&` returns `Result<PromotionOutcome>`. Before rename
   it enumerates the actual tree, requires exact equality with sealed topology,
-  revalidates every stored identity/size/SHA-256, flushes the tree, validates
-  the destination parent, and performs a no-replace atomic rename through
-  retained source authority;
+  revalidates every stored identity/size/SHA-256, flushes every file and child
+  directory followed by the retained staging root directory, validates the
+  destination parent, and performs a no-replace atomic rename through retained
+  source authority;
 - pre-rename failure is an ordinary error: no destination is published and the
   lease remains active for retry;
 - rename success consumes the lease irrevocably. Both source and destination
@@ -92,12 +93,15 @@ Cleanup uses retained root/parent descriptors and refuses to unlink the root
 name if the trusted-private parent or root identity no longer matches.
 Construction retains only parent/root descriptors; child traversal is reopened
 with `openat`/`O_NOFOLLOW`, identity-checked, and closed per operation.
+`fdopendir` receives a borrowed descriptor and assumes ownership only after it
+succeeds, so a failed conversion leaves the descriptor under RAII cleanup.
 Promotion enumerates and hashes relative to the retained root descriptor,
-opens and validates a trusted destination parent, and uses
-`renameat2(..., RENAME_NOREPLACE)` where available. A platform without an
-atomic no-replace primitive fails closed. The trusted-private same-euid
-contract is the POSIX exclusion boundary while enumeration and hashing run;
-a malicious process with the same effective uid is explicitly outside it.
+opens and validates a trusted destination parent, then uses Linux
+`renameat2(..., RENAME_NOREPLACE)` or macOS
+`renameatx_np(..., RENAME_EXCL)`. Other POSIX platforms fail closed. The
+trusted-private same-euid contract is the POSIX exclusion boundary while
+enumeration and hashing run; a malicious process with the same effective uid
+is explicitly outside it.
 
 Before cleanup touches content, the current `parent/name` object must have the
 same Windows file identity or POSIX device/inode as the retained root. A
