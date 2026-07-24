@@ -87,6 +87,20 @@ core::Result<std::unique_ptr<AsyncTrackRecorder>> makeTrackRecorder(
     std::unique_ptr<recorder::ITrackSegmentEncoder> encoder;
     if (track.mediaKind() == TrackMediaKind::Video) {
         ffmpeg_adapter::VideoEncoderOptions options;
+        // The recorded segment is the quality CEILING for everything downstream:
+        // the editor and the export can only preserve detail the recording
+        // captured, never add it. Record at 16 Mbps -- above the 12 Mbps export
+        // target -- so full-motion 1080p content (a video playing on screen) is
+        // not the bottleneck. It is a local intermediate, so the extra disk is
+        // cheap. (Avatar stays lossless FFV1 below; that ignores bitRate.)
+        options.bitRate = 16'000'000;
+        if (track.role() == TrackRole::Avatar) {
+            // The avatar overlay is a transparent frame with the character baked
+            // into a corner. Record it with a real alpha channel (lossless FFV1
+            // RGBA) so its background does not occlude the screen on composite.
+            options.preserveAlpha = true;
+            options.preferredEncoderNames = {"ffv1"};
+        }
         if (concurrentVideoSources && track.role() == TrackRole::Camera) {
             // Keep the camera on the audited software path when two video
             // sources are active.  The screen track may use the platform H.264
@@ -107,7 +121,13 @@ core::Result<std::unique_ptr<AsyncTrackRecorder>> makeTrackRecorder(
         .track = std::move(track),
         .packageRoot = start.packagePath,
         .recordingStartTime = start.startedAt,
-        .segmentDuration = std::chrono::seconds{2},
+        // 30 s segments, not 2 s. Two-second rotation exploded a short take into
+        // dozens of tiny files per track and forced the editor/MLT to stitch
+        // dozens of producers back together (slow reconcile, heavy graph). A
+        // crash still loses at most the current 30 s segment -- the resilience
+        // the segmentation exists for -- while the on-disk file count drops ~15x
+        // and the timeline graph shrinks accordingly. No quality change.
+        .segmentDuration = std::chrono::seconds{30},
         // Keep several seconds of video available while the software encoder
         // catches up.  Thirty frames (0.5 s at 60 fps) was routinely exhausted
         // during a long physical run with screen + camera enabled, turning a

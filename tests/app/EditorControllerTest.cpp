@@ -1309,6 +1309,12 @@ public:
         return PreviewFrame::create(returnedPosition, revision_,
                                     std::move(frame));
     }
+    creator::core::Result<creator::edit_engine::PreviewAudioBlock>
+    requestMixedAudio(TimestampNs, std::uint32_t, std::uint32_t,
+                      std::uint32_t) override {
+        return creator::core::AppError{creator::core::ErrorCode::InvalidState,
+                                       "not used"};
+    }
     creator::core::Result<std::unique_ptr<IRenderJob>> render(
         const RenderRequest&) override {
         return creator::core::AppError{creator::core::ErrorCode::InvalidState,
@@ -1348,6 +1354,12 @@ public:
         return creator::core::ok();
     }
     creator::core::Result<PreviewFrame> requestFrame(TimestampNs) override {
+        return creator::core::AppError{creator::core::ErrorCode::InvalidState,
+                                       "not used"};
+    }
+    creator::core::Result<creator::edit_engine::PreviewAudioBlock>
+    requestMixedAudio(TimestampNs, std::uint32_t, std::uint32_t,
+                      std::uint32_t) override {
         return creator::core::AppError{creator::core::ErrorCode::InvalidState,
                                        "not used"};
     }

@@ -715,7 +715,18 @@ Result<media::MediaProbeResult> FfmpegMediaProbe::probe(
     AVFormatContext* opened = nullptr;
 #ifdef _WIN32
     const auto path = pathUtf8(validated.value().file);
-    if (avformat_open_input(&opened, path.c_str(), nullptr, nullptr) < 0) {
+    // The recording reconciler probes generated .ffconcat playlists whose
+    // `file` entries live in sub-directories (e.g. screen/<id>/segment_*.mkv or
+    // audio/microphone/<id>/segment_*.mka). libavformat's concat demuxer
+    // rejects such relative paths as "Unsafe file name" unless safe mode is
+    // disabled. The referenced paths are validated + sandboxed against the
+    // package root by validatedMediaPath() above, so allowing them is safe.
+    AVDictionary* openOptions = nullptr;
+    av_dict_set(&openOptions, "safe", "0", 0);
+    const int openStatus =
+        avformat_open_input(&opened, path.c_str(), nullptr, &openOptions);
+    av_dict_free(&openOptions);
+    if (openStatus < 0) {
         return parseFailure("media container could not be opened");
     }
 #else

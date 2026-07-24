@@ -9,6 +9,8 @@ add_library(cs_ffmpeg_adapter STATIC
     FfmpegVideoSegmentEncoder.cpp
     FfmpegAudioSegmentEncoder.h
     FfmpegAudioSegmentEncoder.cpp
+    FfmpegContainerRemux.h
+    FfmpegContainerRemux.cpp
     BgraFrameMappers.h
     BgraFrameMappers.cpp
 )

@@ -77,6 +77,18 @@ public:
     [[nodiscard]] core::Result<ExportLoudnessDecision> analyze(
         const std::vector<float>& interleaved, const AudioFormat& format) const;
 
+    /// The DECISION half of pass 1, factored out of `analyze` so an exporter that
+    /// measures the program by STREAMING it through a LoudnessMeter block by block
+    /// (instead of buffering the whole program in one vector — a multi-minute
+    /// export would be hundreds of MB) can obtain the identical decision from the
+    /// meter's final integrated loudness and true peak. `measuredLufs` /
+    /// `truePeakDbtp` are typically LoudnessMeter::integratedLufs() /
+    /// truePeakDbtp(); a non-finite (kNoMeasurement) or below-noise-floor
+    /// `measuredLufs` yields the documented no-op decision (shouldNormalize=false,
+    /// gainDb=0), exactly as `analyze` does — the two stay in lock step.
+    [[nodiscard]] ExportLoudnessDecision decide(
+        double measuredLufs, double truePeakDbtp) const noexcept;
+
 private:
     explicit ExportLoudnessAnalyzer(const Parameters& params) noexcept
         : params_(params) {}

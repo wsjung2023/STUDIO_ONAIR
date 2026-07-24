@@ -214,6 +214,36 @@ TEST(RecordingImportPlannerTest, SplitsVideoAtInteriorSceneBoundariesExactly) {
     EXPECT_EQ(clips[2].sourceRange(), TimeRange::create(at(0s), 1s).value());
 }
 
+TEST(RecordingImportPlannerTest, PortraitCanvasAppliesVerticalDefaultLayout) {
+    const auto camera = source("카메라-α");
+    const auto session = SessionId::create("세션-α").value();
+    // The recorded scene carries a landscape transform; a portrait import must
+    // override it with the role-based vertical default (camera -> lower band).
+    const auto presentation = scene("presentation", camera,
+                                    StudioSourceRole::Camera, true,
+                                    transform(0.6, 2));
+    auto input = request(
+        camera, StudioSourceRole::Camera,
+        {segment(camera, 0, 0s, 2s, "media/camera-0.mkv")}, {presentation},
+        {{.sessionId = session,
+          .sequence = 0,
+          .sceneId = presentation.id(),
+          .position = at(0s)}},
+        {{.relativePath = "media/camera-0.mkv", .media = videoProbe(2s)}});
+    input.canvasWidth = 1080;   // portrait 9:16 project
+    input.canvasHeight = 1920;
+
+    const auto planned = planRecordingImport(input);
+    ASSERT_TRUE(planned.hasValue()) << planned.error().message();
+    ASSERT_EQ(planned.value().tracks.size(), 1U);
+    const auto& clips = planned.value().tracks.front().clips();
+    ASSERT_EQ(clips.size(), 1U);
+    ASSERT_TRUE(clips[0].visualTransform().has_value());
+    EXPECT_GT(clips[0].visualTransform()->y(), 0.5);  // camera in the lower band
+    EXPECT_NE(clips[0].visualTransform(),
+              presentation.sources()[0].transform());  // not the scene transform
+}
+
 TEST(RecordingImportPlannerTest,
      MergesAdjacentSegmentsIntoOneAssetAndClipPerContinuousTake) {
     const auto camera = source("camera-merge");

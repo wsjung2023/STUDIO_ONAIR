@@ -136,6 +136,21 @@ private:
     media::VideoFrame frame_;
 };
 
+/// Fully-mixed interleaved preview audio pulled from the edit engine at a
+/// timeline position. `interleaved` holds `frequency`-rate 32-bit float samples
+/// in [channels]-interleaved order, so its size is samples * channels.
+///
+/// This is the application-facing audio-pull payload. It is deliberately a plain
+/// POD of primitive/std types: the domain and edit_engine layers never see Qt
+/// Multimedia (CLAUDE.md 3/5), so the application layer converts this block into
+/// a QAudioSink write on its own side of the port boundary.
+struct PreviewAudioBlock final {
+    core::TimestampNs position{};
+    std::uint32_t frequency{};
+    std::uint32_t channels{};
+    std::vector<float> interleaved{};
+};
+
 enum class RenderFallbackPolicy { HardwareThenSoftware, SoftwareOnly };
 
 class RenderPreset final {
@@ -147,6 +162,9 @@ public:
 
     [[nodiscard]] static core::Result<RenderPreset> h2641080p30();
     [[nodiscard]] static core::Result<RenderPreset> h2642160p30();
+    // Vertical 9:16 (shorts) presets — portrait dimensions for a portrait project.
+    [[nodiscard]] static core::Result<RenderPreset> h2641080x1920p30();
+    [[nodiscard]] static core::Result<RenderPreset> h264720x1280p30();
 
     [[nodiscard]] const std::string& id() const noexcept { return id_; }
     [[nodiscard]] std::uint32_t width() const noexcept { return width_; }

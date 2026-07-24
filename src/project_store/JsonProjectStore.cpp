@@ -232,7 +232,8 @@ Result<ProjectManifest> fromJson(const nlohmann::json& json) {
 }  // namespace
 
 Result<ProjectManifest> JsonProjectStore::create(const fs::path& packageDirectory,
-                                                 const std::string& name) {
+                                                 const std::string& name,
+                                                 CanvasSettings canvas) {
     const fs::path manifestPath = packageDirectory / kManifestFileName;
 
     std::error_code ec;
@@ -252,7 +253,7 @@ Result<ProjectManifest> JsonProjectStore::create(const fs::path& packageDirector
         .name = name,
         .createdAt = now,
         .updatedAt = now,
-        .canvas = CanvasSettings{},
+        .canvas = canvas,
         .database = std::string{ProjectManifest::kDatabaseFileName},
         .directories = ProjectDirectories{},
         .requiredFeatures = {},

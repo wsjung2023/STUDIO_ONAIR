@@ -83,7 +83,7 @@ CREATE TABLE studio_state(
 CREATE TABLE recording_sources(
     session_id TEXT NOT NULL REFERENCES recording_sessions(session_id) ON DELETE CASCADE,
     source_id TEXT NOT NULL CHECK(length(source_id) > 0),
-    role TEXT NOT NULL CHECK(role IN ('screen','camera','microphone','system_audio')),
+    role TEXT NOT NULL CHECK(role IN ('screen','camera','avatar','microphone','system_audio')),
     PRIMARY KEY(session_id, source_id),
     UNIQUE(session_id, role)
 );

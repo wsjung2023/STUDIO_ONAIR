@@ -24,6 +24,17 @@ std::filesystem::path productionRegistryPath() {
 
 }  // namespace
 
+QUrl ProjectController::defaultProjectFolder() const {
+    // "<home>/Creator Studio Projects" -- a plain local folder. Downloads and
+    // Documents are frequently redirected into OneDrive, whose files-on-demand
+    // sync intermittently strips local write permission, so saving there fails
+    // at random. The home root is not redirected.
+    QDir home{QDir::homePath()};
+    const QString folder = QStringLiteral("Creator Studio Projects");
+    home.mkpath(folder);
+    return QUrl::fromLocalFile(home.filePath(folder));
+}
+
 ProjectController::ProjectController(QObject* parent)
     : ProjectController(std::make_unique<project_store::ProjectPackageStore>(),
                         productionRegistryPath(), true, parent) {}
@@ -142,7 +153,8 @@ std::optional<std::filesystem::path> ProjectController::localPath(const QUrl& ur
     return pathFromQString(url.toLocalFile());
 }
 
-void ProjectController::createProject(const QUrl& packageUrl, const QString& displayName) {
+void ProjectController::createProject(const QUrl& packageUrl,
+                                      const QString& displayName, bool portrait) {
     if (rejectIfBusy()) return;
     auto path = localPath(packageUrl);
     if (!path.has_value()) return;
@@ -153,11 +165,19 @@ void ProjectController::createProject(const QUrl& packageUrl, const QString& dis
     setBusy(true);
     setStatus(QString{});
     const std::string name = displayName.toStdString();
-    QMetaObject::invokeMethod(worker_,
-                              [worker = worker_, path = std::move(*path), name] {
-                                  worker->createProject(path, name);
-                              },
-                              Qt::QueuedConnection);
+    // 16:9 landscape by default; 9:16 portrait for shorts. Canvas dims are the
+    // only difference and drive editor/MLT/export aspect downstream.
+    constexpr std::int32_t kLandscapeW = 1920, kLandscapeH = 1080;
+    constexpr std::int32_t kPortraitW = 1080, kPortraitH = 1920;
+    domain::CanvasSettings canvas{};
+    canvas.width = portrait ? kPortraitW : kLandscapeW;
+    canvas.height = portrait ? kPortraitH : kLandscapeH;
+    QMetaObject::invokeMethod(
+        worker_,
+        [worker = worker_, path = std::move(*path), name, canvas] {
+            worker->createProject(path, name, canvas);
+        },
+        Qt::QueuedConnection);
 }
 
 void ProjectController::openProject(const QUrl& packageUrl) {

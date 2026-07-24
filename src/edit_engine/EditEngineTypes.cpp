@@ -46,7 +46,10 @@ bool isMp4Extension(const std::filesystem::path& path) {
                    [](unsigned char value) {
                        return static_cast<char>(std::tolower(value));
                    });
-    return extension == ".mp4";
+    // Accept Matroska (.mkv) in addition to .mp4: the audio-safe export path
+    // writes an .mkv (aac_mf muxes cleanly there) and it is remuxed to the
+    // requested container afterwards.
+    return extension == ".mp4" || extension == ".mkv";
 }
 
 bool isDevicePath(const std::filesystem::path& path) {
@@ -268,6 +271,21 @@ Result<RenderPreset> RenderPreset::h2642160p30() {
     if (!frameRate.hasValue()) return frameRate.error();
     return create("h264-2160p30", 3840, 2160, frameRate.value(), 45'000'000,
                   256'000, RenderFallbackPolicy::HardwareThenSoftware);
+}
+
+Result<RenderPreset> RenderPreset::h2641080x1920p30() {
+    auto frameRate = core::FrameRate::create(30, 1);
+    if (!frameRate.hasValue()) return frameRate.error();
+    return create("h264-1080x1920p30", 1080, 1920, frameRate.value(),
+                  12'000'000, 192'000,
+                  RenderFallbackPolicy::HardwareThenSoftware);
+}
+
+Result<RenderPreset> RenderPreset::h264720x1280p30() {
+    auto frameRate = core::FrameRate::create(30, 1);
+    if (!frameRate.hasValue()) return frameRate.error();
+    return create("h264-720x1280p30", 720, 1280, frameRate.value(), 8'000'000,
+                  192'000, RenderFallbackPolicy::HardwareThenSoftware);
 }
 
 Result<RenderRequest> RenderRequest::create(

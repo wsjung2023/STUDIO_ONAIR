@@ -144,9 +144,10 @@ struct BindingFixture final {
                                         "injected reconciliation failure"});
                 }
             },
-            .open = [this](QUrl,
+            .open = [this](QUrl openUrl,
                            StudioRecordingBinding::Completion completion) {
                 order.push_back("studio reopen");
+                lastOpenUrl = std::move(openUrl);
                 if (openSucceeds) {
                     completion(creator::core::ok());
                 } else {
@@ -172,6 +173,7 @@ struct BindingFixture final {
     bool reconcileSucceeds{true};
     bool deferReconciliation{false};
     bool openSucceeds{true};
+    QUrl lastOpenUrl;
     bool deferPreparation{false};
     std::optional<StudioRecordingBinding::Completion> pendingPreparation;
     std::optional<StudioRecordingBinding::Completion> pendingReconciliation;
@@ -262,6 +264,26 @@ TEST(StudioRecordingBindingTest,
     EXPECT_EQ(std::ranges::count(fixture.order, "studio prepare"), 1);
     fixture.now = TimestampNs{std::chrono::seconds{22}};
     fixture.recording->stopRecording();
+}
+
+TEST(StudioRecordingBindingTest,
+     OpenProjectForwardsTheExactLocalUrlToTheWorkflow) {
+    // Regression: openProject must forward the caller's URL intact. A prior
+    // implementation move-captured the URL into the completion lambda inside
+    // the same `workflow_.open(url, lambda)` call; with unspecified argument
+    // evaluation order the URL argument could be emptied before it was passed,
+    // so the workflow rejected the take with "URL must be a local path".
+    BindingFixture fixture;
+    const QUrl url =
+        QUrl::fromLocalFile(QStringLiteral("D:/some/where/project.cstudio"));
+
+    fixture.binding->openProject(url);
+
+    EXPECT_EQ(std::ranges::count(fixture.order, "studio reopen"), 1);
+    EXPECT_TRUE(fixture.lastOpenUrl.isLocalFile());
+    EXPECT_FALSE(fixture.lastOpenUrl.toLocalFile().isEmpty());
+    EXPECT_EQ(fixture.lastOpenUrl, url);
+    EXPECT_EQ(std::ranges::count(fixture.order, "editor reopen"), 1);
 }
 
 TEST(StudioRecordingBindingTest,

@@ -31,12 +31,32 @@ another agent actively edits the export/compositor code — no edits to
   target. Cross-cutting invariants (project timebase, loudness reaches target,
   schema-valid artifacts) asserted.
 
-## Deferred / coordinated
+## Update (2026-07-24): export two-pass wiring landed
+The deferred export wiring is now implemented, user-controlled and off by default:
+- `ExportLoudnessAnalyzer::decide(measuredLufs, truePeakDbtp)` was factored out of
+  `analyze` so the exporter measures by STREAMING the program through a
+  `LoudnessMeter` (no whole-program buffer) and gets the identical decision.
+- `MltEditEngine::renderFrozen` runs pass 1 (an audio-only sweep of the mixed 48 kHz
+  program — `mlt_frame_get_audio` per frame, no video decode) to measure, then
+  rebuilds the graph so `build()` attaches a `GainProcessor(gainDb)` + true-peak
+  `LimiterProcessor` (via the existing creator-filter hook, before the sanitize net).
+  Gated on `MltEditEngineConfig::exportLoudness` (empty ⇒ untouched, historical
+  behavior).
+- `ProjectExportEngine` takes an `ExportLoudnessSettingProvider` read once per render;
+  `main.cpp` wires it to the `export/loudnessNormalization` QSettings key, and
+  `ExportController` exposes a `loudnessNormalization` toggle (ExportPage.qml).
+- Verified end-to-end (BS.1770-4): a −27.3 LUFS program exported OFF stays −27.3;
+  exported ON lands at −14.13 LUFS with true peak −1.04 dBFS (the −1 dBTP ceiling).
+  Unit: `ExportLoudnessAnalysisTest.DecideMatchesAnalyzeForSameMeasurement` +
+  `DecideGuardsNoMeasurementAndFloor`.
+
+## Originally deferred / coordinated
 - **Export two-pass wiring**: the single insertion in `ProjectExportEngine` /
   `MltEditEngine` render (Pass 1 `ExportLoudnessAnalyzer::analyze` on the mixed 48 kHz
   program; Pass 2 apply `gainDb` via `GainProcessor` + true-peak `LimiterProcessor`
   at the ceiling while writing the consumer). Call site documented in
   `ExportLoudnessAnalysis.h`. Left to the export-file owner to avoid a live collision.
+  (Done — see the Update above.)
 - **Physical R2-07 gate**: the real 30-minute capture → edit → export → A/V + loudness
   acceptance (enabled presets + real machine) — out of scope for the automated test.
 - `cs_cut_suggest` is documented (not asserted) in the acceptance test until it lands

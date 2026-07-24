@@ -8,6 +8,7 @@
 #include <QVariantMap>
 
 #include <algorithm>
+#include <cstdio>
 #include <utility>
 
 namespace creator::app {
@@ -318,9 +319,16 @@ void DeviceCaptureController::setMicrophoneEnabled(bool enabled) {
 }
 
 void DeviceCaptureController::setSystemAudioEnabled(bool enabled) {
-    if (enabled) startSystemAudio();
-    else stopSlot(SlotKind::SystemAudio, DeviceCaptureState::Ready,
-                  tr("System audio stopped"));
+    std::fprintf(stderr, "[sysaudio-ctl] setSystemAudioEnabled(%d) source=%d\n",
+                 enabled ? 1 : 0, systemAudioSource_ ? 1 : 0);
+    if (enabled) {
+        // A fresh user-initiated enable earns a fresh auto-restart budget.
+        systemAudioRestartAttempts_ = 0;
+        startSystemAudio();
+    } else {
+        stopSlot(SlotKind::SystemAudio, DeviceCaptureState::Ready,
+                 tr("System audio stopped"));
+    }
 }
 
 void DeviceCaptureController::startCamera() {
@@ -428,6 +436,8 @@ void DeviceCaptureController::startSystemAudio() {
     systemAudioFanout_->setSecondary(systemAudioRecordingSink_);
     auto created = backend_->createSystemAudio(systemAudioFanout_);
     if (!created.hasValue()) {
+        std::fprintf(stderr, "[sysaudio-ctl] create FAILED: %s\n",
+                     created.error().message().c_str());
         systemAudioFanout_.reset();
         systemAudioMailbox_.reset();
         systemAudioState_ = DeviceCaptureState::Error;
@@ -438,6 +448,8 @@ void DeviceCaptureController::startSystemAudio() {
     systemAudioSource_ = std::move(created).value();
     auto started = systemAudioSource_->start({});
     if (!started.hasValue()) {
+        std::fprintf(stderr, "[sysaudio-ctl] start FAILED: %s\n",
+                     started.error().message().c_str());
         const auto message = fromUtf8(started.error().message());
         static_cast<void>(systemAudioSource_->stop());
         systemAudioSource_.reset();
@@ -627,6 +639,31 @@ void DeviceCaptureController::terminateSlot(SlotKind kind, core::AppError error)
     } else {
         systemAudioState_ = DeviceCaptureState::Error;
         systemAudioStatus_ = message;
+        // The loopback endpoint resets whenever the display/audio device
+        // reconfigures (fullscreen video, HDMI mode change, default-device
+        // switch). Without recovery one transient error silently kills PC-sound
+        // capture for the rest of the session -- recordings then have no system
+        // audio. Auto-restart with a bounded retry budget; the surviving
+        // recording-sink member re-attaches on restart, so capture resumes even
+        // mid-recording. The error stays visible in the status (CLAUDE.md 9).
+        if (systemAudioRestartAttempts_ < kSystemAudioRestartLimit) {
+            ++systemAudioRestartAttempts_;
+            std::fprintf(stderr,
+                         "[sysaudio-ctl] capture error -> auto-restart %d/%d: %s\n",
+                         systemAudioRestartAttempts_, kSystemAudioRestartLimit,
+                         error.message().c_str());
+            systemAudioStatus_ = message + tr(" (reconnecting…)");
+            QTimer::singleShot(1000, this, [this] {
+                if (!systemAudioSource_ &&
+                    systemAudioState_ == DeviceCaptureState::Error) {
+                    startSystemAudio();
+                }
+            });
+        } else {
+            std::fprintf(stderr,
+                         "[sysaudio-ctl] capture error, retry budget exhausted: %s\n",
+                         error.message().c_str());
+        }
     }
     emit stateChanged();
 }

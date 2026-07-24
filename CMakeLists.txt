@@ -76,7 +76,7 @@ if(CS_ENABLE_WHISPER)
     find_package(whisper CONFIG REQUIRED)
 endif()
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Test)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Multimedia Test LinguistTools)
 qt_standard_project_setup(REQUIRES 6.8)
 
 include(FetchContent)
@@ -222,11 +222,19 @@ qt_add_executable(creator_studio
 set_source_files_properties(qml/EditorPage.qml PROPERTIES
     QT_QML_SKIP_CACHEGEN TRUE
 )
+# StudioPage's rich, dynamic composition bindings trip the same Qt 6.8.3
+# unreachable-code path inside qjsengine.h that fails the MSVC /WX gate during
+# qmlcachegen. Skip AOT cachegen for this page (JIT at runtime); every other
+# page keeps native AOT compilation.
+set_source_files_properties(qml/StudioPage.qml PROPERTIES
+    QT_QML_SKIP_CACHEGEN TRUE
+)
 
 qt_add_qml_module(creator_studio
     URI CreatorStudio
     VERSION 1.0
     QML_FILES
+        qml/Theme.qml
         qml/Main.qml
         qml/HomePage.qml
         qml/RecoveryPage.qml
@@ -234,6 +242,26 @@ qt_add_qml_module(creator_studio
         qml/EditorPage.qml
         qml/ExportPage.qml
         qml/TestPattern.qml
+)
+
+# Bundle Pretendard (OFL) under an explicit /fonts prefix so src/main.cpp can
+# load the weights from :/fonts/... at startup.
+qt_add_resources(creator_studio "creator_studio_fonts"
+    PREFIX "/fonts"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts"
+    FILES
+        resources/fonts/Pretendard-Regular.otf
+        resources/fonts/Pretendard-Medium.otf
+        resources/fonts/Pretendard-SemiBold.otf
+        resources/fonts/Pretendard-Bold.otf
+)
+
+# Korean UI translation. lrelease compiles the .ts to a .qm which is embedded at
+# :/i18n/creator_studio_ko.qm and installed at startup. Regenerate the source
+# strings with the generated `update_translations` target after editing qsTr().
+qt_add_translations(creator_studio
+    TS_FILES translations/creator_studio_ko.ts
+    RESOURCE_PREFIX "/i18n"
 )
 
 target_link_libraries(creator_studio
@@ -313,6 +341,10 @@ if(CS_ENABLE_MLT)
         message(FATAL_ERROR
             "Audited MLT application staging is currently implemented for Windows")
     endif()
+endif()
+
+if(WIN32)
+    target_link_libraries(creator_studio PRIVATE cs_capture_windows)
 endif()
 
 if(APPLE)

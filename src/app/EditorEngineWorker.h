@@ -4,10 +4,12 @@
 #include "edit_engine/EditEngineTypes.h"
 #include "edit_engine/IEditEngine.h"
 
+#include <QByteArray>
 #include <QObject>
 #include <QImage>
 #include <QString>
 
+#include <cstdint>
 #include <memory>
 
 namespace creator::app {
@@ -19,6 +21,7 @@ enum class EditorEngineOperation {
     Pause,
     Seek,
     Frame,
+    Audio,
 };
 
 class EditorEngineWorker final : public QObject {
@@ -37,6 +40,9 @@ public:
               core::TimestampNs position);
     void requestFrame(quint64 generation, quint64 commandId,
                       core::TimestampNs position);
+    void requestAudio(quint64 generation, quint64 commandId,
+                      core::TimestampNs position, quint32 frequency,
+                      quint32 channels, quint32 samples);
 
 signals:
     void completed(quint64 generation, quint64 commandId, int operation,
@@ -44,6 +50,9 @@ signals:
     void frameCompleted(quint64 generation, quint64 commandId, bool success,
                         QString errorMessage, qlonglong revision,
                         qlonglong positionNs, QImage image);
+    void audioCompleted(quint64 generation, quint64 commandId, bool success,
+                        QString errorMessage, qlonglong positionNs,
+                        QByteArray pcm);
 
 private:
     void publish(quint64 generation, quint64 commandId,

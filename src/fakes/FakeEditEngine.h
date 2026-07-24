@@ -21,6 +21,7 @@ enum class FakeEditOperation : std::size_t {
     Pause,
     Seek,
     RequestFrame,
+    RequestMixedAudio,
     Render,
     Count,
 };
@@ -44,6 +45,9 @@ public:
     [[nodiscard]] core::Result<void> seek(core::TimestampNs position) override;
     [[nodiscard]] core::Result<edit_engine::PreviewFrame> requestFrame(
         core::TimestampNs position) override;
+    [[nodiscard]] core::Result<edit_engine::PreviewAudioBlock> requestMixedAudio(
+        core::TimestampNs position, std::uint32_t frequency,
+        std::uint32_t channels, std::uint32_t samples) override;
     [[nodiscard]] core::Result<std::unique_ptr<edit_engine::IRenderJob>> render(
         const edit_engine::RenderRequest& request) override;
 

@@ -1,8 +1,10 @@
 #include "app/RecordingImportPlanner.h"
 
+#include "app/VerticalLayout.h"
 #include "core/AppError.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -189,13 +191,41 @@ const domain::StudioScene* findScene(
 }
 
 SourceState stateInScene(const domain::StudioScene& scene,
-                         const domain::SourceId& sourceId) {
-    const auto found = std::find_if(
+                         const domain::SourceId& sourceId,
+                         StudioSourceRole role) {
+    // A recorded scene snapshot keys its sources by the logical role id (e.g.
+    // "screen"), which for a real capture differs from the live device id (e.g.
+    // "windows/display:824773883") the recording segments carry. Match by exact
+    // source id first (covers tests/fixtures that reuse the logical id), then
+    // fall back to matching by role so real device recordings resolve their
+    // scene visibility/transform instead of defaulting to disabled.
+    auto found = std::find_if(
         scene.sources().begin(), scene.sources().end(),
         [&sourceId](const domain::SceneSource& source) {
             return source.id() == sourceId;
         });
-    if (found == scene.sources().end()) return {};
+    if (found == scene.sources().end()) {
+        found = std::find_if(
+            scene.sources().begin(), scene.sources().end(),
+            [role](const domain::SceneSource& source) {
+                return source.role() == role;
+            });
+    }
+    if (found == scene.sources().end()) {
+        // Scenes do not enumerate the avatar (the scene_sources role set excludes
+        // it), yet the recorded avatar is a transparent full-frame image with the
+        // character baked into a corner. Composite it full-frame above the other
+        // video (high z-order) so the exported program actually shows the avatar.
+        if (role == StudioSourceRole::Avatar) {
+            auto transform = domain::VisualTransform::create(
+                0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 20);
+            if (transform.hasValue()) {
+                return SourceState{.enabled = true,
+                                   .transform = std::move(transform).value()};
+            }
+        }
+        return {};
+    }
     return SourceState{.enabled = found->enabled(),
                        .transform = found->transform()};
 }
@@ -218,15 +248,24 @@ const project_store::RecordingSceneEvent* activeEventAt(
 Result<SourceState> stateAt(
     const RecordingImportRequest& request,
     const std::vector<project_store::RecordingSceneEvent>& events,
-    const domain::SourceId& sourceId, TimestampNs position,
-    bool includeEqual = true) {
+    const domain::SourceId& sourceId, StudioSourceRole role,
+    TimestampNs position, bool includeEqual = true) {
     const auto* event = activeEventAt(events, position, includeEqual);
     if (event == nullptr) {
         return invalid("recording has no active scene at segment position");
     }
     const auto* scene = findScene(request.scenes, event->sceneId);
     if (scene == nullptr) return notFound("recording scene snapshot was not found");
-    return stateInScene(*scene, sourceId);
+    SourceState state = stateInScene(*scene, sourceId, role);
+    // On a portrait (shorts) canvas, override the scene's landscape transform
+    // with the role-based default vertical layout (screen top, camera/avatar
+    // bottom). Landscape canvases return nullopt and keep the scene transform.
+    if (auto vertical = verticalDefaultTransform(role, request.canvasWidth,
+                                                 request.canvasHeight);
+        vertical.has_value()) {
+        state.transform = std::move(vertical);
+    }
+    return state;
 }
 
 std::string idPrefix(const domain::SessionId& sessionId) {
@@ -319,7 +358,20 @@ Result<domain::MediaAsset> makeAsset(
     }
     auto end = segmentEnd(segment);
     if (!end.hasValue()) return end.error();
-    if (probe.duration < segment.duration) {
+    // A finalized/concatenated container quantizes its reported duration to
+    // codec frame boundaries, so an intact asset can measure a sub-frame shorter
+    // than the summed segment metadata even though no media is missing. Tolerate
+    // less than one audio frame (with a small container-rounding floor); a
+    // truncated or replaced file is short by whole frames/seconds and is still
+    // rejected here (and its media identity lease fails independently).
+    core::DurationNs shortfallTolerance =
+        std::chrono::duration_cast<core::DurationNs>(std::chrono::milliseconds{1});
+    if (probe.audio.has_value() && probe.audio->sampleRate > 0) {
+        const core::DurationNs audioFrame{1'000'000'000LL * 1024LL /
+                                          probe.audio->sampleRate};
+        shortfallTolerance = std::max(shortfallTolerance, audioFrame);
+    }
+    if (probe.duration + shortfallTolerance < segment.duration) {
         return invalid("media probe duration is shorter than its segment: " +
                        segment.relativePath + " reports " +
                        std::to_string(probe.duration.count()) + " ns for " +
@@ -368,9 +420,9 @@ Result<std::vector<TimestampNs>> splitBoundaries(
             continue;
         }
         if (!videoRole(role)) {
-            auto before = stateAt(request, events, segment.sourceId,
+            auto before = stateAt(request, events, segment.sourceId, role,
                                   event.position, false);
-            auto after = stateAt(request, events, segment.sourceId,
+            auto after = stateAt(request, events, segment.sourceId, role,
                                  event.position, true);
             if (!before.hasValue()) return before.error();
             if (!after.hasValue()) return after.error();
@@ -514,12 +566,17 @@ Result<RecordingImportPlan> planRecordingImport(
         -> Result<void> {
         auto asset = makeAsset(request, unit, role, probe);
         if (!asset.hasValue()) return asset.error();
+        // The asset can be a codec-frame shorter than the summed segment
+        // metadata (see makeAsset's shortfall tolerance). Clamp the unit's usable
+        // span to what the media actually contains so no clip source range runs
+        // past the asset (Timeline rejects "clip range exceeds its asset").
+        unit.duration = std::min(unit.duration, asset.value().duration());
         auto boundaries = splitBoundaries(request, events.value(), unit, role);
         if (!boundaries.hasValue()) return boundaries.error();
         for (std::size_t index = 0; index + 1 < boundaries.value().size(); ++index) {
             const auto pieceStart = boundaries.value()[index];
             const auto duration = boundaries.value()[index + 1] - pieceStart;
-            auto state = stateAt(request, events.value(), unit.sourceId,
+            auto state = stateAt(request, events.value(), unit.sourceId, role,
                                  pieceStart);
             if (!state.hasValue()) return state.error();
             auto timelineStart = addTime(appendBase, pieceStart.time_since_epoch());

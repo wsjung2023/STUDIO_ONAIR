@@ -144,13 +144,16 @@ void StudioRecordingBinding::openProject(QUrl projectUrl) {
     if (!workflow_.open) return;
     const auto generation = ++openGeneration_;
     QPointer<StudioRecordingBinding> self{this};
+    // Capture the URL by copy rather than moving out of `projectUrl` in the
+    // same call: the argument order of `workflow_.open(projectUrl, lambda)` is
+    // unspecified, so a move-capture could empty `projectUrl` before it is
+    // forwarded as the first argument, sending a blank URL to the workflow.
     workflow_.open(
         projectUrl,
-        [self, generation, projectUrl = std::move(projectUrl)](
-            core::Result<void> result) mutable {
+        [self, generation, projectUrl](core::Result<void> result) {
             if (!self || generation != self->openGeneration_ ||
                 !result.hasValue()) return;
-            emit self->timelineReconciled(std::move(projectUrl));
+            emit self->timelineReconciled(projectUrl);
         });
 }
 

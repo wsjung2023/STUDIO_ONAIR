@@ -75,6 +75,11 @@ public:
         core::TimestampNs) override {
         return core::AppError{core::ErrorCode::InvalidState, "unused"};
     }
+    core::Result<edit_engine::PreviewAudioBlock> requestMixedAudio(
+        core::TimestampNs, std::uint32_t, std::uint32_t,
+        std::uint32_t) override {
+        return core::AppError{core::ErrorCode::InvalidState, "unused"};
+    }
     core::Result<std::unique_ptr<edit_engine::IRenderJob>> render(
         const edit_engine::RenderRequest& request) override {
         state_->renderThread = QThread::currentThreadId();

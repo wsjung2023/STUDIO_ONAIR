@@ -1,9 +1,15 @@
 #include "mlt_adapter/MltEditEngine.h"
 
 #include "core/AppError.h"
+#include "core/Timebase.h"
 #include "core/Uuid.h"
 #include "audio_dsp/AudioBuffer.h"
 #include "audio_dsp/AudioFormat.h"
+#include "audio_dsp/AudioProcessingChain.h"
+#include "audio_dsp/GainProcessor.h"
+#include "audio_dsp/LimiterProcessor.h"
+#include "audio_dsp/LoudnessMeter.h"
+#include "ffmpeg_adapter/FfmpegContainerRemux.h"
 #include "ffmpeg_adapter/FfmpegMediaProbe.h"
 #include "mlt_adapter/ExportEncoderProbe.h"
 #include "mlt_adapter/FrameEffects.h"
@@ -123,6 +129,22 @@ bool requiresPackedAlphaExtraction(const MltVisualBranch& branch) {
                        return static_cast<char>(std::tolower(character));
                    });
     return extension == ".png";
+}
+
+// True when the decoded source carries a real alpha channel (e.g. the avatar
+// overlay recorded as FFV1 BGRA). Such branches must run through the packed
+// alpha extraction filter so their transparent background composites over the
+// screen instead of appearing as an opaque black box.
+bool sourceHasAlphaChannel(Mlt::Producer& producer) {
+    const char* pix = producer.get("meta.media.0.codec.pix_fmt");
+    if (pix == nullptr) return false;
+    const std::string fmt(pix);
+    return fmt.find("rgba") != std::string::npos ||
+           fmt.find("bgra") != std::string::npos ||
+           fmt.find("argb") != std::string::npos ||
+           fmt.find("abgr") != std::string::npos ||
+           fmt.find("yuva") != std::string::npos ||
+           fmt.find("gbrap") != std::string::npos;
 }
 
 core::DurationNs renderDuration(
@@ -347,6 +369,8 @@ struct VisualFilterContext final : CreatorFilterContext {
     std::atomic<int> lastErrorStage{};
 };
 
+bool isIdentityTransform(const domain::VisualTransform& transform) noexcept;
+
 struct CursorVisualFilterContext final : CreatorFilterContext {
     CursorVisualFilterContext(std::shared_ptr<const CursorVisualEffectsPlan> value,
                               std::uint32_t width, std::uint32_t height,
@@ -378,6 +402,12 @@ struct AudioProcessingFilterContext final : CreatorFilterContext {
     std::atomic<int> lastErrorStage{};
 };
 
+// Stateless context for the final audio sanitize filter (NaN/Inf -> silence,
+// clamp to [-1, 1]); kept as its own type so closeCreatorFilter can delete it.
+struct SanitizeAudioFilterContext final : CreatorFilterContext {
+    std::atomic<int> lastErrorStage{};
+};
+
 void closeCreatorFilter(mlt_filter filter) {
     delete static_cast<CreatorFilterContext*>(filter->child);
     filter->child = nullptr;
@@ -390,6 +420,7 @@ mlt_frame processVisualFrame(mlt_filter filter, mlt_frame frame);
 mlt_frame processCursorVisualFrame(mlt_filter filter, mlt_frame frame);
 mlt_frame processAudioFrame(mlt_filter filter, mlt_frame frame);
 mlt_frame processAudioProcessingFrame(mlt_filter filter, mlt_frame frame);
+mlt_frame processSanitizeAudioFrame(mlt_filter filter, mlt_frame frame);
 
 core::Result<std::unique_ptr<Mlt::Filter>> makeCreatorFilter(
     std::unique_ptr<CreatorFilterContext> context,
@@ -436,6 +467,50 @@ int getTransformedImage(mlt_frame frame, std::uint8_t** image,
             *width > static_cast<int>(kMaximumPreviewDimension) ||
             *height > static_cast<int>(kMaximumPreviewDimension)) {
             return fail(2);
+        }
+        // Fast path: with no geometric transform (e.g. the alpha avatar overlay
+        // composited at native frame), skip the full-canvas software rasterizer
+        // and just split the source RGBA into the RGB image + alpha plane the
+        // composite transition needs. The transition scales it onto the canvas.
+        // This keeps alpha compositing real-time instead of per-frame full-frame
+        // CPU work, which otherwise overruns the export timeout.
+        if (isIdentityTransform(context->transform)) {
+            const auto srcPixels = static_cast<std::size_t>(*width) *
+                                   static_cast<std::size_t>(*height);
+            const auto rgbBytes = srcPixels * 3U;
+            auto* rgb = static_cast<std::uint8_t*>(
+                mlt_pool_alloc(static_cast<int>(rgbBytes)));
+            auto* alphaPlane = static_cast<std::uint8_t*>(
+                mlt_pool_alloc(static_cast<int>(srcPixels)));
+            if (!rgb || !alphaPlane) {
+                if (rgb) mlt_pool_release(rgb);
+                if (alphaPlane) mlt_pool_release(alphaPlane);
+                return fail(6);
+            }
+            const std::uint8_t* src = *image;
+            for (std::size_t pixel = 0; pixel < srcPixels; ++pixel) {
+                const auto s = pixel * 4U;
+                const auto d = pixel * 3U;
+                alphaPlane[pixel] = src[s + 3U];
+                rgb[d] = src[s];
+                rgb[d + 1U] = src[s + 1U];
+                rgb[d + 2U] = src[s + 2U];
+            }
+            if (mlt_frame_set_image(frame, rgb, static_cast<int>(rgbBytes),
+                                    mlt_pool_release) != 0) {
+                mlt_pool_release(rgb);
+                mlt_pool_release(alphaPlane);
+                return fail(7);
+            }
+            if (mlt_frame_set_alpha(frame, alphaPlane,
+                                    static_cast<int>(srcPixels),
+                                    mlt_pool_release) != 0) {
+                mlt_pool_release(alphaPlane);
+                return fail(8);
+            }
+            *image = rgb;
+            *format = mlt_image_rgb;
+            return 0;
         }
         const auto pixelCount = static_cast<std::uint64_t>(*width) *
                                 static_cast<std::uint64_t>(*height);
@@ -750,6 +825,49 @@ mlt_frame processAudioProcessingFrame(mlt_filter filter, mlt_frame frame) {
     return frame;
 }
 
+// Replaces non-finite (NaN/+-Inf) samples in the fully-mixed program with
+// silence and clamps to the valid [-1, 1] float range, right before the AAC
+// encoder. FFmpeg's aac encoder aborts the whole render on non-finite input
+// ("Input contains (near) NaN/+-Inf"); real recordings can produce a few such
+// samples (e.g. at segment/concat boundaries), so this guarantees an encodable
+// program without discarding otherwise-valid audio.
+int getSanitizedAudio(mlt_frame frame, void** buffer, mlt_audio_format* format,
+                      int* frequency, int* channels, int* samples) noexcept {
+    static_cast<void>(mlt_frame_pop_audio(frame));  // discard the filter handle
+    if (!buffer || !format || !frequency || !channels || !samples) return 1;
+    try {
+        *format = mlt_audio_f32le;
+        const int result = mlt_frame_get_audio(frame, buffer, format, frequency,
+                                               channels, samples);
+        if (result != 0 || !*buffer || *format != mlt_audio_f32le ||
+            *frequency <= 0 || *channels <= 0 || *samples < 0) {
+            return 1;
+        }
+        const auto count = static_cast<std::size_t>(*samples) *
+                           static_cast<std::size_t>(*channels);
+        auto* data = static_cast<float*>(*buffer);
+        for (std::size_t index = 0; index < count; ++index) {
+            const float value = data[index];
+            if (!std::isfinite(value)) {
+                data[index] = 0.0F;
+            } else if (value > 1.0F) {
+                data[index] = 1.0F;
+            } else if (value < -1.0F) {
+                data[index] = -1.0F;
+            }
+        }
+        return 0;
+    } catch (...) {
+        return 1;
+    }
+}
+
+mlt_frame processSanitizeAudioFrame(mlt_filter filter, mlt_frame frame) {
+    mlt_frame_push_audio(frame, filter);
+    mlt_frame_push_audio(frame, reinterpret_cast<void*>(getSanitizedAudio));
+    return frame;
+}
+
 bool isIdentityTransform(const domain::VisualTransform& transform) noexcept {
     return transform.x() == 0.0 && transform.y() == 0.0 &&
            transform.width() == 1.0 && transform.height() == 1.0 &&
@@ -902,6 +1020,22 @@ class MltEditEngine::Impl final {
                             "MLT could not attach the audio format converter");
                     }
                     graph->filters.push_back(std::move(converter));
+                    // Clean NaN/+-Inf out of THIS source's audio right after
+                    // decode/convert (attached to the producer, the same proven
+                    // attachment point as the envelope filter). A few non-finite
+                    // samples from a decoder/concat boundary would otherwise make
+                    // the AAC encoder abort the whole export.
+                    {
+                        auto sanitize = makeCreatorFilter(
+                            std::make_unique<SanitizeAudioFilterContext>(),
+                            processSanitizeAudioFrame);
+                        if (!sanitize.hasValue()) return sanitize.error();
+                        if (producer->attach(*sanitize.value()) != 0) {
+                            return stateError(
+                                "MLT could not attach the audio sanitize filter");
+                        }
+                        graph->filters.push_back(std::move(sanitize).value());
+                    }
                     if (clip.audioEnvelope.has_value()) {
                         auto context = std::make_unique<AudioFilterContext>(
                             *clip.audioEnvelope, plan.frameRate,
@@ -992,6 +1126,12 @@ class MltEditEngine::Impl final {
 
         std::vector<int> visualTrackIndices;
         visualTrackIndices.reserve(plan.visualBranches.size());
+        // Parallel to visualTrackIndices: true where the branch is a transparent
+        // avatar overlay (alpha-carrying video). Those composite as a small,
+        // fully-visible corner PiP rather than the source frame's arbitrary
+        // native placement.
+        std::vector<char> visualTrackIsAvatar;
+        visualTrackIsAvatar.reserve(plan.visualBranches.size());
         for (const auto& branch : plan.visualBranches) {
             auto playlist = std::make_unique<Mlt::Playlist>(*graph->profile);
             playlist->set("hide", 2);
@@ -999,6 +1139,7 @@ class MltEditEngine::Impl final {
             const int timelineIn = static_cast<int>(branch.timelineIn);
             const int length = static_cast<int>(
                 branch.timelineOut - branch.timelineIn + 1);
+            bool avatarOverlay = false;
             if (timelineIn > 0) playlist->blank(timelineIn - 1);
             if (!branch.enabled || !branch.available) {
                 playlist->blank(length - 1);
@@ -1022,8 +1163,31 @@ class MltEditEngine::Impl final {
                 ++graph->mediaProducerCount;
                 const bool transformed =
                     !isIdentityTransform(branch.transform);
+                const bool sourceAlpha = sourceHasAlphaChannel(*producer);
+                avatarOverlay = sourceAlpha;
                 const bool extractsPackedAlpha =
-                    requiresPackedAlphaExtraction(branch);
+                    requiresPackedAlphaExtraction(branch) || sourceAlpha;
+                // Raw "avformat" producers carry frames at their NATIVE size;
+                // only a consumer attaches MLT's normalisers. The preview path
+                // pulls frames without a consumer, so a 1920x1080 screen clip
+                // landed unscaled in the (smaller) preview profile and showed
+                // only its top-left corner. Attach the rescale normaliser to
+                // PLAIN branches only -- transformed/alpha branches size their
+                // frames themselves in the creator filter, and stacking rescale
+                // under that chain corrupts the image and can crash the export
+                // consumer.
+                if (!transformed && !extractsPackedAlpha) {
+                    auto rescale = std::make_unique<Mlt::Filter>(
+                        *graph->profile, "rescale");
+                    if (rescale->is_valid() &&
+                        producer->attach(*rescale) == 0) {
+                        graph->filters.push_back(std::move(rescale));
+                    } else {
+                        std::fprintf(stderr,
+                                     "[mlt] rescale normaliser unavailable; "
+                                     "preview may show unscaled frames\n");
+                    }
+                }
                 if (transformed || extractsPackedAlpha) {
                     auto converter = std::make_unique<Mlt::Filter>(
                         *graph->profile, "imageconvert");
@@ -1077,6 +1241,7 @@ class MltEditEngine::Impl final {
             }
             graph->playlists.push_back(std::move(playlist));
             visualTrackIndices.push_back(nativeTrackIndex);
+            visualTrackIsAvatar.push_back(avatarOverlay ? 1 : 0);
         }
 
         for (const auto& [track, nativeTrackIndex] : nativeAudioTracks) {
@@ -1099,7 +1264,9 @@ class MltEditEngine::Impl final {
                 graph->transitions.push_back(std::move(mix));
             }
         }
-        for (const int nativeTrackIndex : visualTrackIndices) {
+        for (std::size_t visualIndex = 0;
+             visualIndex < visualTrackIndices.size(); ++visualIndex) {
+            const int nativeTrackIndex = visualTrackIndices[visualIndex];
             auto composite = std::make_unique<Mlt::Transition>(
                 *graph->profile, "composite");
             if (!composite->is_valid()) {
@@ -1108,6 +1275,16 @@ class MltEditEngine::Impl final {
             composite->set("always_active", 1);
             composite->set("progressive", 1);
             composite->set("distort", 1);
+            if (visualIndex < visualTrackIsAvatar.size() &&
+                visualTrackIsAvatar[visualIndex] != 0) {
+                // Map the transparent avatar frame onto the FULL canvas. The
+                // character's position/scale are already baked into its own
+                // frame by the renderer (that is what the live Studio preview
+                // shows), so a 1:1 stretch (same 16:9 aspect) reproduces the
+                // live placement exactly. Offsetting it again here compounded
+                // the placement and pushed the character off the frame edge.
+                composite->set("geometry", "0%/0%:100%x100%");
+            }
             if (mlt_field_plant_transition(
                     mlt_tractor_field(graph->tractor->get_tractor()),
                     composite->get_transition(), backgroundTrackIndex,
@@ -1149,6 +1326,53 @@ class MltEditEngine::Impl final {
             graph->filters.push_back(std::move(creatorFilter).value());
             graph->audioProcessingFilterContexts.push_back(contextObserver);
         }
+        // Export loudness normalization, pass 2: apply the static gain that pass 1
+        // decided, then a true-peak limiter at the ceiling, over the fully-mixed
+        // 48 kHz program. Attached only on the export graph (the export path sets
+        // exportLoudnessDecision_ between its two passes) and only when the program
+        // was loud enough to normalize. Placed BEFORE the sanitize net below so any
+        // residual overshoot the limiter leaves is still clamped to [-1, 1].
+        if (exportLoudnessDecision_ && exportLoudnessDecision_->shouldNormalize) {
+            const auto loudnessFormat = audio_dsp::AudioFormat::create(48'000, 2);
+            if (!loudnessFormat.hasValue()) return loudnessFormat.error();
+            auto limiter = audio_dsp::LimiterProcessor::create(
+                audio_dsp::LimiterProcessor::Parameters{
+                    .ceilingDbtp = exportLoudnessDecision_->truePeakCeilingDbtp},
+                loudnessFormat.value());
+            if (!limiter.hasValue()) return limiter.error();
+            auto loudnessChain = std::make_shared<audio_dsp::AudioProcessingChain>();
+            loudnessChain
+                ->add(std::make_unique<audio_dsp::GainProcessor>(
+                    exportLoudnessDecision_->gainDb))
+                .add(std::make_unique<audio_dsp::LimiterProcessor>(
+                    std::move(limiter).value()));
+            auto context = std::make_unique<AudioProcessingFilterContext>(
+                std::move(loudnessChain));
+            auto* contextObserver = context.get();
+            auto creatorFilter = makeCreatorFilter(std::move(context),
+                                                   processAudioProcessingFrame);
+            if (!creatorFilter.hasValue()) return creatorFilter.error();
+            if (graph->tractor->attach(*creatorFilter.value()) != 0) {
+                return stateError(
+                    "MLT could not attach the export loudness normalization filter");
+            }
+            graph->filters.push_back(std::move(creatorFilter).value());
+            graph->audioProcessingFilterContexts.push_back(contextObserver);
+        }
+        // Final safety net over the fully-mixed program audio: strip NaN/+-Inf
+        // and clamp to [-1, 1] before the AAC encoder (which aborts the render
+        // on non-finite input). Attached last so it runs outermost, after any
+        // envelope/processing filters.
+        {
+            auto sanitizeFilter = makeCreatorFilter(
+                std::make_unique<SanitizeAudioFilterContext>(),
+                processSanitizeAudioFrame);
+            if (!sanitizeFilter.hasValue()) return sanitizeFilter.error();
+            if (graph->tractor->attach(*sanitizeFilter.value()) != 0) {
+                return stateError("MLT could not attach the audio sanitize filter");
+            }
+            graph->filters.push_back(std::move(sanitizeFilter).value());
+        }
         graph->tractor->refresh();
         // Playlist::append retains the producer service.  The extra owning
         // wrappers are only needed while the graph is assembled; keeping one
@@ -1178,6 +1402,10 @@ class MltEditEngine::Impl final {
     core::TimestampNs position_{};
     bool playing_{false};
     bool initialized_{false};
+    // Set by the export path between pass 1 (measure) and pass 2 (render) so the
+    // next build() attaches the loudness gain + true-peak limiter to the export
+    // graph. Empty for preview and for a no-op (silent/near-silent) program.
+    std::optional<audio_dsp::ExportLoudnessDecision> exportLoudnessDecision_;
 };
 
 MltEditEngine::MltEditEngine(MltEditEngineConfig config)
@@ -1481,6 +1709,25 @@ core::Result<std::vector<float>> MltEditEngine::requestMixedAudio(
     return converted;
 }
 
+core::Result<edit_engine::PreviewAudioBlock> MltEditEngine::requestMixedAudio(
+    core::TimestampNs position, std::uint32_t frequency, std::uint32_t channels,
+    std::uint32_t samples) {
+    constexpr auto kMaxInt =
+        static_cast<std::uint32_t>(std::numeric_limits<int>::max());
+    if (frequency > kMaxInt || channels > kMaxInt || samples > kMaxInt) {
+        return core::AppError{core::ErrorCode::InvalidArgument,
+                              "MLT audio request is outside supported limits"};
+    }
+    auto pcm = requestMixedAudio(position, static_cast<int>(frequency),
+                                 static_cast<int>(channels),
+                                 static_cast<int>(samples));
+    if (!pcm.hasValue()) return pcm.error();
+    return edit_engine::PreviewAudioBlock{.position = position,
+                                          .frequency = frequency,
+                                          .channels = channels,
+                                          .interleaved = std::move(pcm).value()};
+}
+
 core::Result<void> MltEditEngine::renderFrozen(
     const edit_engine::RenderRequest& request, std::stop_token stopToken,
     const std::function<bool(edit_engine::RenderJobState, double,
@@ -1514,9 +1761,75 @@ core::Result<void> MltEditEngine::renderFrozen(
         return stateError("independent export graph was not constructed");
     }
 
+    // Two-pass export loudness normalization (opt-in via config_.exportLoudness).
+    // Pass 1: stream the whole mixed 48 kHz program through a LoudnessMeter to
+    // measure integrated LUFS and decide the static gain. Only mlt_frame_get_audio
+    // is pulled per frame, so video is never decoded here — the extra pass costs
+    // an audio-only sweep, not a full second render. Pass 2: rebuild the graph so
+    // build() attaches the gain + true-peak limiter (see exportLoudnessDecision_),
+    // and the render starts from clean filter state.
+    if (impl_->config_.exportLoudness) {
+        auto analyzer = audio_dsp::ExportLoudnessAnalyzer::create(
+            *impl_->config_.exportLoudness);
+        if (!analyzer.hasValue()) return analyzer.error();
+        const auto meterFormat = audio_dsp::AudioFormat::create(48'000, 2);
+        if (!meterFormat.hasValue()) return meterFormat.error();
+        auto meter = audio_dsp::LoudnessMeter::create(meterFormat.value());
+        if (!meter.hasValue()) return meter.error();
+        const std::int64_t durationFrames = impl_->graph_->durationFrames;
+        const core::FrameRate frameRate = impl_->graph_->frameRate;
+        for (std::int64_t frameIndex = 0; frameIndex < durationFrames;
+             ++frameIndex) {
+            if (stopToken.stop_requested()) {
+                return stateError("export cancelled during loudness analysis");
+            }
+            auto pcm = requestMixedAudio(
+                core::frameToTimestamp(frameIndex, frameRate), 48'000, 2, 96'000);
+            if (!pcm.hasValue()) return pcm.error();
+            const auto& samples = pcm.value();
+            if (samples.empty()) continue;
+            audio_dsp::AudioBuffer view{const_cast<float*>(samples.data()),
+                                        samples.size() / 2, meterFormat.value()};
+            if (auto added = meter.value().addBlock(view); !added.hasValue()) {
+                return added.error();
+            }
+        }
+        const auto decision = analyzer.value().decide(
+            meter.value().integratedLufs(), meter.value().truePeakDbtp());
+        impl_->exportLoudnessDecision_ =
+            decision.shouldNormalize ? std::optional{decision} : std::nullopt;
+        // Pass 2: rebuild. build() consumes exportLoudnessDecision_ (attaching the
+        // gain+limiter, or nothing for a no-op decision) into a fresh graph.
+        auto reloaded = impl_->loadSnapshot(request.snapshot(),
+                                            request.preset().frameRate());
+        impl_->exportLoudnessDecision_.reset();  // consumed by build(); never leak
+        if (!reloaded.hasValue()) return reloaded;
+        if (!impl_->graph_ || !impl_->graph_->profile || !impl_->graph_->tractor) {
+            return stateError("independent export graph was not reconstructed");
+        }
+    }
+
+    // Always render to an audio-safe Matroska partial. The aac_mf audio encoder
+    // muxes cleanly into Matroska but not MP4 (the mp4 muxer rejects it for not
+    // exposing a frame_size), while FFmpeg's native "aac" encoder spuriously
+    // rejects the mixed program as "NaN/+-Inf". When the caller asks for .mp4,
+    // the already-encoded H.264/AAC streams are stream-copied into MP4 by a
+    // remux after rendering, so the final file keeps its audio without a lossy,
+    // failure-prone re-encode.
+    const char* const containerFormat = "matroska";
+    const auto lowerExtension = [](const std::filesystem::path& path) {
+        auto extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char value) {
+                           return static_cast<char>(std::tolower(value));
+                       });
+        return extension;
+    };
+    const bool destinationIsMatroska =
+        lowerExtension(request.destination()) == ".mkv";
     const auto partial = request.destination().parent_path() /
                          (".creator-studio-" + request.jobId().value() +
-                          ".partial.mp4");
+                          ".partial.mkv");
     PartialArtifact artifact{partial};
     const auto encodedPartial = utf8Path(partial);
     {
@@ -1528,7 +1841,7 @@ core::Result<void> MltEditEngine::renderFrozen(
         const auto& selected = encoder.value().selected;
         consumer.set("real_time", -1);
         consumer.set("terminate_on_pause", 1);
-        consumer.set("f", "mp4");
+        consumer.set("f", containerFormat);
         consumer.set("vcodec", selected.videoCodec.c_str());
         consumer.set("acodec", encoder.value().audioCodec.c_str());
         consumer.set("pix_fmt",
@@ -1546,7 +1859,8 @@ core::Result<void> MltEditEngine::renderFrozen(
         consumer.set("frame_rate_den",
                      static_cast<int>(request.preset().frameRate().denominator()));
         consumer.set("progressive", 1);
-        consumer.set("movflags", "+faststart");
+        // The partial is always Matroska here; +faststart is applied to the MP4
+        // by the post-render remux, not by this consumer.
         if (selected.videoCodec == "h264_mf") {
             consumer.set("hw_encoding",
                          selected.forceMediaFoundationHardware ? 1 : 0);
@@ -1667,10 +1981,25 @@ core::Result<void> MltEditEngine::renderFrozen(
     if (stopToken.stop_requested()) {
         return stateError("export cancelled at publication boundary");
     }
-    auto published = publishAtomically(partial, request.destination(),
+    if (destinationIsMatroska) {
+        auto published = publishAtomically(partial, request.destination(),
+                                           request.overwritePolicy());
+        if (!published.hasValue()) return published;
+        artifact.published();
+        return core::ok();
+    }
+    // Remux the audio-safe Matroska partial into the requested MP4 (stream copy,
+    // no re-encode), then atomically publish the MP4. The Matroska partial is
+    // deleted by `artifact` on scope exit (it is not marked published()).
+    const auto remuxTarget = partial.parent_path() /
+                             (partial.stem().string() + ".mp4");
+    PartialArtifact remuxArtifact{remuxTarget};
+    auto remuxed = ffmpeg_adapter::remuxToMp4(partial, remuxTarget);
+    if (!remuxed.hasValue()) return remuxed.error();
+    auto published = publishAtomically(remuxTarget, request.destination(),
                                        request.overwritePolicy());
     if (!published.hasValue()) return published;
-    artifact.published();
+    remuxArtifact.published();
     return core::ok();
 }
 
@@ -1681,7 +2010,7 @@ core::Result<std::unique_ptr<edit_engine::IRenderJob>> MltEditEngine::render(
     config.previewHeight = request.preset().height();
     const auto partial = request.destination().parent_path() /
                          (".creator-studio-" + request.jobId().value() +
-                          ".partial.mp4");
+                          ".partial.mkv");
     const auto duration = renderDuration(request.snapshot());
     if (config.renderLifecycle) {
         auto begun = config.renderLifecycle->begin(request, partial, duration);

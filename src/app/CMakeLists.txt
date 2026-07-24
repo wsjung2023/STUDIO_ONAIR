@@ -7,6 +7,8 @@
 add_library(cs_app STATIC
     RecordingImportPlanner.h
     RecordingImportPlanner.cpp
+    VerticalLayout.h
+    VerticalLayout.cpp
     RecordingTimelineReconciler.h
     RecordingTimelineReconciler.cpp
     IRecordingPersistence.h
@@ -40,6 +42,10 @@ add_library(cs_app STATIC
     VideoPreviewItem.cpp
     CameraPreviewItem.h
     CameraPreviewItem.cpp
+    AvatarPreviewItem.h
+    AvatarPreviewItem.cpp
+    AvatarSceneController.h
+    AvatarSceneController.cpp
     RecentProjectRegistry.h
     RecentProjectRegistry.cpp
     ProjectWorker.h
@@ -72,6 +78,8 @@ add_library(cs_app STATIC
     TimelineTrackModel.cpp
     EditorEngineWorker.h
     EditorEngineWorker.cpp
+    EditorPreviewAudioOutput.h
+    EditorPreviewAudioOutput.cpp
     EditorController.h
     EditorController.cpp
     EditorPreviewItem.h
@@ -113,6 +121,11 @@ if(APPLE)
         ${CS_APP_IOSURFACE_FRAMEWORK}
         ${CS_APP_METAL_FRAMEWORK}
     )
+elseif(WIN32)
+    # Real Qt Quick preview surface: uploads the latest captured BGRA frame as a
+    # QSGImageNode texture (portable across the D3D11/Vulkan/OpenGL RHI backend
+    # Qt Quick selects on Windows). Replaces the do-nothing stub.
+    target_sources(cs_app PRIVATE VideoPreviewItem_windows.cpp)
 else()
     target_sources(cs_app PRIVATE VideoPreviewItem_stub.cpp)
 endif()
@@ -132,6 +145,10 @@ target_link_libraries(cs_app
         cs_edit_engine
         cs_transcription
     PRIVATE
+        # Qt Multimedia is confined to the application layer (CLAUDE.md 3/5) and
+        # kept PRIVATE: only EditorPreviewAudioOutput.cpp includes QAudioSink, and
+        # no cs_app public header exposes a Qt Multimedia type.
+        Qt6::Multimedia
         cs_project_store
 )
 

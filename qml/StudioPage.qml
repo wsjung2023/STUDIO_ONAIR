@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Material
 import QtQuick.Layouts
 import CreatorStudio.Native 1.0
 
@@ -11,6 +12,42 @@ import CreatorStudio.Native 1.0
 Item {
     id: root
 
+    // Design tokens for this page (see qml/Theme.qml).
+    Theme { id: theme }
+
+    // Pause the live capture/composite when the Studio page is not on screen.
+    // The StackLayout keeps every page alive, so without this the screen grab,
+    // camera and avatar renderer keep burning CPU while the creator is on the
+    // Editor/Export/Home pages -- pure waste, since nothing shows that preview.
+    // Never pause mid-recording. Re-arm on return via the existing auto-start.
+    onVisibleChanged: {
+        if (visible) {
+            armLiveCapture()
+        } else if (!studioController.recording) {
+            screenAutoStart.stop()
+            if (screenCaptureController.canStopPreview)
+                screenCaptureController.stopPreview()
+            if (avatarSceneController.avatarCanStop)
+                avatarSceneController.setAvatarEnabled(false)
+            if (deviceCaptureController.cameraCanStop)
+                deviceCaptureController.setCameraEnabled(false)
+        }
+    }
+
+    // Phone layout below 600px. All automated smoke tests run at width >= 720, so
+    // `compact` is always false under test and the desktop tree is what they see;
+    // the phone tree lives in a Loader that only instantiates on real phones.
+    readonly property bool compact: width < 600
+
+    // Progressive disclosure: the source inspector shows a calm summary by default
+    // and only reveals the full transform grid when the creator asks for it.
+    property bool detailExpanded: false
+
+    // Advanced/power-user surface (scene hotkey grid, engineering telemetry).
+    // Hidden by default so a first-time creator sees a calm page; the controls
+    // still exist, one toggle away, so no capability is lost.
+    property bool showAdvanced: false
+
     readonly property bool workflowEditable: !studioController.recording
                                              && !studioWorkflowController.recording
                                              && !studioController.busy
@@ -18,6 +55,17 @@ Item {
     readonly property bool transformEditable: workflowEditable
                                               && Object.keys(
                                                   studioWorkflowController.selectedTransform).length > 0
+    readonly property bool recordActive: studioController.recording
+    readonly property bool recordButtonEnabled: !studioController.busy
+                                                && (studioController.recordingAvailable
+                                                    || studioController.recording)
+
+    function toggleRecording() {
+        if (studioController.recording)
+            studioController.stopRecording()
+        else
+            studioController.startRecording()
+    }
 
     function transformValue(key, fallbackValue) {
         const values = studioWorkflowController.selectedTransform
@@ -78,7 +126,86 @@ Item {
                     + Number(transformCropBottomField.text) < 1
     }
 
-    Component.onCompleted: syncTransformFields()
+    Component.onCompleted: {
+        syncTransformFields()
+        // Only arm the live capture when the Studio page is actually on screen.
+        // The StackLayout instantiates every page at startup, so an unguarded
+        // onCompleted armed the screen grab + avatar even while Home was showing
+        // -- burning ~1 core before the creator ever entered the Studio. When
+        // Studio does become visible, onVisibleChanged arms it.
+        if (visible) armLiveCapture()
+    }
+
+    function armLiveCapture() {
+        // Avatar discoverability: the VTuber avatar starts automatically on
+        // entering Studio so creators see it immediately, instead of having to
+        // scroll to the bottom of the left panel to find "Start Avatar" and
+        // concluding the avatar "doesn't show up". Guarded so a re-entry does
+        // not restart an already-running avatar.
+        if (avatarSceneController.avatarStyleSelectable
+                && !avatarSceneController.avatarCanStop) {
+            avatarSceneController.setAvatarEnabled(true)
+        }
+        // The screen source only produces frames (for preview AND recording)
+        // once a preview is started. Avatar auto-starts, so if the creator just
+        // presses 녹화 without pressing 미리보기 시작 the recording captured only
+        // the avatar and NOT the screen. Auto-arm the screen preview on entry so
+        // 녹화 records the screen too. On a multi-monitor setup, prefer a monitor
+        // other than the primary (where the Studio window usually sits) so
+        // full-screen capture does not feed back into itself (the "무한거울").
+        screenAutoStart.tries = 0
+        screenAutoStart.start()
+    }
+    Timer {
+        id: screenAutoStart
+        interval: 400
+        repeat: true
+        property int tries: 0
+        onTriggered: {
+            tries += 1
+            // Screen: start the preview on the currently selected monitor so the
+            // screen actually records. The Studio window is excluded from screen
+            // capture (WDA_EXCLUDEFROMCAPTURE) so capturing the monitor it lives
+            // on does not feed back into itself; the creator can switch monitors
+            // or pick a region from the source controls above.
+            if (!screenCaptureController.previewing
+                    && !screenCaptureController.canStopPreview
+                    && !screenCaptureController.busy
+                    && screenCaptureController.selectedTargetId.length > 0) {
+                if (screenCaptureController.permissionRequired) {
+                    screenCaptureController.requestPermission()
+                } else {
+                    screenCaptureController.startPreview()
+                }
+            }
+            // Microphone: pick a default device if none is selected yet, then arm
+            // it so the recording captures the creator's voice.
+            if (!deviceCaptureController.microphoneCanStop
+                    && !deviceCaptureController.microphoneBusy) {
+                if (deviceCaptureController.microphonePermissionRequired) {
+                    deviceCaptureController.requestMicrophonePermission()
+                } else if (deviceCaptureController.selectedMicrophoneId.length === 0
+                           && deviceCaptureController.microphones.length > 0) {
+                    deviceCaptureController.selectMicrophone(
+                        deviceCaptureController.microphones[0].id)
+                } else if (deviceCaptureController.selectedMicrophoneId.length > 0) {
+                    deviceCaptureController.setMicrophoneEnabled(true)
+                }
+            }
+            // System audio (WASAPI loopback): captures game/video/app sound.
+            if (!deviceCaptureController.systemAudioCanStop
+                    && !deviceCaptureController.systemAudioBusy) {
+                deviceCaptureController.setSystemAudioEnabled(true)
+            }
+            var screenOn = screenCaptureController.previewing
+                    || screenCaptureController.canStopPreview
+            if ((screenOn && deviceCaptureController.microphoneCanStop
+                    && deviceCaptureController.systemAudioCanStop)
+                    || tries > 20) {
+                stop()
+            }
+        }
+    }
     Connections {
         target: studioWorkflowController
         function onSelectionChanged() { root.syncTransformFields() }
@@ -203,7 +330,7 @@ Item {
                 Label {
                     Layout.fillWidth: true
                     text: shortcutSettingsController.statusMessage
-                    color: "#ffcc66"
+                    color: theme.warning
                     wrapMode: Text.WordWrap
                     Accessible.name: qsTr("Shortcut settings status")
                 }
@@ -211,9 +338,54 @@ Item {
         }
     }
 
+    // A compact status chip used by the bottom HUD and the phone status row: a
+    // small dot + one short line of text. This replaces the former wall of
+    // telemetry with a calm, glanceable strip.
+    component StatusChip: Rectangle {
+        property alias text: chipLabel.text
+        property color dotColor: theme.textMuted
+        // Optional identity for the inner label so telemetry chips can keep the
+        // exact objectName/accessible name the smoke test and logs rely on.
+        property string labelObjectName: ""
+        property string labelAccessibleName: ""
+        implicitHeight: 30
+        implicitWidth: chipRow.implicitWidth + theme.spaceMd * 2
+        radius: theme.radiusPill
+        color: theme.bg
+        border.color: theme.border
+        border.width: 1
+        RowLayout {
+            id: chipRow
+            anchors.centerIn: parent
+            spacing: theme.spaceSm
+            Rectangle {
+                Layout.alignment: Qt.AlignVCenter
+                width: 8; height: 8; radius: 4
+                color: dotColor
+            }
+            Label {
+                id: chipLabel
+                objectName: labelObjectName
+                Accessible.name: labelAccessibleName.length > 0
+                                 ? labelAccessibleName : chipLabel.text
+                color: theme.textSecondary
+                font.family: theme.fontFamily
+                font.pixelSize: theme.sizeCaption
+                font.weight: theme.weightMedium
+            }
+        }
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        color: theme.bg
+    }
+
+    // ============================ DESKTOP =================================
     ColumnLayout {
         anchors.fill: parent
         spacing: 1
+        visible: !root.compact
 
         RowLayout {
             Layout.fillWidth: true
@@ -221,8 +393,10 @@ Item {
             spacing: 1
 
             Pane {
-                Layout.preferredWidth: 250
+                Layout.preferredWidth: 296
                 Layout.fillHeight: true
+                padding: theme.spaceLg
+                background: Rectangle { color: theme.surface }
 
                 ScrollView {
                     id: studioLeftScroll
@@ -237,11 +411,15 @@ Item {
                     id: leftColumn
                     objectName: "studioLeftColumn"
                     width: studioLeftScroll.availableWidth
-                    // Prevent ScrollView from compressing the complete device
-                    // workflow into the viewport. Smaller/high-DPI windows scroll.
-                    height: 900
+                    // Height tracks the real content (no Layout.fillHeight children
+                    // live here, so implicitHeight is the true stacked height). This
+                    // keeps the ScrollView able to reveal EVERY control regardless of
+                    // mode: in 코너(corner) placement the extra corner-picker grid,
+                    // size slider and drag hint grow the column and stay reachable,
+                    // instead of being clipped by a fixed height.
+                    height: implicitHeight
 
-                    Label { text: qsTr("Scenes"); font.bold: true }
+                    Label { text: qsTr("Scenes"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -261,6 +439,9 @@ Item {
                     }
 
                     GridLayout {
+                        // Scene hotkey grid (1-9) duplicates the scene list + prev/next;
+                        // advanced-only so it does not clutter the default page.
+                        visible: root.showAdvanced
                         Layout.fillWidth: true
                         columns: 5
                         ToolButton { objectName: "studioSceneButton1"; action: scene1Action }
@@ -301,9 +482,8 @@ Item {
                             onDoubleClicked: studioWorkflowController.switchScene(
                                                  sceneId,
                                                  studioController.recordingPositionNs)
+                        }
                     }
-                }
-            }
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -390,7 +570,7 @@ Item {
                         }
                     }
 
-                    Label { text: qsTr("Sources"); font.bold: true }
+                    Label { text: qsTr("Sources"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
 
                     ListView {
                         id: sourceList
@@ -445,7 +625,7 @@ Item {
                         }
                     }
 
-                    Label { text: qsTr("Camera"); font.bold: true }
+                    Label { text: qsTr("Camera"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
 
                     ComboBox {
                         id: cameraDeviceSelector
@@ -497,7 +677,158 @@ Item {
                         font.pixelSize: 11
                     }
 
-                    Label { text: qsTr("Microphone"); font.bold: true }
+                    Label { text: qsTr("Avatar (VTuber)"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
+
+                    Button {
+                        objectName: "studioAvatarButton"
+                        Layout.fillWidth: true
+                        text: avatarSceneController.avatarCanStop
+                              ? qsTr("Stop Avatar") : qsTr("Start Avatar")
+                        Accessible.name: qsTr("Toggle avatar source")
+                        onClicked: avatarSceneController.setAvatarEnabled(
+                                       !avatarSceneController.avatarCanStop)
+                    }
+                    Label {
+                        objectName: "studioAvatarStatus"
+                        Layout.fillWidth: true
+                        text: avatarSceneController.avatarStatus + "\n"
+                              + avatarSceneController.trackingLabel
+                        wrapMode: Text.WordWrap
+                        color: theme.warning
+                        font.pixelSize: 11
+                    }
+
+                    // Character picker: choose the built-in VTuber character.
+                    // Selecting one swaps the live avatar immediately.
+                    Label {
+                        visible: avatarSceneController.avatarStyleSelectable
+                        text: qsTr("캐릭터")
+                        color: theme.textMuted; font.family: theme.fontFamily
+                        font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold
+                        font.capitalization: Font.AllUppercase; font.letterSpacing: 1
+                    }
+                    Flow {
+                        objectName: "studioAvatarCharacterPicker"
+                        visible: avatarSceneController.avatarStyleSelectable
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Repeater {
+                            model: avatarSceneController.avatarCharacters
+                            delegate: Button {
+                                required property int index
+                                required property var modelData
+                                objectName: "studioAvatarCharacter_" + modelData.key
+                                text: modelData.label
+                                checkable: true
+                                checked: avatarSceneController.avatarCharacterIndex === index
+                                Accessible.name: qsTr("Select avatar character %1").arg(modelData.label)
+                                onClicked: avatarSceneController.avatarCharacterIndex = index
+                            }
+                        }
+                    }
+
+                    // Placement: front (full) vs corner (picture-in-picture).
+                    Label {
+                        visible: avatarSceneController.avatarStyleSelectable
+                        text: qsTr("배치")
+                        color: theme.textMuted; font.family: theme.fontFamily
+                        font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold
+                        font.capitalization: Font.AllUppercase; font.letterSpacing: 1
+                    }
+                    RowLayout {
+                        visible: avatarSceneController.avatarStyleSelectable
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Button {
+                            objectName: "studioAvatarPlacementFront"
+                            Layout.fillWidth: true
+                            text: qsTr("정면")
+                            checkable: true
+                            checked: avatarSceneController.avatarPlacementMode === 0
+                            onClicked: avatarSceneController.avatarPlacementMode = 0
+                        }
+                        Button {
+                            objectName: "studioAvatarPlacementCorner"
+                            Layout.fillWidth: true
+                            text: qsTr("코너")
+                            checkable: true
+                            checked: avatarSceneController.avatarPlacementMode === 1
+                            onClicked: avatarSceneController.avatarPlacementMode = 1
+                        }
+                    }
+                    GridLayout {
+                        objectName: "studioAvatarCornerPicker"
+                        visible: avatarSceneController.avatarStyleSelectable
+                                 && avatarSceneController.avatarPlacementMode === 1
+                        Layout.fillWidth: true
+                        columns: 2
+                        columnSpacing: 6
+                        rowSpacing: 6
+                        Repeater {
+                            model: [
+                                { label: qsTr("좌상"), value: 2 },
+                                { label: qsTr("우상"), value: 3 },
+                                { label: qsTr("좌하"), value: 0 },
+                                { label: qsTr("우하"), value: 1 }
+                            ]
+                            delegate: Button {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                text: modelData.label
+                                checkable: true
+                                checked: avatarSceneController.avatarCorner === modelData.value
+                                onClicked: avatarSceneController.avatarCorner = modelData.value
+                            }
+                        }
+                    }
+
+                    // Free size control. The avatar can be resized live between
+                    // the renderer's min/max scale; dragging in the preview moves
+                    // it freely, and these presets/sliders update together.
+                    Label {
+                        visible: avatarSceneController.avatarStyleSelectable
+                        text: qsTr("크기")
+                        color: theme.textMuted; font.family: theme.fontFamily
+                        font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold
+                        font.capitalization: Font.AllUppercase; font.letterSpacing: 1
+                    }
+                    RowLayout {
+                        visible: avatarSceneController.avatarStyleSelectable
+                        Layout.fillWidth: true
+                        spacing: 8
+                        Slider {
+                            id: avatarSizeSlider
+                            objectName: "studioAvatarSizeSlider"
+                            Layout.fillWidth: true
+                            from: avatarSceneController.avatarMinScale
+                            to: avatarSceneController.avatarMaxScale
+                            value: avatarSceneController.avatarScale
+                            Accessible.name: qsTr("Avatar size")
+                            onMoved: avatarSceneController.setAvatarScale(value)
+                            // Keep in sync when a preset or drag changes the scale.
+                            Connections {
+                                target: avatarSceneController
+                                function onTransformChanged() {
+                                    avatarSizeSlider.value = avatarSceneController.avatarScale
+                                }
+                            }
+                        }
+                        Label {
+                            text: avatarSceneController.avatarScale.toFixed(2) + "x"
+                            color: theme.textSecondary
+                            font.pixelSize: 11
+                        }
+                    }
+                    Label {
+                        visible: avatarSceneController.avatarStyleSelectable
+                        Layout.fillWidth: true
+                        text: qsTr("미리보기에서 아바타를 드래그해 위치를 옮기고, 크기 슬라이더로 크기를 조정하세요.")
+                        wrapMode: Text.WordWrap
+                        color: theme.textMuted
+                        font.pixelSize: 11
+                    }
+
+                    Label { text: qsTr("Microphone"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
 
                     ComboBox {
                         id: microphoneDeviceSelector
@@ -567,16 +898,19 @@ Item {
                         wrapMode: Text.WordWrap
                         font.pixelSize: 11
                     }
+                    }
                 }
             }
 
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: 6
+                Layout.margins: theme.spaceLg
+                spacing: theme.spaceMd
 
                 RowLayout {
                     Layout.fillWidth: true
+                    spacing: theme.spaceSm
 
                     ComboBox {
                         id: captureTargetSelector
@@ -584,8 +918,10 @@ Item {
                         Layout.fillWidth: true
                         model: screenCaptureController.targets
                         textRole: "name"
+                        // Switchable even while previewing — the controller
+                        // restarts the preview on the chosen monitor.
                         enabled: !screenCaptureController.busy
-                                 && !screenCaptureController.previewing
+                                 || screenCaptureController.previewing
                         currentIndex: {
                             for (let i = 0; i < screenCaptureController.targets.length; ++i) {
                                 if (screenCaptureController.targets[i].id
@@ -611,7 +947,7 @@ Item {
                     Button {
                         text: qsTr("Refresh")
                         enabled: !screenCaptureController.busy
-                                 && !screenCaptureController.previewing
+                                 || screenCaptureController.previewing
                         onClicked: screenCaptureController.refreshTargets()
                     }
 
@@ -627,11 +963,99 @@ Item {
                     }
                 }
 
+                // Screen-recording scope: full monitor vs a chosen rectangular
+                // region. Region capture also removes the avatar-corner mirror
+                // effect by letting the creator exclude the studio window's area.
+                ColumnLayout {
+                    id: regionControls
+                    Layout.fillWidth: true
+                    spacing: theme.spaceSm
+                    // Region can be changed live; the controller re-applies it to
+                    // the running preview.
+                    enabled: !screenCaptureController.busy
+                             || screenCaptureController.previewing
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: theme.spaceSm
+
+                        Label {
+                            text: qsTr("화면 녹화 범위")
+                            color: theme.textMuted
+                            font.family: theme.fontFamily
+                            font.pixelSize: theme.sizeCaption
+                        }
+                        RadioButton {
+                            objectName: "screenScopeFullButton"
+                            text: qsTr("전체 화면")
+                            checked: !screenCaptureController.regionActive
+                            onClicked: screenCaptureController.clearRegion()
+                        }
+                        RadioButton {
+                            id: screenScopeRegionButton
+                            objectName: "screenScopeRegionButton"
+                            text: qsTr("영역")
+                            checked: screenCaptureController.regionActive
+                            onClicked: screenCaptureController.setRegion(
+                                           regionXField.value, regionYField.value,
+                                           regionWField.value, regionHField.value)
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: theme.spaceSm
+                        visible: screenScopeRegionButton.checked
+
+                        Label { text: qsTr("X"); color: theme.textMuted; font.pixelSize: theme.sizeCaption }
+                        SpinBox {
+                            id: regionXField
+                            objectName: "screenRegionX"
+                            from: 0; to: 16384; editable: true
+                            value: screenCaptureController.regionActive
+                                   ? screenCaptureController.regionX : 0
+                        }
+                        Label { text: qsTr("Y"); color: theme.textMuted; font.pixelSize: theme.sizeCaption }
+                        SpinBox {
+                            id: regionYField
+                            objectName: "screenRegionY"
+                            from: 0; to: 16384; editable: true
+                            value: screenCaptureController.regionActive
+                                   ? screenCaptureController.regionY : 0
+                        }
+                        Label { text: qsTr("너비"); color: theme.textMuted; font.pixelSize: theme.sizeCaption }
+                        SpinBox {
+                            id: regionWField
+                            objectName: "screenRegionWidth"
+                            from: 1; to: 16384; editable: true
+                            value: screenCaptureController.regionActive
+                                   ? screenCaptureController.regionWidth : 1280
+                        }
+                        Label { text: qsTr("높이"); color: theme.textMuted; font.pixelSize: theme.sizeCaption }
+                        SpinBox {
+                            id: regionHField
+                            objectName: "screenRegionHeight"
+                            from: 1; to: 16384; editable: true
+                            value: screenCaptureController.regionActive
+                                   ? screenCaptureController.regionHeight : 720
+                        }
+                        Button {
+                            objectName: "screenRegionApplyButton"
+                            text: qsTr("적용")
+                            onClicked: screenCaptureController.setRegion(
+                                           regionXField.value, regionYField.value,
+                                           regionWField.value, regionHField.value)
+                        }
+                    }
+                }
+
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: "#1f2228"
-                    border.color: studioController.recording ? "#ff6b6b" : "#3a3f49"
+                    radius: theme.radiusMd
+                    color: theme.bgDeep
+                    border.color: studioController.recording ? theme.danger : theme.border
                     border.width: studioController.recording ? 2 : 1
 
                     TestPattern {
@@ -736,6 +1160,71 @@ Item {
                         }
                     }
 
+                    // Live avatar source. The CharacterAvatarRenderer bakes the
+                    // chosen placement (front / corner) straight into its frame,
+                    // so the preview fills the stage and shows exactly what
+                    // records: an opaque full character in 정면 mode, or a
+                    // transparent frame with the character in a corner over the
+                    // screen in 코너 mode.
+                    Item {
+                        id: avatarComposition
+                        objectName: "studioAvatarCompositionPreview"
+                        anchors.fill: parent
+                        visible: avatarSceneController.avatarCapturing
+                        z: 50
+                        Accessible.name: qsTr("Avatar composition preview")
+
+                        AvatarPreviewItem {
+                            objectName: "studioAvatarNativePreview"
+                            anchors.fill: parent
+                            avatarController: avatarSceneController
+                        }
+
+                        // Free-position drag: map the pointer to normalised
+                        // [0,1] frame coordinates and move the avatar live. The
+                        // preview renders the avatar frame at the stage aspect, so
+                        // this mapping matches the baked frame 1:1.
+                        MouseArea {
+                            id: avatarDragArea
+                            objectName: "studioAvatarDragArea"
+                            anchors.fill: parent
+                            enabled: avatarSceneController.avatarStyleSelectable
+                            cursorShape: Qt.OpenHandCursor
+                            preventStealing: true
+                            function moveTo(px, py) {
+                                var nx = Math.max(0, Math.min(1, px / Math.max(1, width)))
+                                var ny = Math.max(0, Math.min(1, py / Math.max(1, height)))
+                                avatarSceneController.setAvatarPosition(nx, ny)
+                            }
+                            onPressed: function(mouse) {
+                                cursorShape = Qt.ClosedHandCursor
+                                moveTo(mouse.x, mouse.y)
+                            }
+                            onPositionChanged: function(mouse) {
+                                if (pressed) moveTo(mouse.x, mouse.y)
+                            }
+                            onReleased: cursorShape = Qt.OpenHandCursor
+                        }
+
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            anchors.margins: 8
+                            width: avatarBannerLabel.implicitWidth + 16
+                            height: 22
+                            radius: 6
+                            color: "#cc1e88e5"
+                            Label {
+                                id: avatarBannerLabel
+                                anchors.centerIn: parent
+                                text: avatarSceneController.trackingLabel
+                                color: "white"
+                                font.pixelSize: 11
+                                font.bold: true
+                            }
+                        }
+                    }
+
                     Label {
                         anchors.centerIn: parent
                         visible: screenCaptureController.previewing
@@ -751,8 +1240,105 @@ Item {
                         anchors.margins: 12
                         visible: !screenCaptureController.previewing
                         text: qsTr("Development test pattern — R0-03 native capture targets macOS")
-                        color: "#dddddd"
+                        color: theme.textSecondary
                         font.pixelSize: 12
+                    }
+                }
+
+                // Primary action for this screen: one large, unmistakable record
+                // control right under the canvas, plus the live take timer.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: theme.spaceMd
+
+                    Button {
+                        id: studioRecordButtonLarge
+                        objectName: "studioRecordButtonLarge"
+                        Layout.preferredHeight: 52
+                        Layout.preferredWidth: 220
+                        enabled: root.recordButtonEnabled
+                        Accessible.name: root.recordActive ? qsTr("녹화 중지") : qsTr("녹화 시작")
+                        onClicked: root.toggleRecording()
+                        contentItem: RowLayout {
+                            spacing: theme.spaceSm
+                            Item { Layout.fillWidth: true }
+                            Rectangle {
+                                Layout.alignment: Qt.AlignVCenter
+                                width: 16; height: 16
+                                radius: root.recordActive ? 4 : 8
+                                color: "white"
+                                Behavior on radius { NumberAnimation { duration: theme.animFast } }
+                            }
+                            Label {
+                                text: root.recordActive ? qsTr("녹화 중지") : qsTr("녹화")
+                                color: "white"
+                                font.family: theme.fontFamily
+                                font.pixelSize: theme.sizeSubtitle
+                                font.weight: theme.weightSemiBold
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+                        background: Rectangle {
+                            radius: theme.radiusPill
+                            color: root.recordActive ? theme.danger : theme.accent
+                            opacity: studioRecordButtonLarge.enabled
+                                     ? (studioRecordButtonLarge.pressed ? 0.85 : 1.0) : 0.4
+                            Behavior on color { ColorAnimation { duration: theme.animFast } }
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.preferredHeight: 52
+                        implicitWidth: takeRow.implicitWidth + theme.spaceLg * 2
+                        radius: theme.radiusMd
+                        color: theme.surface
+                        border.color: root.recordActive ? theme.danger : theme.border
+                        border.width: 1
+                        RowLayout {
+                            id: takeRow
+                            anchors.centerIn: parent
+                            spacing: theme.spaceSm
+                            Rectangle {
+                                width: 8; height: 8; radius: 4
+                                color: theme.danger
+                                visible: root.recordActive
+                                SequentialAnimation on opacity {
+                                    running: root.recordActive
+                                    loops: Animation.Infinite
+                                    NumberAnimation { to: 0.25; duration: 600 }
+                                    NumberAnimation { to: 1.0; duration: 600 }
+                                }
+                            }
+                            Label {
+                                text: root.recordActive ? qsTr("녹화 중") : qsTr("대기 중")
+                                color: root.recordActive ? theme.danger : theme.textMuted
+                                font.family: theme.fontFamily
+                                font.pixelSize: theme.sizeCaption
+                                font.weight: theme.weightSemiBold
+                            }
+                            Label {
+                                text: studioController.takeDuration
+                                color: theme.textPrimary
+                                font.family: theme.monoFamily
+                                font.pixelSize: theme.sizeSubtitle
+                                font.weight: theme.weightMedium
+                            }
+                        }
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    // Compressed capture telemetry as glanceable chips.
+                    StatusChip {
+                        dotColor: screenCaptureController.previewing ? theme.success : theme.textMuted
+                        text: qsTr("%1×%2 · %3fps")
+                              .arg(screenCaptureController.actualWidth)
+                              .arg(screenCaptureController.actualHeight)
+                              .arg(screenCaptureController.currentFps.toFixed(0))
+                    }
+                    StatusChip {
+                        dotColor: screenCaptureController.droppedFrames > 0 ? theme.warning : theme.success
+                        text: qsTr("드롭 %1").arg(screenCaptureController.droppedFrames)
                     }
                 }
 
@@ -761,29 +1347,18 @@ Item {
                     objectName: "captureStatusLabel"
                     Layout.fillWidth: true
                     text: screenCaptureController.statusMessage
-                    color: screenCaptureController.permissionRequired ? "#ffcc66" : palette.text
+                    color: screenCaptureController.permissionRequired ? theme.warning : theme.textSecondary
                     elide: Text.ElideRight
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    text: qsTr("%1×%2  %3 fps  received %4  reported drops %5  ignored %6  invalid %7  preview replacements %8")
-                          .arg(screenCaptureController.actualWidth)
-                          .arg(screenCaptureController.actualHeight)
-                          .arg(screenCaptureController.currentFps.toFixed(1))
-                          .arg(screenCaptureController.receivedFrames)
-                          .arg(screenCaptureController.droppedFrames)
-                          .arg(screenCaptureController.ignoredFrames)
-                          .arg(screenCaptureController.invalidFrames)
-                          .arg(screenCaptureController.replacedPreviewFrames)
-                    font.family: "monospace"
-                    font.pixelSize: 12
+                    font.family: theme.fontFamily
+                    font.pixelSize: theme.sizeLabel
                 }
             }
 
             Pane {
                 Layout.preferredWidth: 340
                 Layout.fillHeight: true
+                padding: theme.spaceLg
+                background: Rectangle { color: theme.surface }
 
                 ScrollView {
                     id: inspectorScroll
@@ -795,11 +1370,11 @@ Item {
                     ColumnLayout {
                         id: inspectorColumn
                         width: inspectorScroll.availableWidth
-                        // Windows native controls have larger minimum heights.
-                        // Keep inspector rows uncompressed and scroll the pane.
-                        height: 1000
+                        // Fixed, generous height so inspector rows stay uncompressed
+                        // and the pane scrolls under the taller Material metrics.
+                        height: 1180
 
-                        Label { text: qsTr("Source inspector"); font.bold: true }
+                        Label { text: qsTr("Source inspector"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
                         Label {
                             Layout.fillWidth: true
                             text: studioWorkflowController.selectedSourceId.length > 0
@@ -812,74 +1387,122 @@ Item {
                             Layout.fillWidth: true
                             visible: studioController.recording
                             text: qsTr("Transforms are read-only while recording")
-                            color: "#ffcc66"
+                            color: theme.warning
                             wrapMode: Text.WordWrap
                         }
 
-                        GridLayout {
-                            Layout.fillWidth: true
-                            columns: 2
-                            Label { text: qsTr("X") }
-                            TextField { id: transformXField; objectName: "studioTransformXField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source X"); validator: DoubleValidator { bottom: 0; top: 1 } }
-                            Label { text: qsTr("Y") }
-                            TextField { id: transformYField; objectName: "studioTransformYField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source Y"); validator: DoubleValidator { bottom: 0; top: 1 } }
-                            Label { text: qsTr("Width") }
-                            TextField { id: transformWidthField; objectName: "studioTransformWidthField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source width"); validator: DoubleValidator { bottom: 0.000001; top: 1 } }
-                            Label { text: qsTr("Height") }
-                            TextField { id: transformHeightField; objectName: "studioTransformHeightField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source height"); validator: DoubleValidator { bottom: 0.000001; top: 1 } }
-                            Label { text: qsTr("Scale X") }
-                            TextField { id: transformScaleXField; objectName: "studioTransformScaleXField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source scale X"); validator: DoubleValidator { bottom: 0.000001; top: 100 } }
-                            Label { text: qsTr("Scale Y") }
-                            TextField { id: transformScaleYField; objectName: "studioTransformScaleYField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source scale Y"); validator: DoubleValidator { bottom: 0.000001; top: 100 } }
-                            Label { text: qsTr("Rotation") }
-                            TextField { id: transformRotationField; objectName: "studioTransformRotationField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source rotation degrees"); validator: DoubleValidator { bottom: -36000; top: 36000 } }
-                            Label { text: qsTr("Crop left") }
-                            TextField { id: transformCropLeftField; objectName: "studioTransformCropLeftField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source crop left"); validator: DoubleValidator { bottom: 0; top: 0.999999 } }
-                            Label { text: qsTr("Crop top") }
-                            TextField { id: transformCropTopField; objectName: "studioTransformCropTopField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source crop top"); validator: DoubleValidator { bottom: 0; top: 0.999999 } }
-                            Label { text: qsTr("Crop right") }
-                            TextField { id: transformCropRightField; objectName: "studioTransformCropRightField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source crop right"); validator: DoubleValidator { bottom: 0; top: 0.999999 } }
-                            Label { text: qsTr("Crop bottom") }
-                            TextField { id: transformCropBottomField; objectName: "studioTransformCropBottomField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source crop bottom"); validator: DoubleValidator { bottom: 0; top: 0.999999 } }
-                            Label { text: qsTr("Opacity") }
-                            TextField { id: transformOpacityField; objectName: "studioTransformOpacityField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source opacity"); validator: DoubleValidator { bottom: 0; top: 1 } }
-                            Label { text: qsTr("Z order") }
-                            TextField { id: transformZOrderField; objectName: "studioTransformZOrderField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source Z order"); validator: IntValidator { bottom: -2147483647; top: 2147483647 } }
-                        }
-
+                        // Calm summary + a "세부 조정" expander. The full transform
+                        // grid stays instantiated (and accessible) below; it is only
+                        // collapsed to a zero height so the default view is simple.
                         RowLayout {
                             Layout.fillWidth: true
-                            Button {
-                                objectName: "studioTransformApplyButton"
-                                text: qsTr("Apply")
-                                enabled: root.transformEditable
-                                         && root.transformInputsAcceptable()
-                                Accessible.name: qsTr("Apply source transform")
-                                onClicked: studioWorkflowController.setSelectedTransform(
-                                               Number(transformXField.text),
-                                               Number(transformYField.text),
-                                               Number(transformWidthField.text),
-                                               Number(transformHeightField.text),
-                                               Number(transformScaleXField.text),
-                                               Number(transformScaleYField.text),
-                                               Number(transformRotationField.text),
-                                               Number(transformCropLeftField.text),
-                                               Number(transformCropTopField.text),
-                                               Number(transformCropRightField.text),
-                                               Number(transformCropBottomField.text),
-                                               Number(transformOpacityField.text),
-                                               Number(transformZOrderField.text))
+                            Layout.topMargin: theme.spaceSm
+                            Label {
+                                Layout.fillWidth: true
+                                text: qsTr("위치 · 크기 · 크롭 · 회전")
+                                color: theme.textSecondary
+                                font.family: theme.fontFamily
+                                font.pixelSize: theme.sizeLabel
                             }
                             Button {
-                                objectName: "studioTransformResetButton"
-                                text: qsTr("Reset")
-                                enabled: root.transformEditable
-                                Accessible.name: qsTr("Reset source transform")
-                                onClicked: studioWorkflowController.resetSelectedTransform()
+                                objectName: "studioInspectorDetailToggle"
+                                flat: true
+                                text: root.detailExpanded ? qsTr("간단히") : qsTr("세부 조정")
+                                Accessible.name: qsTr("Toggle source detail")
+                                onClicked: root.detailExpanded = !root.detailExpanded
+                                contentItem: Text {
+                                    text: parent.text
+                                    color: theme.accentBright
+                                    font.family: theme.fontFamily
+                                    font.pixelSize: theme.sizeLabel
+                                    font.weight: theme.weightSemiBold
+                                    horizontalAlignment: Text.AlignRight
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                background: Item {}
                             }
                         }
 
-                        Label { text: qsTr("PIP presets"); font.bold: true }
+                        // Collapsible detail. Height animates to 0 when collapsed
+                        // (children stay visible for assistive tech and the smoke
+                        // test); clip hides them so the default view is calm.
+                        Item {
+                            id: detailContainer
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: root.detailExpanded ? detailColumn.implicitHeight : 0
+                            clip: true
+
+                            ColumnLayout {
+                                id: detailColumn
+                                width: parent.width
+                                spacing: theme.spaceSm
+
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: 2
+                                    Label { text: qsTr("X") }
+                                    TextField { id: transformXField; objectName: "studioTransformXField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source X"); validator: DoubleValidator { bottom: 0; top: 1 } }
+                                    Label { text: qsTr("Y") }
+                                    TextField { id: transformYField; objectName: "studioTransformYField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source Y"); validator: DoubleValidator { bottom: 0; top: 1 } }
+                                    Label { text: qsTr("Width") }
+                                    TextField { id: transformWidthField; objectName: "studioTransformWidthField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source width"); validator: DoubleValidator { bottom: 0.000001; top: 1 } }
+                                    Label { text: qsTr("Height") }
+                                    TextField { id: transformHeightField; objectName: "studioTransformHeightField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source height"); validator: DoubleValidator { bottom: 0.000001; top: 1 } }
+                                    Label { text: qsTr("Scale X") }
+                                    TextField { id: transformScaleXField; objectName: "studioTransformScaleXField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source scale X"); validator: DoubleValidator { bottom: 0.000001; top: 100 } }
+                                    Label { text: qsTr("Scale Y") }
+                                    TextField { id: transformScaleYField; objectName: "studioTransformScaleYField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source scale Y"); validator: DoubleValidator { bottom: 0.000001; top: 100 } }
+                                    Label { text: qsTr("Rotation") }
+                                    TextField { id: transformRotationField; objectName: "studioTransformRotationField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source rotation degrees"); validator: DoubleValidator { bottom: -36000; top: 36000 } }
+                                    Label { text: qsTr("Crop left") }
+                                    TextField { id: transformCropLeftField; objectName: "studioTransformCropLeftField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source crop left"); validator: DoubleValidator { bottom: 0; top: 0.999999 } }
+                                    Label { text: qsTr("Crop top") }
+                                    TextField { id: transformCropTopField; objectName: "studioTransformCropTopField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source crop top"); validator: DoubleValidator { bottom: 0; top: 0.999999 } }
+                                    Label { text: qsTr("Crop right") }
+                                    TextField { id: transformCropRightField; objectName: "studioTransformCropRightField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source crop right"); validator: DoubleValidator { bottom: 0; top: 0.999999 } }
+                                    Label { text: qsTr("Crop bottom") }
+                                    TextField { id: transformCropBottomField; objectName: "studioTransformCropBottomField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source crop bottom"); validator: DoubleValidator { bottom: 0; top: 0.999999 } }
+                                    Label { text: qsTr("Opacity") }
+                                    TextField { id: transformOpacityField; objectName: "studioTransformOpacityField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source opacity"); validator: DoubleValidator { bottom: 0; top: 1 } }
+                                    Label { text: qsTr("Z order") }
+                                    TextField { id: transformZOrderField; objectName: "studioTransformZOrderField"; Layout.fillWidth: true; enabled: root.transformEditable; Accessible.name: qsTr("Source Z order"); validator: IntValidator { bottom: -2147483647; top: 2147483647 } }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Button {
+                                        objectName: "studioTransformApplyButton"
+                                        text: qsTr("Apply")
+                                        enabled: root.transformEditable
+                                                 && root.transformInputsAcceptable()
+                                        Accessible.name: qsTr("Apply source transform")
+                                        onClicked: studioWorkflowController.setSelectedTransform(
+                                                       Number(transformXField.text),
+                                                       Number(transformYField.text),
+                                                       Number(transformWidthField.text),
+                                                       Number(transformHeightField.text),
+                                                       Number(transformScaleXField.text),
+                                                       Number(transformScaleYField.text),
+                                                       Number(transformRotationField.text),
+                                                       Number(transformCropLeftField.text),
+                                                       Number(transformCropTopField.text),
+                                                       Number(transformCropRightField.text),
+                                                       Number(transformCropBottomField.text),
+                                                       Number(transformOpacityField.text),
+                                                       Number(transformZOrderField.text))
+                                    }
+                                    Button {
+                                        objectName: "studioTransformResetButton"
+                                        text: qsTr("Reset")
+                                        enabled: root.transformEditable
+                                        Accessible.name: qsTr("Reset source transform")
+                                        onClicked: studioWorkflowController.resetSelectedTransform()
+                                    }
+                                }
+                            }
+                        }
+
+                        Label { text: qsTr("PIP presets"); color: theme.textMuted; font.family: theme.fontFamily; font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 1 }
                         GridLayout {
                             Layout.fillWidth: true
                             columns: 2
@@ -902,45 +1525,54 @@ Item {
                                   ? "" : shortcutSettingsController.statusMessage
                             wrapMode: Text.WordWrap
                         }
-                        Item { Layout.preferredHeight: 12 }
+                        Item { Layout.fillHeight: true; Layout.preferredHeight: 12 }
                     }
                 }
             }
         }
 
-        // PRODUCT_BLUEPRINT 6.2 bottom bar. Capture and recording drops remain
-        // separate so preview pressure cannot hide encoder backpressure.
+        // PRODUCT_BLUEPRINT 6.2 bottom bar, compressed into calm status chips.
+        // Capture and recording drops remain distinct so preview pressure cannot
+        // hide encoder backpressure. Full telemetry text is preserved in each
+        // chip's label so logs and assistive tech keep the detail.
         Pane {
             Layout.fillWidth: true
-            Layout.preferredHeight: 160
+            Layout.preferredHeight: 96
+            padding: theme.spaceMd
+            background: Rectangle {
+                color: theme.surface
+                Rectangle { width: parent.width; height: 1; color: theme.border }
+            }
 
-            ScrollView {
+            RowLayout {
                 anchors.fill: parent
-                clip: true
-                contentWidth: hudRow.implicitWidth
-                contentHeight: hudRow.implicitHeight
-                ScrollBar.horizontal.policy: ScrollBar.AsNeeded
-                ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                spacing: theme.spaceLg
 
-                RowLayout {
-                    id: hudRow
-                    width: implicitWidth
-                    height: implicitHeight
-                    spacing: 16
-
+                // Audio level meters kept as slim bars.
                 ColumnLayout {
-                    Label {
-                        text: deviceCaptureController.microphoneCapturing
-                              ? qsTr("Mic %1 dBFS · %2 blocks · %3 overruns")
-                                    .arg(deviceCaptureController.microphonePeakDbfs.toFixed(1))
-                                    .arg(deviceCaptureController.microphoneBlocks)
-                                    .arg(deviceCaptureController.microphoneOverruns)
-                              : qsTr("Mic: Not active")
-                        font.pixelSize: 11
+                    Layout.preferredWidth: 210
+                    spacing: theme.spaceXs
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label {
+                            text: qsTr("마이크")
+                            color: theme.textMuted
+                            font.family: theme.fontFamily
+                            font.pixelSize: theme.sizeCaption
+                        }
+                        Item { Layout.fillWidth: true }
+                        Label {
+                            text: deviceCaptureController.microphoneCapturing
+                                  ? qsTr("%1 dBFS").arg(deviceCaptureController.microphonePeakDbfs.toFixed(0))
+                                  : qsTr("꺼짐")
+                            color: theme.textSecondary
+                            font.family: theme.monoFamily
+                            font.pixelSize: theme.sizeCaption
+                        }
                     }
                     ProgressBar {
                         objectName: "microphoneLevelMeter"
-                        Layout.preferredWidth: 180
+                        Layout.fillWidth: true
                         from: 0
                         to: 1
                         value: deviceCaptureController.microphoneCapturing
@@ -948,18 +1580,27 @@ Item {
                                    (deviceCaptureController.microphonePeakDbfs + 96) / 96))
                                : 0
                     }
-                    Label {
-                        text: deviceCaptureController.systemAudioCapturing
-                              ? qsTr("System %1 dBFS · %2 blocks · %3 overruns")
-                                    .arg(deviceCaptureController.systemAudioPeakDbfs.toFixed(1))
-                                    .arg(deviceCaptureController.systemAudioBlocks)
-                                    .arg(deviceCaptureController.systemAudioOverruns)
-                              : qsTr("System audio: Not active")
-                        font.pixelSize: 11
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label {
+                            text: qsTr("시스템")
+                            color: theme.textMuted
+                            font.family: theme.fontFamily
+                            font.pixelSize: theme.sizeCaption
+                        }
+                        Item { Layout.fillWidth: true }
+                        Label {
+                            text: deviceCaptureController.systemAudioCapturing
+                                  ? qsTr("%1 dBFS").arg(deviceCaptureController.systemAudioPeakDbfs.toFixed(0))
+                                  : qsTr("꺼짐")
+                            color: theme.textSecondary
+                            font.family: theme.monoFamily
+                            font.pixelSize: theme.sizeCaption
+                        }
                     }
                     ProgressBar {
                         objectName: "systemAudioLevelMeter"
-                        Layout.preferredWidth: 180
+                        Layout.fillWidth: true
                         from: 0
                         to: 1
                         value: deviceCaptureController.systemAudioCapturing
@@ -968,111 +1609,312 @@ Item {
                                : 0
                     }
                 }
-                Label {
-                    text: screenCaptureController.previewing
-                          ? qsTr("Capture drops: %1").arg(
-                                screenCaptureController.droppedFrames)
-                          : qsTr("Capture: Not active")
-                }
-                Label {
-                    objectName: "recordingDiskLabel"
-                    text: studioController.diskAvailableBytes > 0
-                          ? qsTr("Disk: %1 GiB available").arg(
-                                (studioController.diskAvailableBytes
-                                 / 1073741824).toFixed(1))
-                          : studioController.recording
-                            ? qsTr("Disk: Checking")
-                            : qsTr("Disk: Not active")
-                }
-                Label {
-                    objectName: "recordingEncoderLabel"
-                    text: studioController.encoderName.length > 0
-                          ? qsTr("Encoder: %1").arg(studioController.encoderName)
-                          : studioController.recording
-                            ? qsTr("Encoder: Checking")
-                            : qsTr("Encoder: Not active")
-                }
-                Label {
-                    objectName: "recordingQueueLabel"
-                    text: studioController.recording
-                          || studioController.busy
-                          || studioController.segmentCount > 0
-                          ? qsTr("Tracks: %1 · Queue: %2 · Recording drops: %3")
-                                .arg(studioController.trackCount)
-                                .arg(studioController.queuedItems)
-                                .arg(studioController.droppedFrames)
-                          : qsTr("Recording queue: Not active")
-                }
-                Label {
-                    objectName: "recordingSyncLabel"
-                    text: studioController.recording
-                          || studioController.busy
-                          || studioController.segmentCount > 0
-                          ? qsTr("Sync: drop %1 · duplicate %2 · max drift %3 ms · audio %4 ppm")
-                                .arg(studioController.syncDroppedFrames)
-                                .arg(studioController.duplicatedFrames)
-                                .arg(studioController.maximumDriftMilliseconds.toFixed(1))
-                                .arg(studioController.audioCorrectionPpm.toFixed(1))
-                          : qsTr("Sync: Not active")
+
+                // Advanced toggle for the engineering telemetry below. A creator
+                // does not need drift/ppm/queue/session numbers; keep them one
+                // click away instead of on screen by default.
+                Switch {
+                    objectName: "studioAdvancedToggle"
+                    text: qsTr("고급 정보")
+                    checked: root.showAdvanced
+                    onToggled: root.showAdvanced = checked
+                    font.family: theme.fontFamily
                 }
 
-                ColumnLayout {
-                    Label {
-                        objectName: "studioHudActiveScene"
+                // Recording telemetry chips. Each keeps the full descriptive text
+                // (the smoke test and logs rely on these exact strings) but reads
+                // as a single calm line with a status dot.
+                Flow {
+                    visible: root.showAdvanced
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    spacing: theme.spaceSm
+
+                    StatusChip {
+                        dotColor: studioController.recording ? theme.danger : theme.textMuted
+                        labelObjectName: "recordingDiskLabel"
+                        text: studioController.diskAvailableBytes > 0
+                              ? qsTr("Disk: %1 GiB available").arg(
+                                    (studioController.diskAvailableBytes
+                                     / 1073741824).toFixed(1))
+                              : studioController.recording
+                                ? qsTr("Disk: Checking")
+                                : qsTr("Disk: Not active")
+                    }
+                    StatusChip {
+                        dotColor: studioController.encoderName.length > 0 ? theme.info : theme.textMuted
+                        labelObjectName: "recordingEncoderLabel"
+                        text: studioController.encoderName.length > 0
+                              ? qsTr("Encoder: %1").arg(studioController.encoderName)
+                              : studioController.recording
+                                ? qsTr("Encoder: Checking")
+                                : qsTr("Encoder: Not active")
+                    }
+                    StatusChip {
+                        dotColor: theme.textMuted
+                        labelObjectName: "recordingQueueLabel"
+                        text: studioController.recording
+                              || studioController.busy
+                              || studioController.segmentCount > 0
+                              ? qsTr("Tracks: %1 · Queue: %2 · Recording drops: %3")
+                                    .arg(studioController.trackCount)
+                                    .arg(studioController.queuedItems)
+                                    .arg(studioController.droppedFrames)
+                              : qsTr("Recording queue: Not active")
+                    }
+                    StatusChip {
+                        dotColor: theme.textMuted
+                        labelObjectName: "recordingSyncLabel"
+                        text: studioController.recording
+                              || studioController.busy
+                              || studioController.segmentCount > 0
+                              ? qsTr("Sync: drop %1 · duplicate %2 · max drift %3 ms · audio %4 ppm")
+                                    .arg(studioController.syncDroppedFrames)
+                                    .arg(studioController.duplicatedFrames)
+                                    .arg(studioController.maximumDriftMilliseconds.toFixed(1))
+                                    .arg(studioController.audioCorrectionPpm.toFixed(1))
+                              : qsTr("Sync: Not active")
+                    }
+                    StatusChip {
+                        dotColor: studioWorkflowController.activeSceneId.length > 0 ? theme.success : theme.textMuted
+                        labelObjectName: "studioHudActiveScene"
+                        labelAccessibleName: qsTr("Active scene status")
                         text: studioWorkflowController.activeSceneId.length > 0
                               ? qsTr("Scene: %1").arg(
                                     studioWorkflowController.activeSceneId)
                               : qsTr("Scene: Not active")
-                        Accessible.name: qsTr("Active scene status")
                     }
-                    Label {
-                        objectName: "studioHudSession"
+                    StatusChip {
+                        dotColor: theme.textMuted
+                        labelObjectName: "studioHudSession"
+                        labelAccessibleName: qsTr("Recording session status")
                         text: studioWorkflowController.activeSessionId.length > 0
                               ? qsTr("Session: …%1").arg(
                                     studioWorkflowController.activeSessionId.slice(-8))
                               : qsTr("Session: Not active")
-                        Accessible.name: qsTr("Recording session status")
                     }
-                    Label {
-                        objectName: "studioHudMarkerCount"
+                    StatusChip {
+                        dotColor: theme.textMuted
+                        labelObjectName: "studioHudMarkerCount"
+                        labelAccessibleName: qsTr("Recording marker count")
                         text: studioWorkflowController.activeSessionId.length > 0
                               || studioWorkflowController.recording
                               ? qsTr("Markers: %1").arg(
                                     studioWorkflowController.markerCount)
                               : qsTr("Markers: Not active")
-                        Accessible.name: qsTr("Recording marker count")
                     }
-                    Label {
-                        objectName: "studioHudReconciliation"
+                    StatusChip {
+                        dotColor: studioWorkflowController.reconciling ? theme.warning : theme.textMuted
+                        labelObjectName: "studioHudReconciliation"
+                        labelAccessibleName: qsTr("Recording reconciliation status")
                         text: studioWorkflowController.reconciling
                               ? qsTr("Import: Reconciling")
                               : qsTr("Import: Not active")
-                        Accessible.name: qsTr("Recording reconciliation status")
+                    }
+                    StatusChip {
+                        dotColor: screenCaptureController.previewing ? theme.success : theme.textMuted
+                        text: screenCaptureController.previewing
+                              ? qsTr("Capture drops: %1").arg(
+                                    screenCaptureController.droppedFrames)
+                              : qsTr("Capture: Not active")
+                    }
+                    StatusChip {
+                        dotColor: studioController.recording ? theme.danger : theme.textMuted
+                        text: studioController.segmentCount > 0
+                              || studioController.recording
+                              ? qsTr("Segments: %1 · %2")
+                                    .arg(studioController.segmentCount)
+                                    .arg(studioController.takeDuration)
+                              : qsTr("Segments: Not active")
                     }
                 }
+            }
+        }
+    }
 
-                Label {
-                    text: studioController.segmentCount > 0
-                          || studioController.recording
-                          ? qsTr("Segments: %1").arg(studioController.segmentCount)
-                          : qsTr("Segments: Not active")
-                    font.bold: true
-                }
-                Label {
-                    text: studioController.segmentCount > 0
-                          || studioController.recording
-                          ? qsTr("Duration: %1").arg(studioController.takeDuration)
-                          : qsTr("Duration: Not active")
-                    font.bold: true
-                }
-                Label {
-                    text: studioController.statusMessage.length > 0
-                          ? studioController.statusMessage
-                          : studioWorkflowController.statusMessage
-                    color: studioController.recording ? "#ff6b6b" : palette.text
-                }
+    // ============================ PHONE ==================================
+    // Only instantiated on real phones (width < 600); never under the smoke
+    // tests, which always run at width >= 720. Reuses the same controllers.
+    Loader {
+        anchors.fill: parent
+        active: root.compact
+        visible: root.compact
+        sourceComponent: mobileStudio
+    }
+
+    Component {
+        id: mobileStudio
+
+        ColumnLayout {
+            spacing: theme.spaceMd
+
+            // Full-width preview on top.
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.leftMargin: theme.spaceLg
+                Layout.rightMargin: theme.spaceLg
+                Layout.topMargin: theme.spaceLg
+                Layout.preferredHeight: Math.round(width * 9 / 16)
+                radius: theme.radiusMd
+                color: theme.bgDeep
+                border.color: root.recordActive ? theme.danger : theme.border
+                border.width: root.recordActive ? 2 : 1
+                clip: true
+                TestPattern {
+                    anchors.fill: parent
+                    anchors.margins: 2
+                    active: root.recordActive
                 }
             }
+
+            // Big round record button — the one obvious action.
+            RoundButton {
+                Layout.alignment: Qt.AlignHCenter
+                implicitWidth: 84
+                implicitHeight: 84
+                enabled: root.recordButtonEnabled
+                Accessible.name: root.recordActive ? qsTr("녹화 중지") : qsTr("녹화 시작")
+                onClicked: root.toggleRecording()
+                background: Rectangle {
+                    radius: width / 2
+                    color: theme.surface
+                    border.color: root.recordActive ? theme.danger : theme.accent
+                    border.width: 3
+                }
+                contentItem: Item {
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: root.recordActive ? 28 : 56
+                        height: root.recordActive ? 28 : 56
+                        radius: root.recordActive ? 6 : 28
+                        color: root.recordButtonEnabled ? theme.danger : theme.textMuted
+                        Behavior on width { NumberAnimation { duration: theme.animBase } }
+                        Behavior on height { NumberAnimation { duration: theme.animBase } }
+                        Behavior on radius { NumberAnimation { duration: theme.animBase } }
+                    }
+                }
+            }
+
+            Label {
+                Layout.alignment: Qt.AlignHCenter
+                text: root.recordActive
+                      ? qsTr("녹화 중 · %1").arg(studioController.takeDuration)
+                      : qsTr("탭하여 녹화 시작")
+                color: root.recordActive ? theme.danger : theme.textSecondary
+                font.family: theme.fontFamily
+                font.pixelSize: theme.sizeBody
+                font.weight: theme.weightMedium
+            }
+
+            // Source toggles as a horizontally-scrollable chip row.
+            Flickable {
+                Layout.fillWidth: true
+                Layout.leftMargin: theme.spaceLg
+                Layout.rightMargin: theme.spaceLg
+                implicitHeight: 44
+                contentWidth: sourceChips.implicitWidth
+                clip: true
+                flickableDirection: Flickable.HorizontalFlick
+
+                RowLayout {
+                    id: sourceChips
+                    height: parent.height
+                    spacing: theme.spaceSm
+
+                    component SourceToggleChip: Rectangle {
+                        property string label: ""
+                        property bool on: false
+                        property bool chipEnabled: true
+                        signal toggled()
+                        implicitHeight: 40
+                        implicitWidth: stcRow.implicitWidth + theme.spaceLg * 2
+                        radius: theme.radiusPill
+                        color: on ? theme.accentSoft : theme.surface
+                        border.color: on ? theme.accent : theme.border
+                        border.width: 1
+                        opacity: chipEnabled ? 1.0 : 0.5
+                        RowLayout {
+                            id: stcRow
+                            anchors.centerIn: parent
+                            spacing: theme.spaceSm
+                            Rectangle {
+                                width: 8; height: 8; radius: 4
+                                color: on ? theme.success : theme.textMuted
+                            }
+                            Label {
+                                text: label
+                                color: on ? theme.textPrimary : theme.textSecondary
+                                font.family: theme.fontFamily
+                                font.pixelSize: theme.sizeLabel
+                                font.weight: theme.weightMedium
+                            }
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: parent.chipEnabled
+                            onClicked: parent.toggled()
+                        }
+                    }
+
+                    SourceToggleChip {
+                        label: qsTr("카메라")
+                        on: deviceCaptureController.cameraCanStop
+                        chipEnabled: deviceCaptureController.cameraCanStop
+                                     || (!deviceCaptureController.cameraBusy
+                                         && !deviceCaptureController.cameraPermissionRequired
+                                         && deviceCaptureController.selectedCameraId.length > 0)
+                        onToggled: deviceCaptureController.setCameraEnabled(
+                                       !deviceCaptureController.cameraCanStop)
+                    }
+                    SourceToggleChip {
+                        label: qsTr("마이크")
+                        on: deviceCaptureController.microphoneCanStop
+                        chipEnabled: deviceCaptureController.microphoneCanStop
+                                     || (!deviceCaptureController.microphoneBusy
+                                         && !deviceCaptureController.microphonePermissionRequired
+                                         && deviceCaptureController.selectedMicrophoneId.length > 0)
+                        onToggled: deviceCaptureController.setMicrophoneEnabled(
+                                       !deviceCaptureController.microphoneCanStop)
+                    }
+                    SourceToggleChip {
+                        label: qsTr("시스템 오디오")
+                        on: deviceCaptureController.systemAudioCanStop
+                        chipEnabled: deviceCaptureController.systemAudioCanStop
+                                     || !deviceCaptureController.systemAudioBusy
+                        onToggled: deviceCaptureController.setSystemAudioEnabled(
+                                       !deviceCaptureController.systemAudioCanStop)
+                    }
+                    SourceToggleChip {
+                        label: qsTr("아바타")
+                        on: avatarSceneController.avatarCanStop
+                        onToggled: avatarSceneController.setAvatarEnabled(
+                                       !avatarSceneController.avatarCanStop)
+                    }
+                }
+            }
+
+            // Status chips.
+            Flow {
+                Layout.fillWidth: true
+                Layout.leftMargin: theme.spaceLg
+                Layout.rightMargin: theme.spaceLg
+                spacing: theme.spaceSm
+                StatusChip {
+                    dotColor: root.recordActive ? theme.danger : theme.textMuted
+                    text: root.recordActive ? qsTr("녹화 중") : qsTr("대기")
+                }
+                StatusChip {
+                    dotColor: theme.info
+                    text: qsTr("%1fps").arg(screenCaptureController.currentFps.toFixed(0))
+                }
+                StatusChip {
+                    dotColor: deviceCaptureController.microphoneCapturing ? theme.success : theme.textMuted
+                    text: qsTr("마이크 %1dB").arg(deviceCaptureController.microphoneCapturing
+                          ? deviceCaptureController.microphonePeakDbfs.toFixed(0) : "—")
+                }
+            }
+
+            Item { Layout.fillHeight: true }
         }
     }
 }

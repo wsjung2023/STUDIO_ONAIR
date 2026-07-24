@@ -1,5 +1,6 @@
 #include "audio_dsp/ExportLoudnessAnalysis.h"
 
+#include "audio_dsp/AudioBuffer.h"
 #include "audio_dsp/AudioFormat.h"
 #include "audio_dsp/LoudnessMeter.h"
 #include "audio_dsp/LoudnessNormalizer.h"
@@ -169,6 +170,56 @@ TEST(ExportLoudnessAnalysisTest, RejectsNon48kFormat) {
 
     auto r = analyzer.analyze(samples, fmt);
     EXPECT_FALSE(r.hasValue());  // LoudnessMeter is 48 kHz-only
+}
+
+// decide() is the STREAMING half the export engine uses: it measures the mixed
+// program by feeding a LoudnessMeter block by block (never buffering the whole
+// multi-minute program) and then decides from the meter's finals. That decision
+// must be identical to the buffered analyze() for the same program, or the
+// streamed export and the offline analyzer would disagree.
+TEST(ExportLoudnessAnalysisTest, DecideMatchesAnalyzeForSameMeasurement) {
+    auto analyzer = makeAnalyzer(-14.0, -1.0);
+    auto sig = testing::makeSine(stereoFormat(), secToFrames(2.0), 1000.0, -23.0);
+
+    auto viaAnalyze = analyzer.analyze(sig.samples(), stereoFormat());
+    ASSERT_TRUE(viaAnalyze.hasValue());
+
+    // Stream the same program through a meter the way renderFrozen's pass 1 does.
+    auto meter = LoudnessMeter::create(stereoFormat());
+    ASSERT_TRUE(meter.hasValue());
+    AudioBuffer view{sig.samples().data(), sig.samples().size() / 2,
+                     stereoFormat()};
+    ASSERT_TRUE(meter.value().addBlock(view).hasValue());
+    const ExportLoudnessDecision streamed = analyzer.decide(
+        meter.value().integratedLufs(), meter.value().truePeakDbtp());
+
+    EXPECT_EQ(streamed.shouldNormalize, viaAnalyze.value().shouldNormalize);
+    EXPECT_NEAR(streamed.gainDb, viaAnalyze.value().gainDb, 1e-9);
+    EXPECT_NEAR(streamed.measuredLufs, viaAnalyze.value().measuredLufs, 1e-9);
+    EXPECT_NEAR(streamed.truePeakDbtp, viaAnalyze.value().truePeakDbtp, 1e-9);
+    EXPECT_DOUBLE_EQ(streamed.targetLufs, -14.0);
+    EXPECT_DOUBLE_EQ(streamed.truePeakCeilingDbtp, -1.0);
+}
+
+// decide()'s guards mirror analyze(): no measurement (-inf) and a below-floor
+// program are documented no-ops that leave the audio untouched (never boost
+// noise), while a normal-loudness measurement decides target-minus-measured.
+TEST(ExportLoudnessAnalysisTest, DecideGuardsNoMeasurementAndFloor) {
+    auto analyzer = makeAnalyzer(-14.0, -1.0);
+
+    const ExportLoudnessDecision none = analyzer.decide(
+        LoudnessMeter::kNoMeasurement, LoudnessMeter::kNoMeasurement);
+    EXPECT_FALSE(none.shouldNormalize);
+    EXPECT_DOUBLE_EQ(none.gainDb, 0.0);
+
+    const ExportLoudnessDecision tooQuiet = analyzer.decide(-90.0, -80.0);
+    EXPECT_FALSE(tooQuiet.shouldNormalize);
+    EXPECT_DOUBLE_EQ(tooQuiet.gainDb, 0.0);
+
+    const ExportLoudnessDecision normal = analyzer.decide(-23.0, -6.0);
+    EXPECT_TRUE(normal.shouldNormalize);
+    EXPECT_NEAR(normal.gainDb, 9.0, 1e-9);       // -14 - (-23)
+    EXPECT_DOUBLE_EQ(normal.truePeakDbtp, -6.0);  // echoes the measured true peak
 }
 
 }  // namespace

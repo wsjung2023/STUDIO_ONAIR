@@ -266,6 +266,11 @@ TEST(ProjectExportEngineIntegrationTest,
                      root / fs::path{u8"완성-1080p.mp4"}, 1920, 1080});
     cases.push_back({edit_engine::RenderPreset::h2642160p30().value(),
                      root / fs::path{u8"완성-4K.mp4"}, 3840, 2160});
+    // Vertical 9:16 shorts presets export a genuine portrait MP4 through MLT.
+    cases.push_back({edit_engine::RenderPreset::h2641080x1920p30().value(),
+                     root / fs::path{u8"완성-1080x1920.mp4"}, 1080, 1920});
+    cases.push_back({edit_engine::RenderPreset::h264720x1280p30().value(),
+                     root / fs::path{u8"완성-720x1280.mp4"}, 720, 1280});
     for (const auto& product : cases) {
         auto request = edit_engine::RenderRequest::create(
             projectId, snapshot, product.destination, product.preset,
