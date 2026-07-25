@@ -29,11 +29,11 @@ TEST(AvatarSoftwareRendererTest, ConnectsMappedMotionToRasterizedVideoFrame) {
         mouthValues.push_back(parameters.front().value);
         return creator::core::Result<AvatarSoftwareRenderInput>{
             AvatarSoftwareRenderInput{
-                {{0.0F, 0.0F, 0.0F, 0.0F},
-                 {4.0F, 0.0F, 1.0F, 0.0F},
-                 {0.0F, 4.0F, 0.0F, 1.0F}},
-                {0, 1, 2},
-                {1, 1, {8, 16, 24, 255}}}};
+                .vertices = {{0.0F, 0.0F, 0.0F, 0.0F},
+                             {4.0F, 0.0F, 1.0F, 0.0F},
+                             {0.0F, 4.0F, 0.0F, 1.0F}},
+                .indices = {0, 1, 2},
+                .texture = {1, 1, {8, 16, 24, 255}}}};
     }};
     const auto mapper = AvatarParameterMapper::create({
         {"Mouth", AvatarParameterSource::MouthOpen, 1.0F, 0.0F, 0.0F, 1.0F},

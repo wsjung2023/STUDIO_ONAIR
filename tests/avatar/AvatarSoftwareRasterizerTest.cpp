@@ -52,18 +52,23 @@ TEST(AvatarSoftwareRasterizerTest, CompositesMultipleTexturedBatchesInOrder) {
     };
     const std::uint32_t indices[] = {0, 1, 2};
     const std::vector<AvatarSoftwareRenderInput> batches{
-        {std::vector<AvatarMeshVertex>{std::begin(vertices), std::end(vertices)},
-         std::vector<std::uint32_t>{std::begin(indices), std::end(indices)},
-         AvatarTexture{1, 1, {0, 0, 255, 255}}},
-        {std::vector<AvatarMeshVertex>{std::begin(vertices), std::end(vertices)},
-         std::vector<std::uint32_t>{std::begin(indices), std::end(indices)},
-         AvatarTexture{1, 1, {0, 255, 0, 128}}},
+        {.vertices = std::vector<AvatarMeshVertex>{std::begin(vertices),
+                                                   std::end(vertices)},
+         .indices = std::vector<std::uint32_t>{std::begin(indices),
+                                               std::end(indices)},
+         .texture = AvatarTexture{1, 1, {0, 0, 255, 255}}},
+        {.vertices = std::vector<AvatarMeshVertex>{std::begin(vertices),
+                                                   std::end(vertices)},
+         .indices = std::vector<std::uint32_t>{std::begin(indices),
+                                               std::end(indices)},
+         .texture = AvatarTexture{1, 1, {0, 255, 0, 128}}},
     };
     const auto result = AvatarSoftwareRasterizer::renderBatches(
         TimestampNs{}, 4, 4, batches);
     ASSERT_TRUE(result.hasValue()) << result.error().message();
+    // Green (straight alpha 128/255) over opaque red: single-pass source-over.
     EXPECT_EQ(result.value().bytes()[4U * 4U + 0U], 0U);
-    EXPECT_EQ(result.value().bytes()[4U * 4U + 1U], 127U);
+    EXPECT_EQ(result.value().bytes()[4U * 4U + 1U], 128U);
     EXPECT_EQ(result.value().bytes()[4U * 4U + 2U], 126U);
     EXPECT_EQ(result.value().bytes()[4U * 4U + 3U], 255U);
 }

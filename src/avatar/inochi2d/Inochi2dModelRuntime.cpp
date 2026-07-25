@@ -261,65 +261,56 @@ public:
             }
         }
 
+        // Emit EVERY draw command with its real state/blend/mask so the software
+        // compositor can run the actual Inochi2D v0.8.7 draw-list protocol:
+        // define-mask/masked-draw for clipping and composite-begin/end/blit for
+        // offscreen groups (eyes, mouth). Control states (composite begin/end,
+        // blit) carry no texture; textured commands (normal, define-mask,
+        // masked-draw) carry their geometry. Geometry is only built for commands
+        // that actually have a source texture -- everything else is drawn by its
+        // group's blit -- so a command the rasteriser cannot represent is emitted
+        // as an inert state transition rather than being dropped.
         std::vector<AvatarSoftwareRenderInput> batches;
-        std::uint32_t compositeDepth = 0;
+        batches.reserve(commandCount);
+        bool anyTextured = false;
         for (std::uint32_t commandIndex = 0; commandIndex < commandCount;
              ++commandIndex) {
             const auto& command = commands[commandIndex];
-            // Draw-list state machine, matching Inochi2D's reference consumer.
-            // Only NORMAL commands paint the colour buffer. Mask-definition and
-            // mask push/pop passes are stencil control; drawing them as visible
-            // geometry lays opaque mask silhouettes over the character (a solid
-            // shape across the face). Composite-group CONTENT is rendered
-            // offscreen and blitted by its group -- with no offscreen path we
-            // skip it, as the reference consumer does, rather than drawing it
-            // unblended over the puppet.
-            switch (command.state) {
-                case 4U:  // IN_DRAW_STATE_COMPOSITE_BEGIN
-                    ++compositeDepth;
-                    continue;
-                case 5U:  // IN_DRAW_STATE_COMPOSITE_END
-                    if (compositeDepth > 0U) --compositeDepth;
-                    continue;
-                case 0U:  // IN_DRAW_STATE_NORMAL -- the only colour-drawing state
-                    break;
-                default:  // DEFINE_MASK, PUSH/POP_MASK, COMPOSITE_BLIT
-                    continue;
-            }
-            if (compositeDepth > 0U || command.elemCount == 0U) continue;
+            AvatarSoftwareRenderInput batch;
+            batch.state = command.state;
+            batch.blendMode = command.blendMode;
+            batch.maskMode = command.maskMode;
             const auto end = static_cast<std::uint64_t>(command.idxOffset) +
                              command.elemCount;
-            // Skip a command this software rasteriser cannot safely draw -- an
-            // out-of-range index span, or a mask/composite pass that carries no
-            // texture source -- instead of failing the whole frame, so a model
-            // that uses features beyond this renderer still draws its textured
-            // parts. (An empty result is still reported as an error below.)
-            if (end > indexCount || command.sources[0] == nullptr) {
-                continue;
-            }
-            auto texture = copyTexture(command.sources[0]);
-            if (!texture.hasValue()) continue;
-            AvatarSoftwareRenderInput batch;
-            batch.vertices = vertices;
-            batch.texture = std::move(texture).value();
-            batch.blendMode = command.blendMode;
-            batch.indices.reserve(command.elemCount);
-            bool commandInBounds = true;
-            for (std::uint32_t offset = 0; offset < command.elemCount; ++offset) {
-                const auto vertexIndex = static_cast<std::uint64_t>(
-                    indexData[command.idxOffset + offset]) + command.vtxOffset;
-                if (vertexIndex >= vertexCount) {
-                    commandInBounds = false;
-                    break;
+            if (command.sources[0] != nullptr && command.elemCount > 0U &&
+                end <= indexCount) {
+                auto texture = copyTexture(command.sources[0]);
+                if (texture.hasValue()) {
+                    std::vector<std::uint32_t> indices;
+                    indices.reserve(command.elemCount);
+                    bool inBounds = true;
+                    for (std::uint32_t offset = 0; offset < command.elemCount;
+                         ++offset) {
+                        const auto vertexIndex = static_cast<std::uint64_t>(
+                            indexData[command.idxOffset + offset]) +
+                            command.vtxOffset;
+                        if (vertexIndex >= vertexCount) {
+                            inBounds = false;
+                            break;
+                        }
+                        indices.push_back(static_cast<std::uint32_t>(vertexIndex));
+                    }
+                    if (inBounds && indices.size() % 3U == 0U) {
+                        batch.vertices = vertices;
+                        batch.indices = std::move(indices);
+                        batch.texture = std::move(texture).value();
+                        anyTextured = true;
+                    }
                 }
-                batch.indices.push_back(static_cast<std::uint32_t>(vertexIndex));
-            }
-            if (!commandInBounds || batch.indices.size() % 3U != 0U) {
-                continue;
             }
             batches.push_back(std::move(batch));
         }
-        if (batches.empty()) {
+        if (!anyTextured) {
             return AppError{ErrorCode::IoFailure,
                             "Inochi2D draw list contains no textured commands"};
         }
