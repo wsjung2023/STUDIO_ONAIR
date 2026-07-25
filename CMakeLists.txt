@@ -480,6 +480,40 @@ if(CS_ENABLE_MLT)
     endif()
 endif()
 
+# Stage the default Inochi2D avatar puppet (Arch-chan, CC0) beside the
+# executable so a real rigged avatar loads out of the box. The model is a data
+# file with no code linkage, so it is always staged; the app reads
+# <appDir>/resources/avatar/model.inp at startup. Without the runtime staged
+# below, main.cpp simply falls back to the placeholder avatar, so shipping the
+# model file alone is harmless.
+add_custom_command(TARGET creator_studio POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/avatar"
+        "$<TARGET_FILE_DIR:creator_studio>/resources/avatar"
+    COMMENT "Staging default avatar puppet (resources/avatar)"
+)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/resources/avatar/"
+    DESTINATION bin/resources/avatar
+)
+
+# When the audited Inochi2D runtime prefix is available, stage it beside the
+# executable as inochi2d-runtime/. main.cpp only builds the real
+# Inochi2dAvatarRenderer when this directory exists, and
+# Inochi2dRuntimeManifest::openVerified() leases and SHA-verifies the whole
+# prefix before mapping the library. A build without CS_INOCHI2D_ROOT stages the
+# model but not the runtime, so it renders the placeholder avatar instead.
+if(CS_INOCHI2D_ROOT)
+    add_custom_command(TARGET creator_studio POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CS_INOCHI2D_ROOT}"
+            "$<TARGET_FILE_DIR:creator_studio>/inochi2d-runtime"
+        COMMENT "Staging audited Inochi2D runtime (inochi2d-runtime)"
+    )
+    install(DIRECTORY "$<TARGET_FILE_DIR:creator_studio>/inochi2d-runtime/"
+        DESTINATION bin/inochi2d-runtime
+    )
+endif()
+
 if(WIN32)
     target_link_libraries(creator_studio PRIVATE cs_capture_windows)
 endif()
