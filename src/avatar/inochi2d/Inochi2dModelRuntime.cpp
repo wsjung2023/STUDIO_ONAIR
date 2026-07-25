@@ -127,9 +127,12 @@ public:
                     break;
                 }
             }
+            // A tracker's parameter set will not match every puppet (a static
+            // puppet has none; different rigs expose different names). Skip a
+            // parameter this model does not expose rather than failing the whole
+            // frame, so any model renders and the ones it does expose still drive.
             if (matched == nullptr) {
-                return AppError{ErrorCode::NotFound,
-                                "Inochi2D model parameter is not present"};
+                continue;
             }
             if (getDimensions_(matched) != 1U) {
                 return AppError{ErrorCode::UnsupportedVersion,

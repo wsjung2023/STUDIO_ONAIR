@@ -246,14 +246,17 @@ int main(int argc, char* argv[]) {
     {
         const std::filesystem::path appDir{
             QGuiApplication::applicationDirPath().toStdWString()};
-        const auto modelPath = appDir / L"resources" / L"avatar" / L"model.inp";
-        const auto runtimePath = appDir / L"inochi2d-c.dll";
+        const auto modelPath = appDir / L"resources" / L"avatar" / L"model.inx";
+        // The audited Inochi2D runtime is a staged directory (runtime-manifest.json,
+        // LICENSE, notices, bin/*.dll), not a single DLL: openVerified() leases and
+        // SHA-verifies the whole prefix before it maps the library.
+        const auto runtimeRoot = appDir / L"inochi2d-runtime";
         std::error_code modelError;
         std::error_code runtimeError;
         if (std::filesystem::is_regular_file(modelPath, modelError) &&
-            std::filesystem::is_regular_file(runtimePath, runtimeError)) {
+            std::filesystem::is_directory(runtimeRoot, runtimeError)) {
             if (auto real = creator::avatar::inochi2d::Inochi2dAvatarRenderer::open(
-                    runtimePath, modelPath, kAvatarWidth, kAvatarHeight);
+                    runtimeRoot, modelPath, kAvatarWidth, kAvatarHeight);
                 real.hasValue()) {
                 avatarRenderer = std::move(real).value();
                 avatarRealModel = true;
