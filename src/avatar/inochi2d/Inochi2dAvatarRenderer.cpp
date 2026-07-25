@@ -43,9 +43,10 @@ void fitBatchesToFrame(std::vector<AvatarSoftwareRenderInput>& batches,
     if (!(maxX - minX > 0.0F) || !(fullHeight > 0.0F)) return;
 
     // Keep the top portion (head + shoulders/upper chest). Tuned to Inochi2D
-    // full-body puppets; a value near 0.35 lands a natural head-and-shoulders shot.
-    // Overridable via CS_INOCHI2D_CROP for visual tuning without a rebuild.
-    float upperBodyFraction = 0.35F;
+    // full-body puppets; ~0.55 lands a natural head-and-upper-body VTuber shot
+    // (0.3 crops into the face, 1.0 shows the whole body). Overridable via
+    // CS_INOCHI2D_CROP for tuning without a rebuild.
+    float upperBodyFraction = 0.55F;
     {
         char buf[16] = {0};
         std::size_t len = 0;

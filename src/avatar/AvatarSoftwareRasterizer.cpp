@@ -254,7 +254,7 @@ core::Result<AvatarRenderFrame> AvatarSoftwareRasterizer::render(
     command.indices.assign(indices.begin(), indices.end());
     command.texture = texture;
     std::vector<std::uint8_t> pixels(
-        static_cast<std::size_t>(width) * height * 4U, 0U);
+        static_cast<std::size_t>(width) * height * 4U, std::uint8_t{0});
     drawCommand(pixels, width, height, command, nullptr, 0U);
     return AvatarRenderFrame::fromBgra(timestamp, width, height, width * 4U,
                                        std::move(pixels));
@@ -282,17 +282,17 @@ core::Result<AvatarRenderFrame> AvatarSoftwareRasterizer::renderBatches(
     // and each composite group pushes an offscreen buffer. `mask` is the shared
     // single-channel coverage for a define-mask/masked-draw run.
     std::vector<std::vector<std::uint8_t>> targets;
-    targets.emplace_back(frameBytes, 0U);
+    targets.emplace_back(frameBytes, std::uint8_t{0});
     std::vector<std::vector<std::uint8_t>> pendingComposites;
     std::vector<std::uint8_t> mask(static_cast<std::size_t>(frameWidth * frameHeight),
-                                   0U);
+                                   std::uint8_t{0});
     bool inMaskRun = false;
 
     for (const auto& command : batches) {
         switch (static_cast<AvatarDrawState>(command.state)) {
             case AvatarDrawState::CompositeBegin:
                 inMaskRun = false;
-                targets.emplace_back(frameBytes, 0U);
+                targets.emplace_back(frameBytes, std::uint8_t{0});
                 break;
             case AvatarDrawState::CompositeEnd:
                 inMaskRun = false;
