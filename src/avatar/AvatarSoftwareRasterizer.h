@@ -21,10 +21,21 @@ struct AvatarTexture final {
     std::vector<std::uint8_t> bgra;
 };
 
+// Inochi2D compositing modes this rasteriser understands. Values match the
+// Inochi2D BlendMode enum ordinals emitted by the runtime's draw commands.
+enum class AvatarBlendMode : std::uint32_t {
+    Normal = 0,
+    Multiply = 1,
+    ClipToLower = 17,   // draw only within the alpha already below (mask-in)
+    SliceFromLower = 18,  // cut the alpha already below (mask-out)
+};
+
 struct AvatarSoftwareRenderInput final {
     std::vector<AvatarMeshVertex> vertices;
     std::vector<std::uint32_t> indices;
     AvatarTexture texture;
+    // Raw Inochi2D blend-mode ordinal; unknown modes fall back to Normal.
+    std::uint32_t blendMode{0};
 };
 
 /// Small CPU fallback for draw-list triangles. It is deliberately independent

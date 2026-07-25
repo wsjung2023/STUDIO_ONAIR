@@ -173,9 +173,40 @@ core::Result<AvatarRenderFrame> AvatarSoftwareRasterizer::renderBatches(
                                batch.indices, batch.texture);
         if (!rendered.hasValue()) return rendered.error();
         const auto bytes = rendered.value().bytes();
+        const auto mode = static_cast<AvatarBlendMode>(batch.blendMode);
         for (std::size_t offset = 0; offset < composited.size(); offset += 4U) {
             const float sourceAlpha = bytes[offset + 3U] / 255.0F;
             const float destinationAlpha = composited[offset + 3U] / 255.0F;
+
+            // ClipToLower / Multiply only paint inside the silhouette already
+            // below and never extend it -- this is how Inochi2D clips eye, mouth
+            // and blush layers to the face instead of letting them cover it.
+            if (mode == AvatarBlendMode::ClipToLower ||
+                mode == AvatarBlendMode::Multiply) {
+                if (destinationAlpha <= 0.0F || sourceAlpha <= 0.0F) continue;
+                for (std::size_t channel = 0; channel < 3U; ++channel) {
+                    float source = static_cast<float>(bytes[offset + channel]);
+                    if (mode == AvatarBlendMode::Multiply) {
+                        source = source *
+                                 static_cast<float>(composited[offset + channel]) / 255.0F;
+                    }
+                    const float destination =
+                        static_cast<float>(composited[offset + channel]);
+                    composited[offset + channel] = static_cast<std::uint8_t>(
+                        std::clamp(destination * (1.0F - sourceAlpha) + source * sourceAlpha,
+                                   0.0F, 255.0F));
+                }
+                continue;  // alpha (the silhouette) is unchanged
+            }
+
+            // SliceFromLower cuts the silhouette below where the source is opaque.
+            if (mode == AvatarBlendMode::SliceFromLower) {
+                const float outputAlpha = destinationAlpha * (1.0F - sourceAlpha);
+                composited[offset + 3U] = static_cast<std::uint8_t>(
+                    std::clamp(outputAlpha * 255.0F, 0.0F, 255.0F));
+                continue;  // colour is unchanged
+            }
+
             const float outputAlpha = sourceAlpha +
                                       destinationAlpha * (1.0F - sourceAlpha);
             for (std::size_t channel = 0; channel < 3U; ++channel) {

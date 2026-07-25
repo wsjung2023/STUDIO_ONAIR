@@ -222,6 +222,7 @@ public:
             AvatarSoftwareRenderInput batch;
             batch.vertices = vertices;
             batch.texture = std::move(texture).value();
+            batch.blendMode = command.blendMode;
             batch.indices.reserve(command.elemCount);
             bool commandInBounds = true;
             for (std::uint32_t offset = 0; offset < command.elemCount; ++offset) {
