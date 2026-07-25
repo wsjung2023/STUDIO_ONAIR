@@ -120,6 +120,55 @@ TEST(Inochi2dAvatarRendererTest, RendersRealPuppetToVisiblePixels) {
     dumpRgba(expressionFrame.value(), readEnv("CS_INOCHI2D_RENDER_OUT3"));
 }
 
+// Isolates parameter-driven expression from idle motion. At timestamp 0 the idle
+// breath/sway is exactly zero (sin(0)), so two independent puppets rendered at
+// the same timestamp differ ONLY by the parameters applied to one of them. This
+// proves the tracking channels actually deform the rigged face -- not merely that
+// a frame renders -- which the confounded base-vs-expression diff above cannot.
+TEST(Inochi2dAvatarRendererTest, ExpressionParametersChangeThePuppetAtRest) {
+    const std::string modelPath = readEnv("CS_INOCHI2D_SAMPLE_MODEL");
+    if (modelPath.empty() || !std::filesystem::exists(modelPath)) {
+        GTEST_SKIP() << "Set CS_INOCHI2D_SAMPLE_MODEL to a rigged .inp/.inx puppet to run.";
+    }
+    constexpr std::uint32_t kWidth = 512;
+    constexpr std::uint32_t kHeight = 512;
+    auto neutral = Inochi2dAvatarRenderer::open(
+        CS_INOCHI2D_ACTUAL_ROOT, std::filesystem::path{modelPath}, kWidth, kHeight);
+    ASSERT_TRUE(neutral.hasValue()) << neutral.error().message();
+    auto expressive = Inochi2dAvatarRenderer::open(
+        CS_INOCHI2D_ACTUAL_ROOT, std::filesystem::path{modelPath}, kWidth, kHeight);
+    ASSERT_TRUE(expressive.hasValue()) << expressive.error().message();
+
+    auto neutralFrame = neutral.value()->render(TimestampNs{}, {});
+    ASSERT_TRUE(neutralFrame.hasValue()) << neutralFrame.error().message();
+
+    // Names taken from the real rig: eyes closed, jaw open.
+    const std::vector<AvatarParameterValue> expression{
+        {"Eye:: Left:: Open", 0.0F},
+        {"Eye:: Right:: Open", 0.0F},
+        {"Mouth:: Jaw Open", 1.0F},
+    };
+    auto expressiveFrame = expressive.value()->render(TimestampNs{}, expression);
+    ASSERT_TRUE(expressiveFrame.hasValue()) << expressiveFrame.error().message();
+
+    const auto neutralBytes = neutralFrame.value().bytes();
+    const auto expressiveBytes = expressiveFrame.value().bytes();
+    ASSERT_EQ(neutralBytes.size(), expressiveBytes.size());
+    std::uint64_t differing = 0;
+    for (std::size_t i = 0; i + 3 < neutralBytes.size(); i += 4) {
+        if (neutralBytes[i] != expressiveBytes[i] ||
+            neutralBytes[i + 1] != expressiveBytes[i + 1] ||
+            neutralBytes[i + 2] != expressiveBytes[i + 2] ||
+            neutralBytes[i + 3] != expressiveBytes[i + 3]) {
+            ++differing;
+        }
+    }
+    // At rest the only variable is the parameters, so any material pixel change is
+    // attributable to them. Eyes closing plus an open jaw moves far more than this.
+    EXPECT_GT(differing, static_cast<std::uint64_t>(kWidth) * kHeight / 1000)
+        << "expression parameters did not change the rendered puppet at rest";
+}
+
 #endif  // CS_INOCHI2D_ACTUAL_ROOT
 
 }  // namespace
