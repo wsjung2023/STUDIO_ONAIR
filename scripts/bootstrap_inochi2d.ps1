@@ -24,6 +24,16 @@ $ExpectedLicenseSha256 =
 $OfficialSourceArchiveUrl =
     "https://github.com/Inochi2D/inochi2d/archive/66fa76834b28037db0c871c656563422f697879e.tar.gz"
 $RequiredLdcVersion = "1.40.0"
+$ExpectedLdcArchiveSha256 =
+    "57acfce11e746719e23fbc0dc116782d14208edcb468793c0476134594befd9f"
+$ExpectedLdcLicenseSha256 =
+    "528d3ccc8e94a99615943925ecef85b37334267da5b1c507775b9fbe8e972a7a"
+$ExpectedWindowsLdcRuntimeHashes = [ordered]@{
+    "druntime-ldc-shared.dll" =
+        "f33033d32bb3f18c031fce39d02b9268389b121eb204f6237009e7cabbcf45ad"
+    "phobos2-ldc-shared.dll" =
+        "25f313915a3b3b369eb65e529489459f7ebd24306edee3ef8d4bd4a9b7b3d4d4"
+}
 $RequiredSymbols = @(
     "in_puppet_load",
     "in_puppet_free",
@@ -128,6 +138,33 @@ if ($LASTEXITCODE -ne 0 -or
 $CompilerIdentity = ($CompilerLines | Select-Object -First 4) -join "; "
 $DubVersion = (& $Dub.Source --version) -join " "
 if ($LASTEXITCODE -ne 0) { throw "Could not identify DUB" }
+
+$LdcLicensePath = ""
+if ($Target -eq "windows-x64") {
+    if ([string]::IsNullOrWhiteSpace($LdcRoot)) {
+        throw "windows-x64 requires the audited portable LDC root"
+    }
+    $LdcLicensePath = Join-Path $LdcRoot "LICENSE"
+    if (-not (Test-Path -LiteralPath $LdcLicensePath -PathType Leaf)) {
+        throw "The audited LDC license notice is missing"
+    }
+    $ActualLdcLicenseHash = (Get-FileHash -LiteralPath $LdcLicensePath `
+        -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($ActualLdcLicenseHash -ne $ExpectedLdcLicenseSha256) {
+        throw "The audited LDC license notice changed"
+    }
+    foreach ($Name in $ExpectedWindowsLdcRuntimeHashes.Keys) {
+        $RuntimePath = Join-Path $LdcRoot "bin/$Name"
+        if (-not (Test-Path -LiteralPath $RuntimePath -PathType Leaf)) {
+            throw "The audited LDC runtime is missing: $Name"
+        }
+        $RuntimeHash = (Get-FileHash -LiteralPath $RuntimePath `
+            -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($RuntimeHash -ne $ExpectedWindowsLdcRuntimeHashes[$Name]) {
+            throw "The audited LDC runtime changed: $Name"
+        }
+    }
+}
 
 if (-not (Test-Path -LiteralPath $OfficialArchivePath -PathType Leaf)) {
     New-Item -ItemType Directory -Force -Path `
@@ -412,6 +449,40 @@ foreach ($Symbol in $RequiredSymbols) {
     }
 }
 
+if ($Target -eq "windows-x64") {
+    $AllowedSystemDlls = @(
+        "advapi32.dll", "comctl32.dll", "kernel32.dll", "msvfw32.dll",
+        "shell32.dll", "shlwapi.dll", "user32.dll", "vcruntime140.dll",
+        "ws2_32.dll"
+    )
+    $LibrariesToInspect = @($BuiltLibrary)
+    foreach ($Name in $ExpectedWindowsLdcRuntimeHashes.Keys) {
+        $LibrariesToInspect += (Join-Path $LdcRoot "bin/$Name")
+    }
+    foreach ($LibraryToInspect in $LibrariesToInspect) {
+        $DependencyOutput = (& $SymbolTool /nologo /dependents `
+            $LibraryToInspect) -join "`n"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not inspect Inochi2D runtime imports"
+        }
+        $ImportedDlls = @(
+            [regex]::Matches(
+                $DependencyOutput, '(?im)^\s+([a-z0-9_.+-]+\.dll)\s*$') |
+            ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() }
+        )
+        foreach ($ImportedDll in $ImportedDlls) {
+            $IsStagedRuntime =
+                $ExpectedWindowsLdcRuntimeHashes.Contains($ImportedDll)
+            $IsSystemRuntime =
+                $AllowedSystemDlls -contains $ImportedDll -or
+                $ImportedDll -match '^api-ms-win-[a-z0-9-]+\.dll$'
+            if (-not $IsStagedRuntime -and -not $IsSystemRuntime) {
+                throw "Undeclared non-system runtime import: $ImportedDll"
+            }
+        }
+    }
+}
+
 if (Test-Path -LiteralPath $InstallRoot) {
     Assert-StrictChildPath $BuildRoot $InstallRoot "Inochi2D install root"
     Remove-Item -LiteralPath $InstallRoot -Recurse -Force
@@ -421,6 +492,12 @@ New-Item -ItemType Directory -Force -Path `
     (Split-Path -Parent $StagedLibrary) | Out-Null
 Copy-Item -LiteralPath $BuiltLibrary -Destination $StagedLibrary
 Copy-Item -LiteralPath $LicensePath -Destination (Join-Path $InstallRoot "LICENSE")
+if ($Target -eq "windows-x64") {
+    foreach ($Name in $ExpectedWindowsLdcRuntimeHashes.Keys) {
+        Copy-Item -LiteralPath (Join-Path $LdcRoot "bin/$Name") `
+            -Destination (Join-Path $InstallRoot "bin/$Name")
+    }
+}
 
 # Preserve dependency notices verbatim. Metadata is UTF-8, while each license
 # body is appended as the exact byte sequence from its verified package archive.
@@ -467,6 +544,34 @@ try {
         }
         Write-ThirdPartyNoticeText "`n"
     }
+    if ($Target -eq "windows-x64") {
+        Write-ThirdPartyNoticeText `
+            "================================================================================`n"
+        Write-ThirdPartyNoticeText `
+            "Component: LDC druntime and Phobos`n"
+        Write-ThirdPartyNoticeText "Version: 1.40.0`n"
+        Write-ThirdPartyNoticeText `
+            "Source archive: https://github.com/ldc-developers/ldc/releases/download/v1.40.0/ldc2-1.40.0-windows-x64.7z`n"
+        Write-ThirdPartyNoticeText `
+            "Archive SHA-256: $ExpectedLdcArchiveSha256`n"
+        foreach ($Name in $ExpectedWindowsLdcRuntimeHashes.Keys) {
+            Write-ThirdPartyNoticeText `
+                "Runtime file: $Name SHA-256 $($ExpectedWindowsLdcRuntimeHashes[$Name])`n"
+        }
+        Write-ThirdPartyNoticeText "License: BSL-1.0 (runtime libraries)`n"
+        Write-ThirdPartyNoticeText "License file: LICENSE`n"
+        Write-ThirdPartyNoticeText `
+            "--------------------------------------------------------------------------------`n"
+        [byte[]]$LdcLicenseBytes =
+            [System.IO.File]::ReadAllBytes($LdcLicensePath)
+        $ThirdPartyNoticeStream.Write(
+            $LdcLicenseBytes, 0, $LdcLicenseBytes.Length)
+        if ($LdcLicenseBytes.Length -eq 0 -or
+            $LdcLicenseBytes[$LdcLicenseBytes.Length - 1] -ne 0x0a) {
+            $ThirdPartyNoticeStream.WriteByte(0x0a)
+        }
+        Write-ThirdPartyNoticeText "`n"
+    }
     $ThirdPartyNoticesPath =
         Join-Path $InstallRoot "THIRD_PARTY_NOTICES.txt"
     [System.IO.File]::WriteAllBytes(
@@ -499,6 +604,7 @@ $Manifest = [ordered]@{
         path = $StagedRelative
         sha256 = $LibraryHash
     }
+    runtime_dependencies = @()
     notice = [ordered]@{
         path = "LICENSE"
         sha256 = $ExpectedLicenseSha256
@@ -508,6 +614,15 @@ $Manifest = [ordered]@{
         sha256 = $ThirdPartyNoticesHash
     }
     symbols = $RequiredSymbols
+}
+if ($Target -eq "windows-x64") {
+    foreach ($Name in $ExpectedWindowsLdcRuntimeHashes.Keys) {
+        $Manifest.runtime_dependencies += [ordered]@{
+            path = "bin/$Name"
+            sha256 = $ExpectedWindowsLdcRuntimeHashes[$Name]
+            component = "LDC $RequiredLdcVersion BSL-1.0 runtime"
+        }
+    }
 }
 foreach ($Name in $PinnedDependencies.Keys) {
     $Manifest.dependencies[$Name] = [ordered]@{
@@ -524,6 +639,14 @@ $ManifestPath = Join-Path $InstallRoot "runtime-manifest.json"
     -RuntimeRoot $InstallRoot -ExpectedTarget $Target
 if ($LASTEXITCODE -ne 0) {
     throw "Generated Inochi2D runtime did not pass verification"
+}
+if ($Target -eq "windows-x64") {
+    & (Join-Path $RepositoryRoot `
+        "tests/scripts/Inochi2dRuntimeLoadProbeTest.ps1") `
+        -RuntimeRoot $InstallRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw "Generated Inochi2D runtime did not load from a clean prefix"
+    }
 }
 Write-Host "Audited Inochi2D root: $InstallRoot"
 Write-Host "CS_INOCHI2D_ROOT=$InstallRoot"

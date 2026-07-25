@@ -245,6 +245,7 @@ Result<Inochi2dRuntimeInfo> Inochi2dRuntimeManifest::loadAndVerify(
     std::string noticeSha256;
     std::string thirdPartyNoticesRelative;
     std::string thirdPartyNoticesSha256;
+    std::vector<std::pair<std::string, std::string>> runtimeDependencies;
     Inochi2dRuntimeInfo info;
     try {
         std::ifstream input(manifestPath, std::ios::binary);
@@ -292,6 +293,48 @@ Result<Inochi2dRuntimeInfo> Inochi2dRuntimeManifest::loadAndVerify(
                 return unsupported(
                     "Inochi2D runtime dependency set is not approved");
             }
+        }
+        const auto& runtimeDependencyJson =
+            manifest.at("runtime_dependencies");
+        if (!runtimeDependencyJson.is_array()) {
+            return unsupported(
+                "Inochi2D runtime dependency closure is not approved");
+        }
+        if (platform.target == "windows-x64") {
+            const std::unordered_set<std::string> expectedRuntimeDependencies{
+                "bin/druntime-ldc-shared.dll",
+                "bin/phobos2-ldc-shared.dll"};
+            if (runtimeDependencyJson.size() !=
+                expectedRuntimeDependencies.size()) {
+                return unsupported(
+                    "Inochi2D runtime dependency closure is not approved");
+            }
+            std::unordered_set<std::string> seen;
+            for (const auto& value : runtimeDependencyJson) {
+                if (!value.is_object() || value.size() != 3U ||
+                    value.at("component").get<std::string>() !=
+                        "LDC 1.40.0 BSL-1.0 runtime") {
+                    return unsupported(
+                        "Inochi2D runtime dependency closure is not approved");
+                }
+                auto relative = value.at("path").get<std::string>();
+                auto sha256 = value.at("sha256").get<std::string>();
+                if (!expectedRuntimeDependencies.contains(relative) ||
+                    !seen.emplace(relative).second ||
+                    !isLowerHexSha256(sha256)) {
+                    return unsupported(
+                        "Inochi2D runtime dependency closure is not approved");
+                }
+                if (auto valid = validateRelativePath(relative);
+                    !valid.hasValue()) {
+                    return valid.error();
+                }
+                runtimeDependencies.emplace_back(
+                    std::move(relative), std::move(sha256));
+            }
+        } else if (!runtimeDependencyJson.empty()) {
+            return unsupported(
+                "Inochi2D runtime dependency closure is not approved");
         }
 
         libraryRelative = manifest.at("library").at("path").get<std::string>();
@@ -384,10 +427,15 @@ Result<Inochi2dRuntimeInfo> Inochi2dRuntimeManifest::loadAndVerify(
     const std::unordered_set<std::string> expectedFiles{
         keyFor("runtime-manifest.json"), keyFor(libraryRelative),
         keyFor(noticeRelative), keyFor(thirdPartyNoticesRelative)};
-    if (actualFiles.size() != expectedFiles.size() ||
+    auto completeExpectedFiles = expectedFiles;
+    for (const auto& [relative, unusedHash] : runtimeDependencies) {
+        static_cast<void>(unusedHash);
+        completeExpectedFiles.emplace(keyFor(relative));
+    }
+    if (actualFiles.size() != completeExpectedFiles.size() ||
         std::any_of(actualFiles.begin(), actualFiles.end(),
                     [&](const auto& entry) {
-                        return !expectedFiles.contains(entry.first);
+                        return !completeExpectedFiles.contains(entry.first);
                     })) {
         return invalid(
             "Inochi2D runtime contains an unexpected staged artifact");
@@ -416,6 +464,20 @@ Result<Inochi2dRuntimeInfo> Inochi2dRuntimeManifest::loadAndVerify(
     if (actualThirdPartyNoticesHash.value() != thirdPartyNoticesSha256) {
         return AppError{ErrorCode::IoFailure,
                         "Inochi2D third-party notices hash does not match"};
+    }
+    for (const auto& [relative, expectedHash] : runtimeDependencies) {
+        const auto path = root / pathFromUtf8(relative);
+        if (isReparsePoint(path)) {
+            return invalid(
+                "Inochi2D runtime contains a redirected artifact");
+        }
+        auto actualHash = core::sha256File(path);
+        if (!actualHash.hasValue()) return actualHash.error();
+        if (actualHash.value() != expectedHash) {
+            return AppError{
+                ErrorCode::IoFailure,
+                "Inochi2D runtime dependency hash does not match"};
+        }
     }
     if (!isExpectedArchitecture(library, platform.target)) {
         return unsupported(

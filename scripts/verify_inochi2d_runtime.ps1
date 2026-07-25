@@ -14,6 +14,12 @@ $ExpectedArchiveSha256 =
     "79f1f51641380ac992b5ecca2ab49245f111517ca4185ca832ffb0460f6cd4fb"
 $ExpectedNoticeSha256 =
     "f79f6e26fa823e5c1881490bfee86627de43fc461ddeab4d80dc7af87cfc1743"
+$ExpectedWindowsLdcRuntimeHashes = [ordered]@{
+    "bin/druntime-ldc-shared.dll" =
+        "f33033d32bb3f18c031fce39d02b9268389b121eb204f6237009e7cabbcf45ad"
+    "bin/phobos2-ldc-shared.dll" =
+        "25f313915a3b3b369eb65e529489459f7ebd24306edee3ef8d4bd4a9b7b3d4d4"
+}
 $RequiredSymbols = @(
     "in_puppet_load",
     "in_puppet_free",
@@ -190,6 +196,28 @@ if (@($Manifest.dependencies.PSObject.Properties).Count -ne
     $PinnedDependencies.Count) {
     throw "Inochi2D runtime dependency set is not approved"
 }
+if ($ExpectedTarget -eq "windows-x64") {
+    $RuntimeDependencies = @($Manifest.runtime_dependencies)
+    if ($RuntimeDependencies.Count -ne
+        $ExpectedWindowsLdcRuntimeHashes.Count) {
+        throw "Inochi2D LDC runtime dependency set is not approved"
+    }
+    foreach ($ExpectedPath in $ExpectedWindowsLdcRuntimeHashes.Keys) {
+        $Matches = @(
+            $RuntimeDependencies |
+            Where-Object { $_.path -ceq $ExpectedPath }
+        )
+        if ($Matches.Count -ne 1 -or
+            $Matches[0].sha256 -cne
+                $ExpectedWindowsLdcRuntimeHashes[$ExpectedPath] -or
+            $Matches[0].component -cne "LDC 1.40.0 BSL-1.0 runtime") {
+            throw "Inochi2D LDC runtime dependency is not approved: $ExpectedPath"
+        }
+    }
+}
+elseif (@($Manifest.runtime_dependencies).Count -ne 0) {
+    throw "Inochi2D runtime declares an unapproved target dependency"
+}
 foreach ($Name in $PinnedDependencies.Keys) {
     $Expected = $PinnedDependencies[$Name]
     $Actual = $Manifest.dependencies.$Name
@@ -234,6 +262,9 @@ $ExpectedFiles = @(
     "LICENSE",
     "THIRD_PARTY_NOTICES.txt"
 )
+if ($ExpectedTarget -eq "windows-x64") {
+    $ExpectedFiles += @($ExpectedWindowsLdcRuntimeHashes.Keys)
+}
 $ActualFiles = @()
 foreach ($Item in Get-ChildItem -LiteralPath $RuntimeRoot -Recurse -Force) {
     if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
@@ -267,6 +298,18 @@ $ThirdPartyNoticesSha256 = (Get-FileHash -LiteralPath $ThirdPartyNoticesPath `
 if ($ThirdPartyNoticesSha256 -ne
     $Manifest.third_party_notices.sha256) {
     throw "Inochi2D third-party notices SHA256 mismatch"
+}
+if ($ExpectedTarget -eq "windows-x64") {
+    foreach ($Relative in $ExpectedWindowsLdcRuntimeHashes.Keys) {
+        $DependencyPath = Resolve-ContainedPath $RuntimeRoot $Relative
+        Assert-RegularUnredirectedFile $DependencyPath `
+            "Inochi2D LDC runtime dependency"
+        $DependencyHash = (Get-FileHash -LiteralPath $DependencyPath `
+            -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($DependencyHash -ne $ExpectedWindowsLdcRuntimeHashes[$Relative]) {
+            throw "Inochi2D LDC runtime dependency SHA256 mismatch: $Relative"
+        }
+    }
 }
 Assert-TargetArchitecture $LibraryPath $ExpectedTarget
 

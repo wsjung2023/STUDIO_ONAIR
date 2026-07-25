@@ -6,10 +6,13 @@ $RepositoryRoot = [System.IO.Path]::GetFullPath(
     (Join-Path $PSScriptRoot "../.."))
 $BootstrapPath = Join-Path $RepositoryRoot "scripts/bootstrap_inochi2d.ps1"
 $VerifierPath = Join-Path $RepositoryRoot "scripts/verify_inochi2d_runtime.ps1"
+$LoadProbePath = Join-Path $RepositoryRoot `
+    "tests/scripts/Inochi2dRuntimeLoadProbeTest.ps1"
 $ManifestHeader = Join-Path $RepositoryRoot `
     "src/avatar/inochi2d/Inochi2dRuntimeManifest.cpp"
 
-foreach ($Required in @($BootstrapPath, $VerifierPath, $ManifestHeader)) {
+foreach ($Required in @(
+    $BootstrapPath, $VerifierPath, $LoadProbePath, $ManifestHeader)) {
     if (-not (Test-Path -LiteralPath $Required -PathType Leaf)) {
         throw "Missing Inochi2D policy artifact: $Required"
     }
@@ -68,10 +71,30 @@ foreach ($Pattern in @(
     'intel-intrinsics"\s*=\s*"BSL-1\.0"',
     'nulib"\s*=\s*"BSL-1\.0"',
     'numem"\s*=\s*"BSL-1\.0"',
-    'silly"\s*=\s*"ISC"'
+    'silly"\s*=\s*"ISC"',
+    'druntime-ldc-shared\.dll',
+    'phobos2-ldc-shared\.dll',
+    'f33033d32bb3f18c031fce39d02b9268389b121eb204f6237009e7cabbcf45ad',
+    '25f313915a3b3b369eb65e529489459f7ebd24306edee3ef8d4bd4a9b7b3d4d4',
+    '528d3ccc8e94a99615943925ecef85b37334267da5b1c507775b9fbe8e972a7a',
+    'LDC druntime and Phobos',
+    'runtime_dependencies'
 )) {
     if ($Bootstrap -notmatch $Pattern) {
         throw "Inochi2D bootstrap omits required license evidence: $Pattern"
+    }
+}
+
+$LoadProbe = Get-Content -LiteralPath $LoadProbePath -Raw -Encoding utf8
+foreach ($Pattern in @(
+    'LoadLibraryExW',
+    'LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR',
+    'LOAD_LIBRARY_SEARCH_SYSTEM32',
+    'GetProcAddress',
+    'in_puppet_draw'
+)) {
+    if ($LoadProbe -notmatch $Pattern) {
+        throw "Inochi2D load probe omits hardened evidence: $Pattern"
     }
 }
 
@@ -159,7 +182,8 @@ foreach ($DependencyRow in @(
     "Inochi2D intel-intrinsics",
     "Inochi2D nulib",
     "Inochi2D numem",
-    "Inochi2D silly"
+    "Inochi2D silly",
+    "Inochi2D LDC runtime"
 )) {
     if ($Bom -notmatch "(?m)^$([regex]::Escape($DependencyRow)),") {
         throw "Inochi2D OSS BOM is missing dependency row: $DependencyRow"

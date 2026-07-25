@@ -756,6 +756,15 @@ if(WIN32)
             -File
                 "${PROJECT_SOURCE_DIR}/tests/scripts/Inochi2dBootstrapPolicyTest.ps1"
     )
+    if(CS_ENABLE_INOCHI2D)
+        add_test(
+            NAME Inochi2dRuntimeLoadProbe
+            COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File
+                    "${PROJECT_SOURCE_DIR}/tests/scripts/Inochi2dRuntimeLoadProbeTest.ps1"
+                -RuntimeRoot "${CS_INOCHI2D_ROOT}"
+        )
+    endif()
     add_test(
         NAME MltBootstrapPolicy
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass

@@ -128,6 +128,20 @@ public:
         }
         const auto hash = creator::core::sha256File(library);
         ASSERT_TRUE(hash.hasValue()) << hash.error().message();
+        std::array<std::pair<std::string, std::string>, 2> runtimeDependencies{{
+            {"bin/druntime-ldc-shared.dll", {}},
+            {"bin/phobos2-ldc-shared.dll", {}},
+        }};
+        for (auto& [relative, dependencyHash] : runtimeDependencies) {
+            const auto dependency = root_ / fs::path{relative};
+            fs::create_directories(dependency.parent_path());
+            std::ofstream output(dependency, std::ios::binary | std::ios::trunc);
+            output << "real dependency fixture: " << relative;
+            output.close();
+            auto hashResult = creator::core::sha256File(dependency);
+            ASSERT_TRUE(hashResult.hasValue()) << hashResult.error().message();
+            dependencyHash = std::move(hashResult).value();
+        }
         const auto thirdPartyHash =
             creator::core::sha256File(root_ / "THIRD_PARTY_NOTICES.txt");
         ASSERT_TRUE(thirdPartyHash.hasValue())
@@ -155,6 +169,14 @@ public:
                "\"771688ea0ac4990e8576de4cdcdb381449d78d9edf7a6a7d55adeccfe46d94cc\"},"
                "\"silly\":{\"version\":\"1.1.1\",\"archive_sha256\":"
                "\"ffb78e740db5ab36c216c349ec36548a91c66fd1b69b980c1fd3e912ce8ae73b\"}},"
+               "\"runtime_dependencies\":[{\"path\":\""
+            << runtimeDependencies[0].first << "\",\"sha256\":\""
+            << runtimeDependencies[0].second
+            << "\",\"component\":\"LDC 1.40.0 BSL-1.0 runtime\"},"
+               "{\"path\":\""
+            << runtimeDependencies[1].first << "\",\"sha256\":\""
+            << runtimeDependencies[1].second
+            << "\",\"component\":\"LDC 1.40.0 BSL-1.0 runtime\"}],"
                "\"target\":\""
             << (targetOverride.empty() ? platform.target : targetOverride)
             << "\",\"target_triple\":\"" << platform.triple
@@ -195,6 +217,12 @@ public:
 
     void tamperThirdPartyNotices() const {
         std::ofstream output(root_ / "THIRD_PARTY_NOTICES.txt",
+                             std::ios::binary | std::ios::trunc);
+        output << "tampered";
+    }
+
+    void tamperRuntimeDependency() const {
+        std::ofstream output(root_ / "bin/druntime-ldc-shared.dll",
                              std::ios::binary | std::ios::trunc);
         output << "tampered";
     }
@@ -330,6 +358,18 @@ TEST(Inochi2dRuntimeManifestTest, RejectsChangedThirdPartyNotices) {
     RuntimeFixture fixture;
     fixture.writeValidRuntime();
     fixture.tamperThirdPartyNotices();
+
+    const auto result = Inochi2dRuntimeManifest::loadAndVerify(fixture.root());
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
+}
+
+TEST(Inochi2dRuntimeManifestTest, RejectsChangedRuntimeDependency) {
+    if (!platformIsSupported()) GTEST_SKIP() << "Unsupported bootstrap host";
+    RuntimeFixture fixture;
+    fixture.writeValidRuntime();
+    fixture.tamperRuntimeDependency();
 
     const auto result = Inochi2dRuntimeManifest::loadAndVerify(fixture.root());
 
