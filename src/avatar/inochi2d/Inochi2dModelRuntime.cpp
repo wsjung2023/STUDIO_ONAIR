@@ -203,16 +203,31 @@ public:
         }
 
         std::vector<AvatarSoftwareRenderInput> batches;
+        std::uint32_t compositeDepth = 0;
         for (std::uint32_t commandIndex = 0; commandIndex < commandCount;
              ++commandIndex) {
             const auto& command = commands[commandIndex];
-            if (command.elemCount == 0U) continue;
-            // A mask-definition pass (IN_DRAW_STATE_DEFINE_MASK = 1) draws a shape
-            // into the stencil, not the colour buffer. The reference consumer never
-            // paints it; rendering it as visible geometry lays an opaque mask
-            // silhouette over the character (a solid shape across the face), so
-            // skip mask-definition draws here.
-            if (command.state == 1U) continue;
+            // Draw-list state machine, matching Inochi2D's reference consumer.
+            // Only NORMAL commands paint the colour buffer. Mask-definition and
+            // mask push/pop passes are stencil control; drawing them as visible
+            // geometry lays opaque mask silhouettes over the character (a solid
+            // shape across the face). Composite-group CONTENT is rendered
+            // offscreen and blitted by its group -- with no offscreen path we
+            // skip it, as the reference consumer does, rather than drawing it
+            // unblended over the puppet.
+            switch (command.state) {
+                case 4U:  // IN_DRAW_STATE_COMPOSITE_BEGIN
+                    ++compositeDepth;
+                    continue;
+                case 5U:  // IN_DRAW_STATE_COMPOSITE_END
+                    if (compositeDepth > 0U) --compositeDepth;
+                    continue;
+                case 0U:  // IN_DRAW_STATE_NORMAL -- the only colour-drawing state
+                    break;
+                default:  // DEFINE_MASK, PUSH/POP_MASK, COMPOSITE_BLIT
+                    continue;
+            }
+            if (compositeDepth > 0U || command.elemCount == 0U) continue;
             const auto end = static_cast<std::uint64_t>(command.idxOffset) +
                              command.elemCount;
             // Skip a command this software rasteriser cannot safely draw -- an
