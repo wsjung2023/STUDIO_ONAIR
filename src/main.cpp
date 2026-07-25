@@ -581,13 +581,15 @@ int main(int argc, char* argv[]) {
             {QStringLiteral("mobile-export"), 390, 844, QStringLiteral("Export")},
         });
 
-        struct UxState { int phase = 0; int ticks = 0; int index = 0; int total = 0; };
+        struct UxState { int phase = 0; int ticks = 0; int index = 0; int total = 0;
+                         bool avatarSaved = false; };
         auto ux = std::make_shared<UxState>();
 
         auto* driver = new QTimer(&app);
         driver->setInterval(90);
         QObject::connect(driver, &QTimer::timeout, &app,
-            [&engine, &projectController, shotDir, shots, ux, driver]() mutable {
+            [&engine, &projectController, &avatarSceneController, shotDir, shots, ux,
+             driver]() mutable {
             ++ux->ticks;
             if (++ux->total > 1200) {
                 qWarning("[uxshot] timeout");
@@ -644,6 +646,27 @@ int main(int argc, char* argv[]) {
                           shot.width(), shot.height());
                 } else {
                     qWarning("[uxshot] failed to save %s", qUtf8Printable(path));
+                }
+                // Studio hosts the avatar overlay, but grabWindow() cannot capture
+                // the RHI-backed video item in an automated run. Render the live
+                // avatar frame directly (same pipeline_/provider_ as the on-screen
+                // preview) to prove the real puppet is producing frames in-app.
+                if (s.page == QStringLiteral("Studio") && !ux->avatarSaved) {
+                    const QImage face = avatarSceneController.renderDiagnosticImage(0.0);
+                    const QString facePath =
+                        shotDir + QStringLiteral("/avatar_face.png");
+                    if (!face.isNull() && face.save(facePath)) {
+                        qInfo("[uxshot] saved avatar_face.png (%dx%d) capturing=%d "
+                              "frames=%llu label=\"%s\"",
+                              face.width(), face.height(),
+                              static_cast<int>(avatarSceneController.avatarCapturing()),
+                              static_cast<unsigned long long>(
+                                  avatarSceneController.producedFrames()),
+                              qUtf8Printable(avatarSceneController.trackingLabel()));
+                    } else {
+                        qWarning("[uxshot] avatar_face.png render was null");
+                    }
+                    ux->avatarSaved = true;
                 }
                 ++ux->index;
                 ux->phase = 2;
