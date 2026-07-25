@@ -319,9 +319,12 @@ int main(int argc, char* argv[]) {
     }
     if (!avatarProvider) {
         avatarProvider = std::make_unique<creator::avatar::SyntheticFaceTrackingProvider>();
-        avatarCameraLive = [&deviceCaptureController] {
-            return deviceCaptureController.cameraCapturing();
-        };
+        // The synthetic tracker is a self-driving idle animation, not a real
+        // camera feed. Keep it "live" unconditionally so the avatar always
+        // breathes/blinks/sways -- otherwise, on Windows (which has no in-app
+        // camera capture) the avatar's expression phase would freeze and it would
+        // look like a dead, motionless picture.
+        avatarCameraLive = [] { return true; };
     }
     creator::app::AvatarSceneController avatarSceneController{
         std::move(avatarProvider),
