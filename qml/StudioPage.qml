@@ -150,10 +150,12 @@ Item {
         // Avatar discoverability: the VTuber avatar starts automatically on
         // entering Studio so creators see it immediately, instead of having to
         // scroll to the bottom of the left panel to find "Start Avatar" and
-        // concluding the avatar "doesn't show up". Guarded so a re-entry does
-        // not restart an already-running avatar.
-        if (avatarSceneController.avatarStyleSelectable
-                && !avatarSceneController.avatarCanStop) {
+        // concluding the avatar "doesn't show up". The only guard is "not already
+        // running" (avatarCanStop) so re-entry does not restart it. It must NOT
+        // gate on avatarStyleSelectable: that is false for a real Inochi2D puppet
+        // (no first-party character control), which previously left the real
+        // avatar un-started and invisible on entering Studio.
+        if (!avatarSceneController.avatarCanStop) {
             avatarSceneController.setAvatarEnabled(true)
         }
         // The screen source only produces frames (for preview AND recording)
