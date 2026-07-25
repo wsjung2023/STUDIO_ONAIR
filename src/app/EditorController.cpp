@@ -1,6 +1,7 @@
 #include "app/EditorController.h"
 
 #include "app/EditorEngineWorker.h"
+#include "app/EditorPreviewAudioOutput.h"
 #include "app/EditorSessionWorker.h"
 #include "app/RecentProjectRegistry.h"
 #include "transcription/TranscriptStore.h"
@@ -8,6 +9,7 @@
 #include <QMetaObject>
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <utility>
 
@@ -120,6 +122,11 @@ EditorController::EditorController(
             &EditorController::handleCompleted);
     connect(worker_, &EditorEngineWorker::frameCompleted, this,
             &EditorController::handleFrameCompleted);
+    connect(worker_, &EditorEngineWorker::audioCompleted, this,
+            &EditorController::handleAudioCompleted);
+    audioOutput_ = std::make_unique<EditorPreviewAudioOutput>();
+    connect(audioOutput_.get(), &EditorPreviewAudioOutput::errorOccurred, this,
+            [this](const QString& message) { setStatus(message); });
     sessionWorker_->moveToThread(&sessionThread_);
     connect(&sessionThread_, &QThread::finished, sessionWorker_,
             &QObject::deleteLater);
@@ -136,6 +143,7 @@ EditorController::EditorController(
 
 EditorController::~EditorController() {
     playbackTimer_.stop();
+    if (audioOutput_) audioOutput_->stop();
     QMetaObject::invokeMethod(sessionWorker_, [] {},
                               Qt::BlockingQueuedConnection);
     disconnect(sessionWorker_, nullptr, this, nullptr);
@@ -381,6 +389,7 @@ void EditorController::pause() {
         return;
     }
     playbackTimer_.stop();
+    if (audioOutput_) audioOutput_->stop();
     queueSimple(EditorEngineOperation::Pause);
 }
 
@@ -1245,6 +1254,63 @@ void EditorController::queueFrame(core::TimestampNs position) {
     dispatchNext();
 }
 
+void EditorController::queueAudio(core::TimestampNs position,
+                                  std::uint32_t samples) {
+    if (!snapshot_.has_value() || previewStale_ || audioRequestInFlight_ ||
+        samples == 0U || !audioOutput_ || !audioOutput_->active()) {
+        return;
+    }
+    const quint64 commandId =
+        beginCommand(EditorEngineOperation::Audio, position, false,
+                     snapshot_->revision.value());
+    audioRequestInFlight_ = true;
+    QueuedCommand command{generation_,   commandId, EditorEngineOperation::Audio,
+                          position,       std::nullopt, std::nullopt, samples};
+    // Editing to sound needs continuous audio: jump the queue ahead of any
+    // pending video frames so the single-threaded MLT worker refills the sink
+    // before it renders the next (much heavier) preview frame.
+    queuedCommands_.push_front(std::move(command));
+    dispatchNext();
+}
+
+void EditorController::scheduleAudioPull() {
+    if (!playing_ || !snapshot_.has_value() || previewStale_ ||
+        audioRequestInFlight_ || !audioOutput_ || !audioOutput_->active()) {
+        return;
+    }
+    // Keep the sink's bounded ring topped up but not full: pull whenever the
+    // buffered lookahead falls below ~2/3 s. A generous target plus the
+    // multi-frame block below keeps the sink from underrunning (audible stutter)
+    // even when a worker round-trip is momentarily delayed.
+    constexpr std::uint32_t kTargetBufferedSamples =
+        EditorPreviewAudioOutput::kSampleRate * 2;
+    if (audioOutput_->queuedSamples() >= kTargetBufferedSamples) return;
+
+    const auto rate = snapshot_->timeline.frameRate();
+    const auto frameCount = timelineFrameCount(snapshot_->timeline);
+    if (frameCount <= 0) return;
+    const auto endPosition = core::frameToTimestamp(frameCount, rate);
+    if (audioPullPosition_ >= endPosition) return;
+
+    // Pull ~1/4 s of audio per round-trip. The worker accumulates that many
+    // samples across however many timeline frames it takes and returns them as
+    // one block, so the per-frame MLT cost is amortised over far fewer UI-thread
+    // round-trips than a one-frame-at-a-time pull. handleAudioCompleted advances
+    // the read position by the samples actually returned, so contiguity holds.
+    constexpr std::uint32_t kPullBlockSamples =
+        EditorPreviewAudioOutput::kSampleRate / 2;
+    queueAudio(audioPullPosition_, kPullBlockSamples);
+}
+
+void EditorController::restartAudioPull(core::TimestampNs from) {
+    audioPullPosition_ = from;
+    if (audioOutput_) audioOutput_->flush();
+    // Any pull already in flight was requested for the old position; mark it so
+    // its completion neither plays nor advances past the new position.
+    if (audioRequestInFlight_) audioPullInvalidated_ = true;
+    scheduleAudioPull();
+}
+
 void EditorController::dispatchNext() {
     if (workerCommandActive_ || queuedCommands_.empty()) return;
     workerCommandActive_ = true;
@@ -1289,6 +1355,21 @@ void EditorController::postToWorker(QueuedCommand command) {
                 worker_,
                 [worker = worker_, generation, commandId, position] {
                     worker->requestFrame(generation, commandId, position);
+                },
+                Qt::QueuedConnection);
+            break;
+        }
+        case EditorEngineOperation::Audio: {
+            const core::TimestampNs position = *command.position;
+            const quint32 frequency = EditorPreviewAudioOutput::kSampleRate;
+            const quint32 channels = EditorPreviewAudioOutput::kChannels;
+            const quint32 samples = command.audioSamples;
+            QMetaObject::invokeMethod(
+                worker_,
+                [worker = worker_, generation, commandId, position, frequency,
+                 channels, samples] {
+                    worker->requestAudio(generation, commandId, position,
+                                         frequency, channels, samples);
                 },
                 Qt::QueuedConnection);
             break;
@@ -1386,6 +1467,7 @@ void EditorController::handleCompleted(quint64 generation, quint64 commandId,
                     if (playing_) {
                         playbackStart_ = playhead_;
                         playbackClock_.restart();
+                        restartAudioPull(playhead_);
                     }
                     queueFrame(playhead_);
                     break;
@@ -1451,11 +1533,75 @@ void EditorController::handleFrameCompleted(
     dispatchNext();
 }
 
+void EditorController::handleAudioCompleted(
+    quint64 generation, quint64 commandId, bool success,
+    const QString& errorMessage, qlonglong positionNs, QByteArray pcm) {
+    const auto found = commands_.find(commandId);
+    if (found == commands_.end()) return;
+    const PendingCommand command = found->second;
+    const bool current = generation == generation_ &&
+                         command.generation == generation_ &&
+                         command.operation == EditorEngineOperation::Audio;
+    commands_.erase(found);
+    audioRequestInFlight_ = false;
+    workerCommandActive_ = false;
+    // A seek/flush that landed while this pull was in flight retargeted the read
+    // position; that stale audio must neither play nor advance the position.
+    const bool invalidated = audioPullInvalidated_;
+    audioPullInvalidated_ = false;
+
+    if (current && !invalidated) {
+        if (!success) {
+            setStatus(errorMessage);
+        } else if (audioOutput_ && audioOutput_->active() && !pcm.isEmpty()) {
+            constexpr auto kBytesPerFrame =
+                static_cast<qint64>(EditorPreviewAudioOutput::kChannels) *
+                static_cast<qint64>(sizeof(float));
+            const std::int64_t returnedSamples =
+                kBytesPerFrame > 0 ? pcm.size() / kBytesPerFrame : 0;
+            if (returnedSamples > 0) {
+                edit_engine::PreviewAudioBlock block{
+                    .position = core::TimestampNs{core::DurationNs{positionNs}},
+                    .frequency = EditorPreviewAudioOutput::kSampleRate,
+                    .channels = EditorPreviewAudioOutput::kChannels,
+                    .interleaved = {}};
+                block.interleaved.resize(
+                    static_cast<std::size_t>(returnedSamples) *
+                    EditorPreviewAudioOutput::kChannels);
+                std::memcpy(block.interleaved.data(), pcm.constData(),
+                            static_cast<std::size_t>(returnedSamples) *
+                                static_cast<std::size_t>(kBytesPerFrame));
+                audioOutput_->pushBlock(block);
+                // Round UP like frameToTimestamp so the next pull starts in the
+                // FOLLOWING frame; truncating would land a fraction of a
+                // nanosecond inside the last pulled frame and duplicate it.
+                constexpr std::int64_t kRate =
+                    EditorPreviewAudioOutput::kSampleRate;
+                audioPullPosition_ =
+                    core::TimestampNs{core::DurationNs{positionNs}} +
+                    core::DurationNs{
+                        (returnedSamples * 1'000'000'000LL + kRate - 1) / kRate};
+            }
+        }
+    }
+
+    scheduleAudioPull();
+    dispatchNext();
+}
+
 void EditorController::requestPlaybackFrame() {
+    // Keep audio flowing independently of the video-frame gating below so a
+    // frame still in flight never starves the sink.
+    scheduleAudioPull();
     if (!playing_ || !snapshot_.has_value() || previewStale_ ||
         frameRequestInFlight_) {
         return;
     }
+    // NOTE: no skip-video-when-audio-low gate here. Audio commands already
+    // jump the worker queue; a gate at any threshold starved the preview into
+    // a frozen frame whenever the mixer ran near real-time. Video always
+    // renders; if the machine cannot keep both real-time, audio pads silence
+    // briefly rather than the picture freezing.
     const auto elapsed = core::DurationNs{playbackClock_.nsecsElapsed()};
     const auto unquantized = playbackStart_ + elapsed;
     const auto rate = snapshot_->timeline.frameRate();
@@ -1494,8 +1640,16 @@ void EditorController::setPlaying(bool value) {
         const auto interval = std::max<std::int64_t>(
             1, (1000 * rate.denominator()) / rate.numerator());
         playbackTimer_.start(static_cast<int>(interval));
+        if (audioOutput_) {
+            // start() surfaces device/format failure through errorOccurred ->
+            // setStatus; video playback continues either way, so a missing audio
+            // device never blocks editing.
+            audioOutput_->start();
+            restartAudioPull(playhead_);
+        }
     } else {
         playbackTimer_.stop();
+        if (audioOutput_) audioOutput_->stop();
     }
     emit playingChanged();
 }

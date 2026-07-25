@@ -8,3 +8,11 @@
 *.DS_Store
 *.cstudio/
 *.cstudiozip
+
+# Local capture / proof artifacts. These may contain real desktop captures
+# (private content) and must never be committed. Keep proofs out of git history.
+/artifacts/
+/avatar-proof-*.png
+/creator-studio-*.png
+*.mkv
+*.mka

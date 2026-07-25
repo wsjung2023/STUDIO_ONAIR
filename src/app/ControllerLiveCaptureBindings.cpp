@@ -1,5 +1,6 @@
 #include "app/ControllerLiveCaptureBindings.h"
 
+#include "app/AvatarSceneController.h"
 #include "app/DeviceCaptureController.h"
 #include "app/ScreenCaptureController.h"
 #include "core/AppError.h"
@@ -8,13 +9,15 @@
 #include <QPointer>
 #include <QThread>
 
+#include <cstdio>
 #include <utility>
 
 namespace creator::app {
 
 ControllerLiveCaptureBindings::ControllerLiveCaptureBindings(
-    ScreenCaptureController* screen, DeviceCaptureController* devices)
-    : screen_(screen), devices_(devices) {}
+    ScreenCaptureController* screen, DeviceCaptureController* devices,
+    AvatarSceneController* avatar)
+    : screen_(screen), devices_(devices), avatar_(avatar) {}
 
 std::vector<LiveCaptureSource>
 ControllerLiveCaptureBindings::activeSources() const {
@@ -33,6 +36,15 @@ ControllerLiveCaptureBindings::activeSources() const {
         }
         if (auto id = devices_->activeSystemAudioSourceId()) {
             sources.push_back({std::move(*id), recorder::TrackRole::SystemAudio});
+        } else {
+            std::fprintf(stderr,
+                         "[capture-bind] system audio NOT active at record "
+                         "start; track will be missing\n");
+        }
+    }
+    if (avatar_) {
+        if (auto id = avatar_->activeAvatarSourceId()) {
+            sources.push_back({std::move(*id), recorder::TrackRole::Avatar});
         }
     }
     return sources;
@@ -59,11 +71,23 @@ core::Result<void> ControllerLiveCaptureBindings::attach(
         return core::ok();
     case recorder::TrackRole::SystemAudio:
         if (!devices_ || !audioSink ||
-            devices_->activeSystemAudioSourceId() != source.sourceId) break;
+            devices_->activeSystemAudioSourceId() != source.sourceId) {
+            std::fprintf(stderr,
+                         "[capture-bind] system audio attach REFUSED: "
+                         "devices=%d sink=%d idMatch=%d\n",
+                         devices_ != nullptr, audioSink != nullptr,
+                         devices_ && devices_->activeSystemAudioSourceId() ==
+                                         source.sourceId);
+            break;
+        }
         devices_->setSystemAudioRecordingSink(std::move(audioSink));
+        std::fprintf(stderr, "[capture-bind] system audio recording sink attached\n");
         return core::ok();
     case recorder::TrackRole::Avatar:
-        break;
+        if (!avatar_ || !videoSink ||
+            avatar_->activeAvatarSourceId() != source.sourceId) break;
+        avatar_->setAvatarRecordingSink(std::move(videoSink));
+        return core::ok();
     case recorder::TrackRole::CompositePreview:
         break;
     }
@@ -78,6 +102,7 @@ void ControllerLiveCaptureBindings::detachAll() noexcept {
         devices_->setMicrophoneRecordingSink({});
         devices_->setSystemAudioRecordingSink({});
     }
+    if (avatar_) avatar_->setAvatarRecordingSink({});
 }
 
 void ControllerLiveCaptureBindings::dispatch(std::function<void()> work) {

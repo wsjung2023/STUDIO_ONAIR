@@ -80,6 +80,59 @@ TEST_F(ProjectControllerTest, CreateRunsStoreOffUiThreadAndPublishesProject) {
     EXPECT_FALSE(controller_->busy());
 }
 
+TEST_F(ProjectControllerTest, PortraitProjectSurfacesCanvasAndVerticalDefaultsForPreview) {
+    // Open a project whose manifest declares a 9:16 (1080x1920) shorts canvas.
+    auto result = fake_->create(packagePath_, "Shorts").value();
+    result.package.manifest.canvas.width = 1080;
+    result.package.manifest.canvas.height = 1920;
+    fake_->setOpenResult(std::move(result));
+
+    QSignalSpy opened{controller_.get(), &ProjectController::projectOpened};
+    controller_->openProject(
+        QUrl::fromLocalFile(QString::fromStdWString(packagePath_.wstring())));
+    ASSERT_TRUE(opened.wait(3000));
+
+    // The canvas must now reach the live Studio page.
+    EXPECT_EQ(controller_->canvasWidth(), 1080);
+    EXPECT_EQ(controller_->canvasHeight(), 1920);
+    EXPECT_TRUE(controller_->portrait());
+
+    // Portrait defaults must match the shorts export layout (VerticalLayout):
+    // screen top band, camera lower band, avatar lower-corner PiP on top.
+    const auto screen =
+        controller_->defaultCompositionTransform(QStringLiteral("screen"));
+    ASSERT_FALSE(screen.isEmpty());
+    EXPECT_DOUBLE_EQ(screen.value(QStringLiteral("x")).toDouble(), 0.0);
+    EXPECT_DOUBLE_EQ(screen.value(QStringLiteral("y")).toDouble(), 0.04);
+    EXPECT_DOUBLE_EQ(screen.value(QStringLiteral("width")).toDouble(), 1.0);
+    EXPECT_DOUBLE_EQ(screen.value(QStringLiteral("height")).toDouble(), 0.316);
+
+    const auto camera =
+        controller_->defaultCompositionTransform(QStringLiteral("camera"));
+    ASSERT_FALSE(camera.isEmpty());
+    EXPECT_DOUBLE_EQ(camera.value(QStringLiteral("y")).toDouble(), 0.60);
+
+    const auto avatar =
+        controller_->defaultCompositionTransform(QStringLiteral("avatar"));
+    ASSERT_FALSE(avatar.isEmpty());
+    EXPECT_EQ(avatar.value(QStringLiteral("zOrder")).toInt(), 20);
+}
+
+TEST_F(ProjectControllerTest, LandscapeProjectReportsNoPortraitAndEmptyVerticalDefaults) {
+    // The Fake's default manifest is a landscape 1920x1080 canvas.
+    QSignalSpy opened{controller_.get(), &ProjectController::projectOpened};
+    controller_->openProject(
+        QUrl::fromLocalFile(QString::fromStdWString(packagePath_.wstring())));
+    ASSERT_TRUE(opened.wait(3000));
+
+    EXPECT_EQ(controller_->canvasWidth(), 1920);
+    EXPECT_EQ(controller_->canvasHeight(), 1080);
+    EXPECT_FALSE(controller_->portrait());
+    // Landscape keeps each source's own transform -> no forced vertical box.
+    EXPECT_TRUE(
+        controller_->defaultCompositionTransform(QStringLiteral("screen")).isEmpty());
+}
+
 TEST_F(ProjectControllerTest, OpenPublishesRecoveryCandidates) {
     auto result = fake_->create(packagePath_, "Recovery").value();
     result.recoveryCandidates.push_back(RecoveryCandidate{

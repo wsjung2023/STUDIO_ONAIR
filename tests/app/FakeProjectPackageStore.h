@@ -67,7 +67,8 @@ public:
     }
 
     core::Result<project_store::OpenProjectResult> create(
-        const std::filesystem::path& path, const std::string& name) override {
+        const std::filesystem::path& path, const std::string& name,
+        domain::CanvasSettings /*canvas*/ = {}) override {
         observeAndMaybeHold();
         return makeResult(path, name);
     }

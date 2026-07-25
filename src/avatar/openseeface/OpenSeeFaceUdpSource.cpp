@@ -97,12 +97,15 @@ public:
             stop();
             return socketError("OpenSeeFace UDP socket creation failed");
         }
-        int reuse = 1;
-        if (setsockopt(socket_, SOL_SOCKET, SO_REUSEADDR,
-                       reinterpret_cast<const char*>(&reuse), sizeof(reuse)) < 0) {
-            stop();
-            return socketError("OpenSeeFace UDP socket option failed");
-        }
+        // Deliberately do NOT set SO_REUSEADDR. This socket is the SOLE receiver
+        // of the tracker's unicast datagrams, and on Windows SO_REUSEADDR lets a
+        // second socket bind the same port and SILENTLY split the incoming
+        // packets between the two — so a leftover/second app instance would steal
+        // half the tracking datagrams and the live avatar would freeze at its last
+        // pose for no visible reason. Without it, a conflicting bind fails cleanly
+        // with "address in use", which create() surfaces so main.cpp falls back to
+        // synthetic tracking with a logged reason (CLAUDE.md 9) instead of a silent
+        // freeze. UDP has no TIME_WAIT, so the app's own restart rebinds fine.
 #ifdef _WIN32
         u_long nonBlocking = 1;
         if (ioctlsocket(socket_, FIONBIO, &nonBlocking) != 0) {

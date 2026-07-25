@@ -18,6 +18,12 @@ constexpr capture::CaptureConfig kPreviewConfig{};
 
 capture::CaptureConfig previewConfigFor(const capture::ScreenCaptureTarget& target) {
     auto config = kPreviewConfig;
+    // Capture the live preview at 30 fps, not the 60 fps default. Full-desktop
+    // gdigrab + BGRA conversion + software composite at 60 fps was a dominant
+    // CPU cost and made the whole app feel heavy/stuttery; 30 fps halves that
+    // work and is smooth for a preview. (Recording keeps its own cadence.)
+    config.frameRateNumerator = 30;
+    config.frameRateDenominator = 1;
     const auto widthScale = static_cast<double>(config.targetWidth) /
                             static_cast<double>(target.width());
     const auto heightScale = static_cast<double>(config.targetHeight) /
@@ -99,9 +105,12 @@ void ScreenCaptureController::requestPermission() {
 }
 
 void ScreenCaptureController::refreshTargets() {
+    // Re-enumerating monitors/windows does not touch the active capture source,
+    // so it is safe (and useful) while previewing -- the button used to no-op
+    // the moment the preview auto-started.
     if (!permission_ || permission_->status() !=
                             capture::ScreenCapturePermissionStatus::Granted ||
-        busy() || previewing()) {
+        busy()) {
         return;
     }
     beginDiscovery();
@@ -175,7 +184,11 @@ void ScreenCaptureController::handleDiscoveryResult(
 }
 
 void ScreenCaptureController::selectTarget(const QString& targetId) {
-    if (busy() || previewing()) return;
+    // Allow changing the monitor while a preview is running: the picker used to
+    // be disabled the instant the preview auto-started, so a creator could never
+    // switch monitors. Apply the choice and, if previewing, seamlessly restart
+    // the preview on the new target.
+    if (busy() && !previewing()) return;
     const auto found = std::find_if(targetSnapshot_.begin(), targetSnapshot_.end(),
                                     [&targetId](const auto& target) {
                                         return fromUtf8(target.id().value()) == targetId;
@@ -188,8 +201,56 @@ void ScreenCaptureController::selectTarget(const QString& targetId) {
         selectedTargetId_ = targetId;
         emit selectedTargetChanged();
     }
+    if (previewing()) {
+        restartPreviewAfterStop_ = true;
+        stopPreview();
+        return;
+    }
     if (state_ == ScreenCaptureState::Error) setState(ScreenCaptureState::Ready);
     setStatusMessage(tr("Ready to preview"));
+}
+
+void ScreenCaptureController::setRegion(int x, int y, int width, int height) {
+    if (busy() && !previewing()) return;
+    auto region = capture::makeScreenCaptureRegion(x, y, width, height);
+    if (!region.hasValue()) {
+        setStatusMessage(fromUtf8(region.error().message()));
+        return;
+    }
+    if (const auto* target = selectedTarget()) {
+        const auto bounded = capture::ensureRegionWithinBounds(
+            region.value(), target->width(), target->height());
+        if (!bounded.hasValue()) {
+            setStatusMessage(fromUtf8(bounded.error().message()));
+            return;
+        }
+    }
+    region_ = region.value();
+    emit regionChanged();
+    setStatusMessage(tr("Region capture set to %1×%2")
+                         .arg(region_->width)
+                         .arg(region_->height));
+    // Apply the new region live if a preview is running.
+    if (previewing()) {
+        restartPreviewAfterStop_ = true;
+        stopPreview();
+    }
+}
+
+void ScreenCaptureController::clearRegion() {
+    if (busy() && !previewing()) return;
+    const bool wasPreviewing = previewing();
+    if (!region_.has_value()) {
+        if (!wasPreviewing) return;
+    } else {
+        region_.reset();
+        emit regionChanged();
+        setStatusMessage(tr("Capturing the full screen"));
+    }
+    if (wasPreviewing) {
+        restartPreviewAfterStop_ = true;
+        stopPreview();
+    }
 }
 
 void ScreenCaptureController::startPreview() {
@@ -200,12 +261,35 @@ void ScreenCaptureController::startPreview() {
         return;
     }
 
+    // A region is re-validated against the current monitor geometry here so a
+    // stale rectangle (monitor unplugged/resized since it was set) is reported
+    // rather than captured out of bounds (CLAUDE.md 9).
+    std::optional<domain::CaptureTargetId> effectiveTargetId;
+    if (region_) {
+        const auto bounded = capture::ensureRegionWithinBounds(
+            *region_, target->width(), target->height());
+        if (!bounded.hasValue()) {
+            setState(ScreenCaptureState::Error);
+            setStatusMessage(fromUtf8(bounded.error().message()));
+            return;
+        }
+        auto encoded = domain::CaptureTargetId::create(
+            capture::encodeRegionTargetId(target->id().value(), *region_));
+        if (!encoded.hasValue()) {
+            setState(ScreenCaptureState::Error);
+            setStatusMessage(fromUtf8(encoded.error().message()));
+            return;
+        }
+        effectiveTargetId = std::move(encoded).value();
+    }
+
     setState(ScreenCaptureState::Starting);
     setStatusMessage(tr("Starting screen preview"));
     mailbox_ = std::make_shared<capture::LatestVideoFrameMailbox>();
     fanout_ = std::make_shared<capture::VideoFrameFanoutSink>(mailbox_);
     fanout_->setSecondary(recordingSink_);
-    auto created = sourceFactory_->create(target->id(), fanout_);
+    auto created = sourceFactory_->create(
+        effectiveTargetId ? *effectiveTargetId : target->id(), fanout_);
     if (!created.hasValue()) {
         fanout_.reset();
         mailbox_.reset();
@@ -282,6 +366,12 @@ void ScreenCaptureController::handleStopResult(std::uint64_t generation,
     }
     setState(targetSnapshot_.empty() ? ScreenCaptureState::Idle : ScreenCaptureState::Ready);
     setStatusMessage(tr("Preview stopped"));
+    // A monitor/region change requested this stop purely to re-apply itself;
+    // bring the preview back up on the new configuration.
+    if (restartPreviewAfterStop_) {
+        restartPreviewAfterStop_ = false;
+        startPreview();
+    }
 }
 
 void ScreenCaptureController::pollCapture() {

@@ -45,16 +45,20 @@ core::Result<ExportLoudnessDecision> ExportLoudnessAnalyzer::analyze(
         return added.error();
     }
 
-    const double measuredLufs = meter.value().integratedLufs();
-    const double truePeak = meter.value().truePeakDbtp();
+    // Hand the measured values to the shared decision so `analyze` (buffered)
+    // and a streaming exporter that calls `decide` directly cannot diverge.
+    return decide(meter.value().integratedLufs(), meter.value().truePeakDbtp());
+}
 
+ExportLoudnessDecision ExportLoudnessAnalyzer::decide(
+    double measuredLufs, double truePeakDbtp) const noexcept {
     // Near-silence guard, identical to LoudnessNormalizer: no valid measurement
     // (silence / too short) or below the noise floor is a documented no-op —
     // boosting it would only amplify noise.
     if (!std::isfinite(measuredLufs) ||
         measuredLufs < LoudnessNormalizer::kNoiseFloorLufs) {
         return ExportLoudnessDecision{measuredLufs,
-                                      truePeak,
+                                      truePeakDbtp,
                                       params_.targetLufs,
                                       params_.truePeakCeilingDbtp,
                                       0.0,
@@ -65,7 +69,7 @@ core::Result<ExportLoudnessDecision> ExportLoudnessAnalyzer::analyze(
     // LoudnessNormalizer's pass 2 would apply.
     const double gainDb = params_.targetLufs - measuredLufs;
     return ExportLoudnessDecision{measuredLufs,
-                                  truePeak,
+                                  truePeakDbtp,
                                   params_.targetLufs,
                                   params_.truePeakCeilingDbtp,
                                   gainDb,

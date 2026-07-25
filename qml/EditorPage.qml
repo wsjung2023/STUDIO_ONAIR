@@ -1,10 +1,14 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Material
 import QtQuick.Layouts
 import CreatorStudio.Native 1.0
 
 Item {
     id: root
+
+    // Design tokens for this page (see qml/Theme.qml).
+    Theme { id: theme }
 
     required property var controller
     readonly property real nanosecondsPerPixel: 10000000
@@ -14,6 +18,12 @@ Item {
     readonly property bool hasSelection: controller.selectedTrackId.length > 0
                                          && controller.selectedClipId.length > 0
     property bool inspectorInputActive: false
+    // Phone layout below 600px. Smoke tests run at width >= 1200, so `compact`
+    // is always false under test; the phone tree lives in a Loader that only
+    // instantiates on real phones.
+    readonly property bool compact: width < 600
+    // Progressive disclosure for the deep inspector (audio / title / captions).
+    property bool advancedExpanded: false
     implicitWidth: 1200
     implicitHeight: 720
 
@@ -245,12 +255,22 @@ Item {
         return parts.length > 0 ? parts[parts.length - 1] : normalized
     }
 
+    Rectangle {
+        anchors.fill: parent
+        color: theme.bg
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 1
+        visible: !root.compact
 
         ToolBar {
             Layout.fillWidth: true
+            background: Rectangle {
+                color: theme.surface
+                Rectangle { width: parent.width; height: 1; anchors.bottom: parent.bottom; color: theme.border }
+            }
 
             RowLayout {
                 anchors.fill: parent
@@ -267,7 +287,7 @@ Item {
                 Label {
                     text: qsTr("Playhead %1 s")
                           .arg((root.controller.playheadNs / 1000000000).toFixed(2))
-                    font.family: "monospace"
+                    font.family: theme.monoFamily
                 }
                 Slider {
                     id: seekSlider
@@ -291,13 +311,17 @@ Item {
                 }
                 Label {
                     text: qsTr("Revision %1").arg(root.controller.timelineRevision)
-                    color: "#aeb7c5"
+                    color: theme.textMuted
                 }
             }
         }
 
         ToolBar {
             Layout.fillWidth: true
+            background: Rectangle {
+                color: theme.surface
+                Rectangle { width: parent.width; height: 1; anchors.bottom: parent.bottom; color: theme.border }
+            }
 
             RowLayout {
                 anchors.fill: parent
@@ -377,6 +401,8 @@ Item {
             Pane {
                 Layout.preferredWidth: 280
                 Layout.fillHeight: true
+                padding: theme.spaceLg
+                background: Rectangle { color: theme.surface }
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -406,8 +432,8 @@ Item {
                             width: mediaList.width
                             height: 58
                             radius: 4
-                            color: available ? "#2b3038" : "#3a2e2e"
-                            border.color: available ? "#424a56" : "#a45a5a"
+                            color: available ? theme.surfaceElevated : "#3A1F24"
+                            border.color: available ? theme.border : theme.danger
 
                             Label {
                                 objectName: "mediaAsset-" + assetId
@@ -425,7 +451,7 @@ Item {
                                 anchors.margins: 8
                                 visible: !available
                                 text: qsTr("Offline — relink required")
-                                color: "#ff9b9b"
+                                color: theme.danger
                                 font.pixelSize: 11
                             }
                         }
@@ -436,12 +462,17 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                color: "#171a1f"
+                Layout.margins: theme.spaceLg
+                radius: theme.radiusMd
+                color: theme.bgDeep
+                border.color: theme.border
+                border.width: 1
 
                 EditorPreviewItem {
                     id: previewSurface
                     objectName: "editorPreviewSurface"
                     anchors.fill: parent
+                    anchors.margins: 1
                     frame: root.controller.previewImage
                     stale: root.controller.previewStale
                     statusText: root.controller.timelineRevision < 0
@@ -465,7 +496,7 @@ Item {
                              : qsTr("Editor preview ready"))
                     color: root.controller.previewStale ||
                            root.controller.timelineRevision < 0
-                           ? "#ffbe66" : "#ffffff"
+                           ? theme.warning : theme.textPrimary
                     font.pixelSize: 20
                 }
             }
@@ -473,6 +504,8 @@ Item {
             Pane {
                 Layout.preferredWidth: 340
                 Layout.fillHeight: true
+                padding: theme.spaceLg
+                background: Rectangle { color: theme.surface }
 
                 ScrollView {
                     id: inspectorScroll
@@ -541,6 +574,11 @@ Item {
                             Accessible.name: qsTr("Resolved PIP preset")
                         }
                         GridLayout {
+                            // Raw normalized transform fields (X/Y/W/H/scale/crop/
+                            // opacity/z) -- advanced only. The PIP preset buttons
+                            // below are the creator-facing control; this grid is for
+                            // fine numeric tweaks behind the 고급 편집 toggle.
+                            visible: root.advancedExpanded
                             Layout.fillWidth: true
                             columns: 2
                             enabled: root.editingReady
@@ -693,9 +731,47 @@ Item {
                             }
                         }
 
+                        // Progressive disclosure: the deep audio / title / caption
+                        // tools collapse to a single "고급 편집" toggle so the
+                        // default inspector stays focused on the clip and its visual
+                        // transform. Children stay instantiated (and accessible) —
+                        // only their height collapses.
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Layout.topMargin: 4
+                            Label {
+                                Layout.fillWidth: true
+                                text: qsTr("오디오 · 타이틀 · 자막")
+                                color: theme.textSecondary
+                                font.family: theme.fontFamily
+                                font.pixelSize: theme.sizeLabel
+                            }
+                            Button {
+                                objectName: "editorAdvancedToggle"
+                                flat: true
+                                text: root.advancedExpanded ? qsTr("간단히") : qsTr("고급 편집")
+                                Accessible.name: qsTr("Toggle advanced editor tools")
+                                onClicked: root.advancedExpanded = !root.advancedExpanded
+                                contentItem: Text {
+                                    text: parent.text
+                                    color: theme.accentBright
+                                    font.family: theme.fontFamily
+                                    font.pixelSize: theme.sizeLabel
+                                    font.weight: theme.weightSemiBold
+                                    horizontalAlignment: Text.AlignRight
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                background: Item {}
+                            }
+                        }
+                        Item {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: root.advancedExpanded ? inspectorContinuation.implicitHeight : 0
+                            clip: true
+
                         ColumnLayout {
                             id: inspectorContinuation
-                            Layout.fillWidth: true
+                            width: parent.width
                             spacing: 6
 
                             Label { text: qsTr("Audio"); font.bold: true }
@@ -863,7 +939,7 @@ Item {
                                 Layout.fillWidth: true
                                 text: qsTr("Transcript cues stay non-destructive: edit text here, then use the marked range controls to lift or ripple-delete picture and audio.")
                                 wrapMode: Text.Wrap
-                                color: "#aeb7c4"
+                                color: theme.textMuted
                             }
                             RowLayout {
                                 Layout.fillWidth: true
@@ -982,14 +1058,16 @@ Item {
                                 }
                             }
 
-                            Label {
-                                objectName: "editorStatus"
-                                Layout.fillWidth: true
-                                visible: text.length > 0
-                                text: root.controller.statusMessage
-                                color: "#ff9b9b"
-                                wrapMode: Text.Wrap
-                            }
+                        }  // ColumnLayout inspectorContinuation
+                        }  // collapsible wrapper Item
+
+                        Label {
+                            objectName: "editorStatus"
+                            Layout.fillWidth: true
+                            visible: text.length > 0
+                            text: root.controller.statusMessage
+                            color: theme.danger
+                            wrapMode: Text.Wrap
                         }
                     }
                 }
@@ -1000,6 +1078,10 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: 270
             padding: 6
+            background: Rectangle {
+                color: theme.bgDeep
+                Rectangle { width: parent.width; height: 1; anchors.top: parent.top; color: theme.border }
+            }
 
             Flickable {
                 id: timelineFlick
@@ -1027,7 +1109,7 @@ Item {
 
                             width: timelineContent.width
                             height: 56
-                            color: "#242931"
+                            color: theme.surfaceElevated
 
                             Label {
                                 objectName: "timelineTrack-" + trackId
@@ -1036,7 +1118,7 @@ Item {
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: 150
                                 text: name
-                                color: enabled ? "#ffffff" : "#7d8490"
+                                color: enabled ? theme.textPrimary : theme.textMuted
                                 elide: Text.ElideRight
                             }
                             Label {
@@ -1045,7 +1127,7 @@ Item {
                                 anchors.bottom: parent.bottom
                                 anchors.bottomMargin: 4
                                 text: kind + (locked ? " · locked" : "")
-                                color: "#929aa7"
+                                color: theme.textMuted
                                 font.pixelSize: 10
                             }
 
@@ -1077,13 +1159,13 @@ Item {
                                                         root.nanosecondsPerPixel)
                                         height: clipLane.height - 14
                                         radius: 3
-                                        color: modelData.enabled ? "#4c86d9" : "#4d5664"
+                                        color: modelData.enabled ? theme.accent : theme.surfaceHigh
                                         border.width: root.controller.selectedTrackId
                                                       === trackRow.trackId
                                                       && root.controller.selectedClipId
                                                       === modelData.id ? 3 : 1
                                         border.color: border.width > 1
-                                                      ? "#ffffff" : "#8bb8f6"
+                                                      ? theme.textPrimary : theme.accentBright
 
                                         TapHandler {
                                             onTapped: clipDelegate.activateSelection()
@@ -1101,6 +1183,185 @@ Item {
                                             color: "white"
                                             elide: Text.ElideRight
                                             verticalAlignment: Text.AlignVCenter
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ============================ PHONE ==================================
+    // Only instantiated on real phones (width < 600); never under the smoke
+    // tests, which run at width >= 1200. Reuses root.controller.
+    Loader {
+        anchors.fill: parent
+        active: root.compact
+        visible: root.compact
+        sourceComponent: mobileEditor
+    }
+
+    Component {
+        id: mobileEditor
+
+        ColumnLayout {
+            spacing: theme.spaceMd
+
+            // Preview on top.
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.leftMargin: theme.spaceLg
+                Layout.rightMargin: theme.spaceLg
+                Layout.topMargin: theme.spaceLg
+                Layout.preferredHeight: Math.round(width * 9 / 16)
+                radius: theme.radiusMd
+                color: theme.bgDeep
+                border.color: theme.border
+                border.width: 1
+                clip: true
+                EditorPreviewItem {
+                    anchors.fill: parent
+                    anchors.margins: 1
+                    frame: root.controller.previewImage
+                    stale: root.controller.previewStale
+                    statusText: root.controller.timelineRevision < 0
+                                ? qsTr("Open a project timeline to begin editing")
+                                : root.controller.previewStale
+                                ? qsTr("Preview stale — rebuilding engine graph")
+                                : qsTr("Editor preview ready")
+                }
+            }
+
+            // Transport: one big play/pause + playhead.
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: theme.spaceLg
+                Layout.rightMargin: theme.spaceLg
+                spacing: theme.spaceMd
+
+                RoundButton {
+                    implicitWidth: 60
+                    implicitHeight: 60
+                    enabled: root.controller.timelineRevision >= 0
+                             && !root.controller.busy
+                             && !root.controller.previewStale
+                    text: root.controller.playing ? "❚❚" : "▶"
+                    onClicked: root.togglePlayback()
+                    Material.background: theme.accent
+                    Material.foreground: "white"
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label {
+                        text: qsTr("Playhead %1 s")
+                              .arg((root.controller.playheadNs / 1000000000).toFixed(2))
+                        color: theme.textSecondary
+                        font.family: theme.monoFamily
+                        font.pixelSize: theme.sizeLabel
+                    }
+                    Slider {
+                        Layout.fillWidth: true
+                        from: 0
+                        to: Math.max(1, root.controller.timelineDurationNs)
+                        value: root.controller.playheadNs
+                        enabled: root.controller.timelineDurationNs > 0
+                                 && !root.controller.busy
+                                 && !root.controller.previewStale
+                        onMoved: root.controller.seek(Math.round(value))
+                    }
+                }
+            }
+
+            // A few big edit actions.
+            Flow {
+                Layout.fillWidth: true
+                Layout.leftMargin: theme.spaceLg
+                Layout.rightMargin: theme.spaceLg
+                spacing: theme.spaceSm
+                Button { text: qsTr("Split"); enabled: root.editingReady && root.hasSelection; onClicked: root.splitAction() }
+                Button { text: qsTr("Mark in"); enabled: root.editingReady; onClicked: root.markInAction() }
+                Button { text: qsTr("Mark out"); enabled: root.editingReady; onClicked: root.markOutAction() }
+                Button { text: qsTr("Ripple delete"); enabled: root.editingReady && root.controller.hasMarkedRange; onClicked: root.rippleDeleteAction() }
+                Button { text: qsTr("Undo"); enabled: root.editingReady && root.controller.canUndo; onClicked: root.undoAction() }
+                Button { text: qsTr("Redo"); enabled: root.editingReady && root.controller.canRedo; onClicked: root.redoAction() }
+                Button { text: root.controller.clean ? qsTr("Saved") : qsTr("Save"); enabled: root.editingReady && !root.controller.clean; onClicked: root.saveAction() }
+            }
+
+            // Stacked timeline.
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.leftMargin: theme.spaceLg
+                Layout.rightMargin: theme.spaceLg
+                Layout.bottomMargin: theme.spaceLg
+                radius: theme.radiusMd
+                color: theme.bgDeep
+                border.color: theme.border
+                border.width: 1
+                clip: true
+
+                Flickable {
+                    anchors.fill: parent
+                    anchors.margins: theme.spaceSm
+                    clip: true
+                    contentWidth: Math.max(width, 1400)
+                    contentHeight: mobileTimeline.height
+
+                    Column {
+                        id: mobileTimeline
+                        width: Math.max(parent.width, 1400)
+                        spacing: 3
+
+                        Repeater {
+                            model: root.controller.timelineTrackModel
+                            delegate: Rectangle {
+                                id: mTrackRow
+                                required property string trackId
+                                required property string name
+                                required property var clips
+                                width: mobileTimeline.width
+                                height: 44
+                                color: theme.surfaceElevated
+                                Label {
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 8
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 120
+                                    text: mTrackRow.name
+                                    color: theme.textPrimary
+                                    elide: Text.ElideRight
+                                    font.pixelSize: theme.sizeLabel
+                                }
+                                Item {
+                                    id: mClipLane
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 130
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    anchors.bottom: parent.bottom
+                                    Repeater {
+                                        model: mTrackRow.clips
+                                        delegate: Rectangle {
+                                            required property var modelData
+                                            x: modelData.timelineStartNs / root.nanosecondsPerPixel
+                                            y: 6
+                                            width: Math.max(6, modelData.timelineDurationNs / root.nanosecondsPerPixel)
+                                            height: mClipLane.height - 12
+                                            radius: 3
+                                            color: modelData.enabled ? theme.accent : theme.surfaceHigh
+                                            // Tap to select — without this the mobile editor could
+                                            // never select a clip, so Split/Trim/inspector were all
+                                            // permanently disabled on a phone.
+                                            border.width: root.controller.selectedClipId === modelData.id ? 2 : 0
+                                            border.color: theme.textPrimary
+                                            TapHandler {
+                                                onTapped: root.controller.selectClip(
+                                                              mTrackRow.trackId, modelData.id)
+                                            }
                                         }
                                     }
                                 }

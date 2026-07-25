@@ -4,6 +4,7 @@
 #include "capture/CameraCaptureFrameAssembler.h"
 #include "capture/NumericCaptureTargetId.h"
 #include "capture/ScreenCaptureFrameAssembler.h"
+#include "capture/ScreenCaptureRegion.h"
 #include "core/AppError.h"
 #include "ffmpeg_adapter/BgraFrameMappers.h"
 
@@ -22,13 +23,16 @@ extern "C" {
 #define NOMINMAX
 #include <Windows.h>
 #include <audioclient.h>
+#include <endpointvolume.h>
 #include <ksmedia.h>
 #include <mmdeviceapi.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -246,8 +250,10 @@ struct DeviceListDeleter final {
 class ScreenSource final : public capture::IScreenCaptureSource {
 public:
     ScreenSource(MonitorSpec monitor,
+                 std::optional<capture::ScreenCaptureRegion> region,
                  std::shared_ptr<capture::IVideoFrameSink> sink)
-        : monitor_(std::move(monitor)), sink_(std::move(sink)),
+        : monitor_(std::move(monitor)), region_(std::move(region)),
+          sink_(std::move(sink)),
           id_(domain::SourceId::create("windows/" + monitor_.id).value()) {}
 
     ~ScreenSource() override {
@@ -336,12 +342,25 @@ private:
             AVDictionary* options = nullptr;
             const auto rate = std::to_string(config.frameRateNumerator) + "/" +
                               std::to_string(config.frameRateDenominator);
-            const auto size = std::to_string(monitor_.width) + "x" +
-                              std::to_string(monitor_.height);
+            // Region capture rides gdigrab's own offset/size cropping: it grabs
+            // exactly the sub-rectangle, so both preview and recording receive
+            // region-only pixels without a separate CPU crop. Full-screen keeps
+            // the monitor geometry unchanged. The region was already validated
+            // against the monitor bounds at source-creation time.
+            const int captureWidth =
+                region_ ? static_cast<int>(region_->width) : monitor_.width;
+            const int captureHeight =
+                region_ ? static_cast<int>(region_->height) : monitor_.height;
+            const int offsetX =
+                region_ ? monitor_.left + static_cast<int>(region_->x) : monitor_.left;
+            const int offsetY =
+                region_ ? monitor_.top + static_cast<int>(region_->y) : monitor_.top;
+            const auto size = std::to_string(captureWidth) + "x" +
+                              std::to_string(captureHeight);
             av_dict_set(&options, "framerate", rate.c_str(), 0);
             av_dict_set(&options, "video_size", size.c_str(), 0);
-            av_dict_set(&options, "offset_x", std::to_string(monitor_.left).c_str(), 0);
-            av_dict_set(&options, "offset_y", std::to_string(monitor_.top).c_str(), 0);
+            av_dict_set(&options, "offset_x", std::to_string(offsetX).c_str(), 0);
+            av_dict_set(&options, "offset_y", std::to_string(offsetY).c_str(), 0);
             av_dict_set(&options, "draw_mouse", "1", 0);
             const int opened = avformat_open_input(
                 &rawFormat, "desktop", input, &options);
@@ -482,6 +501,7 @@ private:
     }
 
     MonitorSpec monitor_;
+    std::optional<capture::ScreenCaptureRegion> region_;
     std::shared_ptr<capture::IVideoFrameSink> sink_;
     domain::SourceId id_;
     capture::ScreenCaptureFrameAssembler assembler_;
@@ -505,14 +525,22 @@ public:
         const domain::CaptureTargetId& targetId,
         std::shared_ptr<capture::IVideoFrameSink> sink) override {
         if (!sink) return invalid("screen sink is required");
-        auto monitor = registry_->monitor(targetId.value());
+        const auto parsed = capture::parseRegionTargetId(targetId.value());
+        auto monitor = registry_->monitor(parsed.baseId);
         if (!monitor.has_value()) {
             return core::AppError{
                 core::ErrorCode::NotFound,
                 "selected Windows display is no longer available"};
         }
+        if (parsed.region) {
+            const auto bounded = capture::ensureRegionWithinBounds(
+                *parsed.region, static_cast<std::uint32_t>(monitor->width),
+                static_cast<std::uint32_t>(monitor->height));
+            if (!bounded.hasValue()) return bounded.error();
+        }
         std::unique_ptr<capture::IScreenCaptureSource> source =
-            std::make_unique<ScreenSource>(std::move(*monitor), std::move(sink));
+            std::make_unique<ScreenSource>(std::move(*monitor), parsed.region,
+                                           std::move(sink));
         return source;
     }
 
@@ -876,18 +904,40 @@ private:
                 fail(ioFailure("audited FFmpeg dshow input is unavailable"));
                 return;
             }
-            AVFormatContext* rawFormat = avformat_alloc_context();
-            if (!rawFormat) {
-                fail(ioFailure("microphone demuxer allocation failed"));
-                return;
-            }
-            rawFormat->interrupt_callback = {interrupt, this};
             const auto url = dshowUrl("audio=", deviceName_);
-            const int opened = avformat_open_input(
-                &rawFormat, url.c_str(), input, nullptr);
-            if (opened < 0) {
-                if (rawFormat) avformat_free_context(rawFormat);
-                fail(ioFailure("microphone input open failed: " +
+            // Negotiate a full-bandwidth capture format. Opened with no options,
+            // FFmpeg's dshow demuxer accepts the device's default AM_MEDIA_TYPE,
+            // which for most microphones is a telephone-grade low-rate/mono format
+            // (8k/11k/16k) -- the "hollow/distant/faint" quality users hear. Ask
+            // for 48 kHz stereo 16-bit and fall back progressively so unusual
+            // devices still start (mirrors CameraSource::open's cascade).
+            const auto tryOpen = [&](const char* sampleRate,
+                                     const char* channels)
+                -> std::pair<AVFormatContext*, int> {
+                AVFormatContext* raw = avformat_alloc_context();
+                if (!raw) return {nullptr, AVERROR(ENOMEM)};
+                raw->interrupt_callback = {interrupt, this};
+                AVDictionary* options = nullptr;
+                if (sampleRate != nullptr) {
+                    av_dict_set(&options, "sample_rate", sampleRate, 0);
+                    av_dict_set(&options, "channels", channels, 0);
+                    av_dict_set(&options, "sample_size", "16", 0);
+                    av_dict_set(&options, "audio_buffer_size", "50", 0);
+                }
+                const int ret =
+                    avformat_open_input(&raw, url.c_str(), input, &options);
+                av_dict_free(&options);
+                if (ret < 0 && raw) avformat_free_context(raw);
+                return {raw, ret};
+            };
+            auto [rawFormat, opened] = tryOpen("48000", "2");
+            if (opened < 0) std::tie(rawFormat, opened) = tryOpen("48000", "1");
+            if (opened < 0) std::tie(rawFormat, opened) = tryOpen("44100", "2");
+            if (opened < 0)
+                std::tie(rawFormat, opened) = tryOpen(nullptr, nullptr);
+            if (opened < 0 || !rawFormat) {
+                fail(ioFailure("microphone input open failed after format "
+                               "negotiation: " +
                                ffmpegError(opened)));
                 return;
             }
@@ -1190,11 +1240,29 @@ private:
             return;
         }
         ComHandle<IMMDevice> endpoint;
+        // Capture the system default playback endpoint (the device Windows shows
+        // as Default). eConsole is that device on normal single-output systems;
+        // switching to eMultimedia was verified to point at an idle endpoint on
+        // this hardware (loopback delivered zero packets), so keep eConsole. The
+        // near-silence bug is fixed by the timer-driven drain below, not here.
         result = enumerator->GetDefaultAudioEndpoint(eRender, eConsole,
                                                       endpoint.put());
         if (FAILED(result)) {
             failHresult("WASAPI default speaker lookup", result);
             return;
+        }
+        // The loopback tap sits AFTER the master volume: a creator listening at
+        // e.g. 40% Windows volume would otherwise record system audio ~20 dB
+        // quieter than the content itself (the recurring "PC sound is silent in
+        // my recording" failure). Track the endpoint volume so capture can undo
+        // exactly that attenuation.
+        if (SUCCEEDED(endpoint->Activate(
+                __uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
+                reinterpret_cast<void**>(volumeControl_.put())))) {
+            refreshVolumeCompensation();
+            std::fprintf(stderr,
+                         "[sysaudio] master-volume compensation x%.2f\n",
+                         static_cast<double>(volumeCompensation_));
         }
         ComHandle<IAudioClient> client;
         result = endpoint->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
@@ -1250,13 +1318,22 @@ private:
         wakeEvent_.store(static_cast<HANDLE>(event.get()),
                          std::memory_order_release);
         if (sink_) sink_->onCaptureStarted();
+        // Keep event-driven wakeups but cap the wait at 10 ms so we still drain
+        // periodically if the loopback event goes dormant (WASAPI loopback does
+        // not reliably signal its event when the render endpoint was idle at
+        // capture start, which would otherwise strand later audio in the buffer).
+        int volumeRefreshCountdown = 0;
         while (!stopRequested_.load(std::memory_order_acquire)) {
-            const DWORD waited = WaitForSingleObject(event.get(), 250);
+            const DWORD waited = WaitForSingleObject(event.get(), 10);
             if (waited != WAIT_OBJECT_0 && waited != WAIT_TIMEOUT) {
                 fail(ioFailure("WASAPI loopback wait failed"));
                 break;
             }
             if (stopRequested_.load(std::memory_order_acquire)) break;
+            if (--volumeRefreshCountdown <= 0) {
+                refreshVolumeCompensation();  // tracks live volume changes
+                volumeRefreshCountdown = 100;  // ~1 s at the 10 ms poll
+            }
             if (!drain(*captureClient.get(), *format)) break;
         }
         wakeEvent_.store(nullptr, std::memory_order_release);
@@ -1312,8 +1389,11 @@ private:
         const auto sampleCount = static_cast<std::size_t>(frameCount) * channels;
         auto samples = std::shared_ptr<float[]>{new float[sampleCount]};
         const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0 || !data;
+        const float gain = volumeCompensation_;
         for (std::size_t index = 0; index < sampleCount; ++index) {
-            samples[index] = silent ? 0.0F : sample(data, index, format);
+            const float value =
+                silent ? 0.0F : sample(data, index, format) * gain;
+            samples[index] = std::clamp(value, -1.0F, 1.0F);
         }
         auto assembled = assembler_.assemble(capture::NativeAudioBlock{
             .timestamp = {static_cast<std::int64_t>(qpcPosition), 10'000'000},
@@ -1335,6 +1415,16 @@ private:
             sink = sink_;
         }
         if (sink) sink->onAudioBlock(std::move(assembled).value());
+    }
+
+    void refreshVolumeCompensation() noexcept {
+        if (!volumeControl_.get()) return;
+        float levelDb = 0.0F;
+        if (FAILED(volumeControl_->GetMasterVolumeLevel(&levelDb))) return;
+        // Undo exactly the master attenuation (bounded to +30 dB) so recordings
+        // carry the content's own level however quiet the speakers are set.
+        const float gainDb = std::clamp(-levelDb, 0.0F, 30.0F);
+        volumeCompensation_ = std::pow(10.0F, gainDb / 20.0F);
     }
 
     static float sample(const BYTE* data, std::size_t index,
@@ -1378,6 +1468,10 @@ private:
     std::atomic_bool started_{};
     std::atomic_bool stopRequested_{};
     std::atomic<HANDLE> wakeEvent_{};
+    // Live master-volume tracking so loopback capture can undo the endpoint
+    // attenuation (both touched only on the capture worker thread).
+    ComHandle<IAudioEndpointVolume> volumeControl_;
+    float volumeCompensation_{1.0F};
     std::jthread worker_;
     std::thread stopThread_;
     mutable std::mutex mutex_;

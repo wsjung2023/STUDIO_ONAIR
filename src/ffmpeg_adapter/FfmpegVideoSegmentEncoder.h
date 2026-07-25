@@ -14,6 +14,11 @@ struct VideoEncoderOptions final {
     std::int64_t frameRateNumerator{30};
     std::int64_t frameRateDenominator{1};
     std::int64_t bitRate{8'000'000};
+    // Keep the source alpha channel (encode RGBA with a lossless alpha-capable
+    // codec) instead of flattening to opaque YUV420P. Used for the avatar
+    // overlay track so its transparent background does not occlude the screen
+    // when composited.
+    bool preserveAlpha{false};
 };
 
 class FfmpegVideoSegmentEncoder final : public recorder::ITrackSegmentEncoder {

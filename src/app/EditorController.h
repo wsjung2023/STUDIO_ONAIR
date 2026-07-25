@@ -8,6 +8,7 @@
 #include "edit_engine/IEditEngine.h"
 
 #include <QAbstractItemModel>
+#include <QByteArray>
 #include <QElapsedTimer>
 #include <QImage>
 #include <QObject>
@@ -29,6 +30,7 @@ namespace creator::app {
 
 class EditorEngineWorker;
 class EditorSessionWorker;
+class EditorPreviewAudioOutput;
 enum class EditorEngineOperation;
 
 class EditorController final : public QObject {
@@ -198,6 +200,7 @@ private:
         std::optional<core::TimestampNs> position;
         std::optional<edit_engine::TimelineSnapshot> snapshot;
         std::optional<edit_engine::TimelineChangeSet> change;
+        std::uint32_t audioSamples{0};
     };
 
     void queueLoad(edit_engine::TimelineSnapshot snapshot,
@@ -206,6 +209,9 @@ private:
     void queueSimple(EditorEngineOperation operation,
                      std::optional<core::TimestampNs> position = std::nullopt);
     void queueFrame(core::TimestampNs position);
+    void queueAudio(core::TimestampNs position, std::uint32_t samples);
+    void scheduleAudioPull();
+    void restartAudioPull(core::TimestampNs from);
     [[nodiscard]] quint64 beginCommand(EditorEngineOperation operation,
                                        std::optional<core::TimestampNs> position,
                                        bool countsAsBusy = true,
@@ -219,6 +225,9 @@ private:
                               bool success, const QString& errorMessage,
                               qlonglong revision, qlonglong positionNs,
                               QImage image);
+    void handleAudioCompleted(quint64 generation, quint64 commandId,
+                              bool success, const QString& errorMessage,
+                              qlonglong positionNs, QByteArray pcm);
     void handleSessionOpened(quint64 generation,
                              EditorSessionResultPtr result);
     void handleSessionEdited(quint64 generation, quint64 commandId,
@@ -250,6 +259,10 @@ private:
     core::TimestampNs playbackStart_{};
     QElapsedTimer playbackClock_;
     QTimer playbackTimer_;
+    std::unique_ptr<EditorPreviewAudioOutput> audioOutput_;
+    core::TimestampNs audioPullPosition_{};
+    bool audioRequestInFlight_{false};
+    bool audioPullInvalidated_{false};
     QImage previewImage_;
     QString statusMessage_;
     std::unordered_map<quint64, PendingCommand> commands_;

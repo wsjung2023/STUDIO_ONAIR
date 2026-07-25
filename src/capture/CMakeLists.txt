@@ -38,6 +38,8 @@ cs_add_qtfree_library(cs_capture
         NumericCaptureTargetId.cpp
         ScreenCaptureTypes.h
         ScreenCaptureTypes.cpp
+        ScreenCaptureRegion.h
+        ScreenCaptureRegion.cpp
         ScreenCaptureFrameAssembler.h
         ScreenCaptureFrameAssembler.cpp
         ScreenCaptureStopCoordinator.h
@@ -83,4 +85,24 @@ if(APPLE)
     )
     cs_apply_warnings(cs_capture_macos)
     cs_assert_qt_free(cs_capture_macos)
+endif()
+
+if(WIN32)
+    # Windows.Graphics.Capture (WGC) + Direct3D11 screen backend. Kept in its own
+    # target so the C++/WinRT translation unit is the only place that pulls in the
+    # Windows Runtime headers, and so any narrowly-scoped warning suppression it
+    # needs cannot leak into the rest of the capture layer.
+    add_library(cs_capture_windows STATIC
+        windows/WindowsScreenCaptureBackend.h
+        windows/WindowsScreenCaptureBackend.cpp
+    )
+    add_library(CreatorStudio::cs_capture_windows ALIAS cs_capture_windows)
+    target_include_directories(cs_capture_windows PUBLIC ${PROJECT_SOURCE_DIR}/src)
+    target_compile_features(cs_capture_windows PUBLIC cxx_std_20)
+    target_link_libraries(cs_capture_windows
+        PUBLIC cs_capture
+        PRIVATE d3d11 dxgi windowsapp
+    )
+    cs_apply_warnings(cs_capture_windows)
+    cs_assert_qt_free(cs_capture_windows)
 endif()

@@ -38,7 +38,14 @@ QVariantMap projectMap(const project_store::ProjectPackage& package) {
                         QString::fromStdString(
                             package.manifest.projectId.value())},
                        {QStringLiteral("url"),
-                        QUrl::fromLocalFile(qStringFromPath(package.path))}};
+                        QUrl::fromLocalFile(qStringFromPath(package.path))},
+                       // Carry the canvas dimensions through so the live Studio
+                       // page can frame its preview to the project aspect (9:16
+                       // shorts vs 16:9). Previously dropped here.
+                       {QStringLiteral("canvasWidth"),
+                        static_cast<int>(package.manifest.canvas.width)},
+                       {QStringLiteral("canvasHeight"),
+                        static_cast<int>(package.manifest.canvas.height)}};
 }
 
 }  // namespace
@@ -47,8 +54,9 @@ ProjectWorker::ProjectWorker(std::unique_ptr<project_store::IProjectPackageStore
                              RecentProjectRegistry registry)
     : store_(std::move(store)), registry_(std::move(registry)) {}
 
-void ProjectWorker::createProject(std::filesystem::path path, std::string name) {
-    publishOpen(store_->create(path, name));
+void ProjectWorker::createProject(std::filesystem::path path, std::string name,
+                                  domain::CanvasSettings canvas) {
+    publishOpen(store_->create(path, name, canvas));
 }
 
 void ProjectWorker::openProject(std::filesystem::path path) {

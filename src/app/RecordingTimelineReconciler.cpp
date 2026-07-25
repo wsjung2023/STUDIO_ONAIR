@@ -39,7 +39,7 @@ RecordingReconcileResult existingResult(
                                     .markerCount = 0};
 }
 
-std::string hexId(std::string_view value) {
+[[maybe_unused]] std::string hexId(std::string_view value) {
     static constexpr char digits[] = "0123456789abcdef";
     std::string result;
     result.reserve(value.size() * 2);
@@ -72,7 +72,7 @@ std::string seconds(core::DurationNs duration) {
 
 Result<std::vector<RecordingConcatSource>> buildConcatSources(
     const std::filesystem::path& packageRoot,
-    const domain::SessionId& sessionId,
+    [[maybe_unused]] const domain::SessionId& sessionId,
     const std::vector<domain::SegmentInfo>& segments,
     media::IMediaProbe& mediaProbe) {
     std::vector<const domain::SegmentInfo*> ready;
@@ -101,13 +101,18 @@ Result<std::vector<RecordingConcatSource>> buildConcatSources(
         }
         if (parts.size() < 2) continue;
 
-        // Keep the manifest at package root: ffconcat resolves `file` entries
-        // relative to the list itself, so this lets us reference immutable
-        // media/... and audio/... package paths without `..` traversal.
-        const auto relativePath = std::filesystem::path(
-            "derived-concat-" + hexId(sessionId.value()) + "-" +
-            hexId(sourceId.value()) + "-" + std::to_string(run++) +
-            ".ffconcat");
+        // Colocate the manifest with its segments and reference them by BARE
+        // filename. libavformat's concat demuxer (used both by the media probe
+        // and by the MLT export producer, which cannot be handed per-open
+        // options) rejects sub-directory `file` entries as "Unsafe file name"
+        // under safe mode; bare filenames resolved relative to the colocated
+        // manifest are accepted. All parts of one concat source share a single
+        // segment directory (same sourceId), so the location is well-defined.
+        const auto segmentDir =
+            std::filesystem::path(parts.front()->relativePath).parent_path();
+        const auto relativePath =
+            segmentDir /
+            ("derived-concat-" + std::to_string(run++) + ".ffconcat");
         const auto manifestPath = packageRoot / relativePath;
         std::error_code error;
         std::filesystem::create_directories(manifestPath.parent_path(), error);
@@ -127,7 +132,11 @@ Result<std::vector<RecordingConcatSource>> buildConcatSources(
                                      .entries = {}};
         core::DurationNs offset{};
         for (const auto* part : parts) {
-            output << "file '" << ffconcatPath(part->relativePath) << "'\n";
+            output << "file '"
+                   << ffconcatPath(std::filesystem::path(part->relativePath)
+                                       .filename()
+                                       .generic_string())
+                   << "'\n";
             output << "duration " << seconds(part->duration) << "\n";
             source.entries.push_back(RecordingConcatEntry{
                 .segmentPath = part->relativePath, .offset = offset});
@@ -268,7 +277,9 @@ Result<RecordingReconcileResult> RecordingTimelineReconciler::reconcile(
         .markers = markers.value(),
         .timeline = editService.snapshot(),
         .probes = probes,
-        .concatSources = concatSources.value()});
+        .concatSources = concatSources.value(),
+        .canvasWidth = openedPackage.value().package.manifest.canvas.width,
+        .canvasHeight = openedPackage.value().package.manifest.canvas.height});
     if (!plan.hasValue()) return plan.error();
 
     // Probing every segment a second time makes a long recording scale with

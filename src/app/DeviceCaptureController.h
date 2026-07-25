@@ -233,6 +233,10 @@ private:
     std::uint64_t cameraGeneration_{0};
     std::uint64_t microphoneGeneration_{0};
     std::uint64_t systemAudioGeneration_{0};
+    // Bounded auto-restart budget for transient loopback capture errors (HDMI
+    // mode changes etc.); refreshed on each user-initiated enable.
+    static constexpr int kSystemAudioRestartLimit = 5;
+    int systemAudioRestartAttempts_{0};
     std::uint64_t cameraPermissionGeneration_{0};
     std::uint64_t microphonePermissionGeneration_{0};
 

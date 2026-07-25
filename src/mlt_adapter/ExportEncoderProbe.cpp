@@ -157,6 +157,11 @@ core::Result<ExportEncoderSelection> ExportEncoderProbe::probe(
                                return value.name == name && value.available;
                            });
     };
+    // Prefer aac_mf (Media Foundation) which, unlike FFmpeg's native "aac",
+    // does not reject the mixed program with "Input contains (near) NaN/+-Inf".
+    // aac_mf is muxed into Matroska here (the mp4 muxer rejects aac_mf for not
+    // exposing a frame_size); the export writes an .mkv and remuxes to the
+    // requested container afterwards.
     const std::string audioCodec =
         isAvailable("aac_mf") ? "aac_mf" : "aac";
     if (!isAvailable(audioCodec)) {

@@ -7,6 +7,9 @@ import QtQuick.Controls
 Item {
     id: root
 
+    // Design tokens for this page (see qml/Theme.qml).
+    Theme { id: theme }
+
     property bool active: false
 
     Row {
@@ -25,22 +28,49 @@ Item {
         }
     }
 
+    // Subtle vignette so the bars read as an intentional stage, not a glitch.
+    Rectangle {
+        anchors.fill: parent
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: "#00000000" }
+            GradientStop { position: 1.0; color: "#66000000" }
+        }
+    }
+
     Rectangle {
         anchors.centerIn: parent
-        width: label.implicitWidth + 32
-        height: label.implicitHeight + 16
-        radius: 4
-        color: "#000000"
-        opacity: 0.7
+        width: label.implicitWidth + 40
+        height: label.implicitHeight + 22
+        radius: theme.radiusPill
+        color: "#CC0B0B0F"
+        border.color: root.active ? theme.danger : theme.borderStrong
+        border.width: 1
 
-        Label {
-            id: label
+        Row {
             anchors.centerIn: parent
-            text: root.active
-                  ? qsTr("● REC — Test Pattern")
-                  : qsTr("Preview — Test Pattern")
-            color: root.active ? "#ff6b6b" : "#ffffff"
-            font.pixelSize: 20
+            spacing: theme.spaceSm
+            Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 9; height: 9; radius: 5
+                color: root.active ? theme.danger : theme.textMuted
+                SequentialAnimation on opacity {
+                    running: root.active
+                    loops: Animation.Infinite
+                    NumberAnimation { to: 0.3; duration: 600 }
+                    NumberAnimation { to: 1.0; duration: 600 }
+                }
+            }
+            Label {
+                id: label
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.active
+                      ? qsTr("● REC — Test Pattern")
+                      : qsTr("Preview — Test Pattern")
+                color: root.active ? theme.textPrimary : theme.textSecondary
+                font.family: theme.fontFamily
+                font.pixelSize: theme.sizeSubtitle
+                font.weight: theme.weightMedium
+            }
         }
     }
 }

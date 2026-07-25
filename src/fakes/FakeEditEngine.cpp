@@ -2,6 +2,8 @@
 
 #include "media/MediaTypes.h"
 
+#include <cmath>
+#include <cstddef>
 #include <memory>
 #include <utility>
 
@@ -158,6 +160,40 @@ Result<edit_engine::PreviewFrame> FakeEditEngine::requestFrame(
     if (auto ready = requireLoaded(); !ready.hasValue()) return ready.error();
     return edit_engine::PreviewFrame::create(position, loaded_->revision,
                                              frameAt(position));
+}
+
+Result<edit_engine::PreviewAudioBlock> FakeEditEngine::requestMixedAudio(
+    TimestampNs position, std::uint32_t frequency, std::uint32_t channels,
+    std::uint32_t samples) {
+    record(FakeEditOperation::RequestMixedAudio, std::nullopt, position);
+    if (auto failure = consumeFailure(FakeEditOperation::RequestMixedAudio);
+        failure.has_value()) {
+        return std::move(*failure);
+    }
+    if (auto ready = requireLoaded(); !ready.hasValue()) return ready.error();
+    if (frequency == 0U || channels == 0U || samples == 0U) {
+        return AppError{ErrorCode::InvalidArgument,
+                        "fake edit engine mixed-audio request has an empty format"};
+    }
+    edit_engine::PreviewAudioBlock block{.position = position,
+                                         .frequency = frequency,
+                                         .channels = channels,
+                                         .interleaved = {}};
+    block.interleaved.resize(static_cast<std::size_t>(samples) * channels);
+    // Deterministic 440 Hz tone at -12 dBFS so tests can assert non-silence
+    // without depending on any real media. Identical inputs give identical PCM.
+    constexpr double kTwoPi = 6.283185307179586;
+    const double phaseStep = 440.0 / static_cast<double>(frequency);
+    for (std::uint32_t sampleIndex = 0; sampleIndex < samples; ++sampleIndex) {
+        const auto value = static_cast<float>(
+            0.25 * std::sin(kTwoPi * phaseStep *
+                            static_cast<double>(sampleIndex)));
+        for (std::uint32_t channel = 0; channel < channels; ++channel) {
+            block.interleaved[static_cast<std::size_t>(sampleIndex) * channels +
+                              channel] = value;
+        }
+    }
+    return block;
 }
 
 Result<std::unique_ptr<edit_engine::IRenderJob>> FakeEditEngine::render(
