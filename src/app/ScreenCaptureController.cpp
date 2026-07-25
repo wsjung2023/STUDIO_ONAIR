@@ -254,6 +254,14 @@ void ScreenCaptureController::clearRegion() {
 }
 
 void ScreenCaptureController::startPreview() {
+    // Privacy/test affordance: when CS_DISABLE_SCREEN_CAPTURE is set the app never
+    // grabs the desktop, so the Studio preview stays on its test pattern. Used to
+    // screenshot the avatar overlay for verification without exposing whatever the
+    // user actually has on screen. The avatar and audio paths are unaffected.
+    if (qEnvironmentVariableIsSet("CS_DISABLE_SCREEN_CAPTURE")) {
+        setStatusMessage(tr("Screen capture disabled for this session"));
+        return;
+    }
     if (state_ != ScreenCaptureState::Ready) return;
     const auto* target = selectedTarget();
     if (!target) {
