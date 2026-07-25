@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace creator::avatar::inochi2d {
 
@@ -32,5 +33,11 @@ private:
     std::uint32_t height_;
     std::optional<core::TimestampNs> lastTimestamp_;
 };
+
+/// Tracking-to-parameter bindings for Inochi2D puppets that follow the standard
+/// Inochi2D parameter names (e.g. the CC0 Arch-chan model). Maps the canonical
+/// tracking channels onto the model's one-dimensional expression parameters;
+/// head position (a 2D parameter) is left to the model's own idle physics.
+[[nodiscard]] std::vector<AvatarParameterBinding> inochi2dAvatarBindings();
 
 }  // namespace creator::avatar::inochi2d

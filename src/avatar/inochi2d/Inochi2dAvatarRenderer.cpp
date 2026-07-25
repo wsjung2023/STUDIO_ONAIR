@@ -120,4 +120,20 @@ core::Result<AvatarRenderFrame> Inochi2dAvatarRenderer::render(
     return frame;
 }
 
+std::vector<AvatarParameterBinding> inochi2dAvatarBindings() {
+    using Source = AvatarParameterSource;
+    // Standard Inochi2D parameter names (used by the CC0 Arch-chan model). Eye
+    // "Open" and jaw/mouth are 0..1; head tilt is -1..1. Head position is a 2D
+    // parameter the runtime drives via its own physics, so it is not bound here.
+    return {
+        {"Eye:: Left:: Open", Source::EyeOpenLeft, 1.0F, 0.0F, 0.0F, 1.0F},
+        {"Eye:: Right:: Open", Source::EyeOpenRight, 1.0F, 0.0F, 0.0F, 1.0F},
+        {"Eyebrow:: Left", Source::BrowUpLeft, 1.0F, 0.0F, 0.0F, 1.0F},
+        {"Eyebrow:: Right", Source::BrowUpRight, 1.0F, 0.0F, 0.0F, 1.0F},
+        {"Mouth:: Jaw Open", Source::MouthOpen, 1.0F, 0.0F, 0.0F, 1.0F},
+        {"Mouth:: Pucker / Widen", Source::MouthWide, 1.0F, 0.0F, 0.0F, 1.0F},
+        {"Head Tilt", Source::HeadRoll, 1.0F, 0.0F, -1.0F, 1.0F},
+    };
+}
+
 }  // namespace creator::avatar::inochi2d

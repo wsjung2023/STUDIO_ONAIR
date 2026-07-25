@@ -234,9 +234,6 @@ int main(int argc, char* argv[]) {
     // pillar-boxed/stretched and what the user drags matches the baked frame.
     constexpr std::uint32_t kAvatarWidth = 640;
     constexpr std::uint32_t kAvatarHeight = 360;
-    auto avatarBindings = creator::avatar::characterAvatarBindings();
-    auto avatarMapper =
-        creator::avatar::AvatarParameterMapper::create(std::move(avatarBindings));
     std::unique_ptr<creator::avatar::IAvatarRenderer> avatarRenderer;
     // Non-owning alias to the built-in character renderer (when active), so the
     // Studio avatar picker and front/corner placement controls can retune it
@@ -246,7 +243,12 @@ int main(int argc, char* argv[]) {
     {
         const std::filesystem::path appDir{
             QGuiApplication::applicationDirPath().toStdWString()};
-        const auto modelPath = appDir / L"resources" / L"avatar" / L"model.inx";
+        const auto avatarDir = appDir / L"resources" / L"avatar";
+        std::error_code probe;
+        auto modelPath = avatarDir / L"model.inp";
+        if (!std::filesystem::is_regular_file(modelPath, probe)) {
+            modelPath = avatarDir / L"model.inx";
+        }
         // The audited Inochi2D runtime is a staged directory (runtime-manifest.json,
         // LICENSE, notices, bin/*.dll), not a single DLL: openVerified() leases and
         // SHA-verifies the whole prefix before it maps the library.
@@ -281,6 +283,12 @@ int main(int argc, char* argv[]) {
         avatarCharacterControl = characterRenderer.get();
         avatarRenderer = std::move(characterRenderer);
     }
+    // Bind tracking to whichever renderer won: a real Inochi2D puppet follows the
+    // standard Inochi2D parameter names (e.g. Arch-chan); the first-party
+    // placeholder uses its own. Non-matching names are skipped by the runtime.
+    auto avatarMapper = creator::avatar::AvatarParameterMapper::create(
+        avatarRealModel ? creator::avatar::inochi2d::inochi2dAvatarBindings()
+                        : creator::avatar::characterAvatarBindings());
     // Real face tracking: when CS_OPENSEEFACE_UDP is set, an external
     // OpenSeeFace process (facetracker.py) owns the webcam and streams tracking
     // over UDP; this app only receives it. OpenSeeFaceTrackingProvider adapts
