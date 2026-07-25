@@ -798,14 +798,14 @@ Item {
                     // the renderer's min/max scale; dragging in the preview moves
                     // it freely, and these presets/sliders update together.
                     Label {
-                        visible: avatarSceneController.avatarStyleSelectable
+                        visible: avatarSceneController.avatarTransformable
                         text: qsTr("크기")
                         color: theme.textMuted; font.family: theme.fontFamily
                         font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold
                         font.capitalization: Font.AllUppercase; font.letterSpacing: 1
                     }
                     RowLayout {
-                        visible: avatarSceneController.avatarStyleSelectable
+                        visible: avatarSceneController.avatarTransformable
                         Layout.fillWidth: true
                         spacing: 8
                         Slider {
@@ -832,7 +832,7 @@ Item {
                         }
                     }
                     Label {
-                        visible: avatarSceneController.avatarStyleSelectable
+                        visible: avatarSceneController.avatarTransformable
                         Layout.fillWidth: true
                         text: qsTr("미리보기에서 아바타를 드래그해 위치를 옮기고, 크기 슬라이더로 크기를 조정하세요.")
                         wrapMode: Text.WordWrap
@@ -1219,7 +1219,7 @@ Item {
                             id: avatarDragArea
                             objectName: "studioAvatarDragArea"
                             anchors.fill: parent
-                            enabled: avatarSceneController.avatarStyleSelectable
+                            enabled: avatarSceneController.avatarTransformable
                             cursorShape: Qt.OpenHandCursor
                             preventStealing: true
                             function moveTo(px, py) {

@@ -25,7 +25,8 @@ namespace {
 // the same scale/offset and simply fall outside the frame (the rasteriser clips
 // them), so no geometry is mutated -- only the framing changes.
 void fitBatchesToFrame(std::vector<AvatarSoftwareRenderInput>& batches,
-                       std::uint32_t width, std::uint32_t height) {
+                       std::uint32_t width, std::uint32_t height,
+                       float userScale, float posX, float posY) {
     if (width == 0U || height == 0U) return;
     float minX = std::numeric_limits<float>::max();
     float minY = std::numeric_limits<float>::max();
@@ -86,12 +87,14 @@ void fitBatchesToFrame(std::vector<AvatarSoftwareRenderInput>& batches,
     constexpr float kMargin = 0.06F;  // 6% breathing room on each edge
     const float availableWidth = static_cast<float>(width) * (1.0F - 2.0F * kMargin);
     const float availableHeight = static_cast<float>(height) * (1.0F - 2.0F * kMargin);
+    // Base fit, then the editor's live size multiplier and normalised position.
     const float scale =
-        std::min(availableWidth / boundsWidth, availableHeight / boundsHeight);
+        std::min(availableWidth / boundsWidth, availableHeight / boundsHeight) *
+        userScale;
     const float centreX = (cropMinX + cropMaxX) * 0.5F;
     const float centreY = (minY + cropBottom) * 0.5F;
-    const float frameCentreX = static_cast<float>(width) * 0.5F;
-    const float frameCentreY = static_cast<float>(height) * 0.5F;
+    const float frameCentreX = static_cast<float>(width) * posX;
+    const float frameCentreY = static_cast<float>(height) * posY;
     for (auto& batch : batches) {
         for (auto& vertex : batch.vertices) {
             vertex.x = (vertex.x - centreX) * scale + frameCentreX;
@@ -157,7 +160,8 @@ core::Result<AvatarRenderFrame> Inochi2dAvatarRenderer::render(
     if (!applied.hasValue()) return applied.error();
     auto batches = runtime_->renderSnapshot(deltaSeconds);
     if (!batches.hasValue()) return batches.error();
-    fitBatchesToFrame(batches.value(), width_, height_);
+    fitBatchesToFrame(batches.value(), width_, height_, userScale(), posX(),
+                      posY());
     applyIdleMotion(batches.value(), width_, height_, timestamp);
     auto frame = AvatarSoftwareRasterizer::renderBatches(
         timestamp, width_, height_, batches.value());

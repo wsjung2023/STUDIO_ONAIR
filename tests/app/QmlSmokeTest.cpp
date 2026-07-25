@@ -59,7 +59,8 @@ creator::app::AvatarSceneController* installAvatarController(QQmlEngine& engine)
         std::move(mapper),
         std::make_unique<creator::avatar::PlaceholderAvatarRenderer>(64, 48), 64,
         48, [] { return false; }, /*usingRealModel=*/false,
-        /*usingRealTracking=*/false, /*characterControl=*/nullptr, &engine);
+        /*usingRealTracking=*/false, /*characterControl=*/nullptr,
+        /*inochiControl=*/nullptr, &engine);
     engine.rootContext()->setContextProperty(
         QStringLiteral("avatarSceneController"), controller);
     return controller;

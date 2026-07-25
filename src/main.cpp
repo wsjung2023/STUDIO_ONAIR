@@ -239,6 +239,9 @@ int main(int argc, char* argv[]) {
     // Studio avatar picker and front/corner placement controls can retune it
     // live. Null if a real Inochi2D model is loaded instead.
     creator::avatar::CharacterAvatarRenderer* avatarCharacterControl = nullptr;
+    // Non-owning alias to the real Inochi2D renderer (when active) so the editor's
+    // size/position controls can retune the live puppet. Null for the placeholder.
+    creator::avatar::inochi2d::Inochi2dAvatarRenderer* avatarInochiControl = nullptr;
     bool avatarRealModel = false;
     {
         const std::filesystem::path appDir{
@@ -260,7 +263,9 @@ int main(int argc, char* argv[]) {
             if (auto real = creator::avatar::inochi2d::Inochi2dAvatarRenderer::open(
                     runtimeRoot, modelPath, kAvatarWidth, kAvatarHeight);
                 real.hasValue()) {
-                avatarRenderer = std::move(real).value();
+                auto realRenderer = std::move(real).value();
+                avatarInochiControl = realRenderer.get();
+                avatarRenderer = std::move(realRenderer);
                 avatarRealModel = true;
             } else {
                 qWarning().noquote()
@@ -330,7 +335,8 @@ int main(int argc, char* argv[]) {
         std::move(avatarProvider),
         std::move(avatarMapper).value(), std::move(avatarRenderer), kAvatarWidth,
         kAvatarHeight, std::move(avatarCameraLive),
-        avatarRealModel, avatarRealTracking, avatarCharacterControl, &app};
+        avatarRealModel, avatarRealTracking, avatarCharacterControl,
+        avatarInochiControl, &app};
 
     auto recordingStore =
         std::make_shared<creator::project_store::ProjectPackageStore>();

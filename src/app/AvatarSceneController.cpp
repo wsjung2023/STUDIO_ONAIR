@@ -25,7 +25,7 @@ AvatarSceneController::AvatarSceneController(
     std::unique_ptr<avatar::IAvatarRenderer> renderer, std::uint32_t width,
     std::uint32_t height, std::function<bool()> cameraLive, bool usingRealModel,
     bool usingRealTracking, avatar::CharacterAvatarRenderer* characterControl,
-    QObject* parent)
+    avatar::inochi2d::Inochi2dAvatarRenderer* inochiControl, QObject* parent)
     : QObject(parent),
       provider_(std::move(provider)),
       mapper_(std::move(mapper)),
@@ -35,6 +35,7 @@ AvatarSceneController::AvatarSceneController(
       height_(height),
       cameraLive_(std::move(cameraLive)),
       characterControl_(characterControl),
+      inochiControl_(inochiControl),
       sourceId_(creator::domain::SourceId::create("avatar").value()) {
     if (characterControl_ != nullptr) {
         const auto catalog = avatar::avatarCharacterCatalog();
@@ -85,6 +86,19 @@ AvatarSceneController::AvatarSceneController(
             syncTransformFromRenderer();
             persistStyle();
         }
+    } else if (inochiControl_ != nullptr) {
+        // Real Inochi2D puppet: no character/placement presets, but it supports
+        // the same free size/position transform. Restore the creator's persisted
+        // size and position so the avatar stays where they put it across restarts.
+        scale_ = static_cast<double>(inochiControl_->userScale());
+        posX_ = static_cast<double>(inochiControl_->posX());
+        posY_ = static_cast<double>(inochiControl_->posY());
+        QSettings settings;
+        setAvatarScale(
+            settings.value(QStringLiteral("avatar/scale"), scale_).toDouble());
+        setAvatarPosition(
+            settings.value(QStringLiteral("avatar/posX"), posX_).toDouble(),
+            settings.value(QStringLiteral("avatar/posY"), posY_).toDouble());
     }
     const QString trackingKind = usingRealTracking
                                      ? tr("live face tracking")
@@ -236,17 +250,28 @@ void AvatarSceneController::setAvatarCorner(int corner) {
 }
 
 double AvatarSceneController::avatarMinScale() const noexcept {
+    if (characterControl_ == nullptr && inochiControl_ != nullptr)
+        return static_cast<double>(avatar::inochi2d::Inochi2dAvatarRenderer::kMinScale);
     return static_cast<double>(avatar::CharacterAvatarRenderer::kMinScale);
 }
 
 double AvatarSceneController::avatarMaxScale() const noexcept {
+    if (characterControl_ == nullptr && inochiControl_ != nullptr)
+        return static_cast<double>(avatar::inochi2d::Inochi2dAvatarRenderer::kMaxScale);
     return static_cast<double>(avatar::CharacterAvatarRenderer::kMaxScale);
 }
 
 void AvatarSceneController::setAvatarScale(double scale) {
-    if (characterControl_ == nullptr) return;
-    characterControl_->setUserScale(static_cast<float>(scale));
-    const double applied = static_cast<double>(characterControl_->userScale());
+    double applied = scale_;
+    if (characterControl_ != nullptr) {
+        characterControl_->setUserScale(static_cast<float>(scale));
+        applied = static_cast<double>(characterControl_->userScale());
+    } else if (inochiControl_ != nullptr) {
+        inochiControl_->setUserScale(static_cast<float>(scale));
+        applied = static_cast<double>(inochiControl_->userScale());
+    } else {
+        return;
+    }
     if (applied == scale_) return;
     scale_ = applied;
     persistStyle();
@@ -254,11 +279,20 @@ void AvatarSceneController::setAvatarScale(double scale) {
 }
 
 void AvatarSceneController::setAvatarPosition(double nx, double ny) {
-    if (characterControl_ == nullptr) return;
-    characterControl_->setPosition(static_cast<float>(nx),
-                                   static_cast<float>(ny));
-    const double ax = static_cast<double>(characterControl_->posX());
-    const double ay = static_cast<double>(characterControl_->posY());
+    double ax = posX_;
+    double ay = posY_;
+    if (characterControl_ != nullptr) {
+        characterControl_->setPosition(static_cast<float>(nx),
+                                       static_cast<float>(ny));
+        ax = static_cast<double>(characterControl_->posX());
+        ay = static_cast<double>(characterControl_->posY());
+    } else if (inochiControl_ != nullptr) {
+        inochiControl_->setPosition(static_cast<float>(nx), static_cast<float>(ny));
+        ax = static_cast<double>(inochiControl_->posX());
+        ay = static_cast<double>(inochiControl_->posY());
+    } else {
+        return;
+    }
     if (ax == posX_ && ay == posY_) return;
     posX_ = ax;
     posY_ = ay;
@@ -277,10 +311,17 @@ void AvatarSceneController::persistStyle() {
 }
 
 void AvatarSceneController::syncTransformFromRenderer() {
-    if (characterControl_ == nullptr) return;
-    scale_ = static_cast<double>(characterControl_->userScale());
-    posX_ = static_cast<double>(characterControl_->posX());
-    posY_ = static_cast<double>(characterControl_->posY());
+    if (characterControl_ != nullptr) {
+        scale_ = static_cast<double>(characterControl_->userScale());
+        posX_ = static_cast<double>(characterControl_->posX());
+        posY_ = static_cast<double>(characterControl_->posY());
+    } else if (inochiControl_ != nullptr) {
+        scale_ = static_cast<double>(inochiControl_->userScale());
+        posX_ = static_cast<double>(inochiControl_->posX());
+        posY_ = static_cast<double>(inochiControl_->posY());
+    } else {
+        return;
+    }
     emit transformChanged();
 }
 

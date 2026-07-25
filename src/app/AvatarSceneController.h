@@ -4,6 +4,7 @@
 #include "avatar/AvatarRenderPipeline.h"
 #include "avatar/CharacterAvatarRenderer.h"
 #include "avatar/IAvatarRenderer.h"
+#include "avatar/inochi2d/Inochi2dAvatarRenderer.h"
 #include "avatar/ITrackingProvider.h"
 #include "capture/CaptureFanoutSinks.h"
 #include "capture/IVideoFrameSink.h"
@@ -55,6 +56,10 @@ class AvatarSceneController final : public QObject {
     Q_PROPERTY(int avatarCharacterIndex READ avatarCharacterIndex WRITE
                    setAvatarCharacterIndex NOTIFY styleChanged)
     Q_PROPERTY(bool avatarStyleSelectable READ avatarStyleSelectable CONSTANT)
+    // True when the avatar can be freely moved/resized -- both the placeholder and
+    // a real Inochi2D puppet support this, unlike character selection which is
+    // placeholder-only.
+    Q_PROPERTY(bool avatarTransformable READ avatarTransformable CONSTANT)
     Q_PROPERTY(int avatarPlacementMode READ avatarPlacementMode WRITE
                    setAvatarPlacementMode NOTIFY styleChanged)
     Q_PROPERTY(int avatarCorner READ avatarCorner WRITE setAvatarCorner NOTIFY
@@ -81,6 +86,8 @@ public:
                           std::function<bool()> cameraLive,
                           bool usingRealModel, bool usingRealTracking,
                           avatar::CharacterAvatarRenderer* characterControl = nullptr,
+                          avatar::inochi2d::Inochi2dAvatarRenderer* inochiControl =
+                              nullptr,
                           QObject* parent = nullptr);
     ~AvatarSceneController() override;
 
@@ -97,6 +104,9 @@ public:
     [[nodiscard]] QVariantList avatarCharacters() const;
     [[nodiscard]] bool avatarStyleSelectable() const noexcept {
         return characterControl_ != nullptr;
+    }
+    [[nodiscard]] bool avatarTransformable() const noexcept {
+        return characterControl_ != nullptr || inochiControl_ != nullptr;
     }
     [[nodiscard]] int avatarCharacterIndex() const noexcept { return characterIndex_; }
     void setAvatarCharacterIndex(int index);
@@ -176,6 +186,9 @@ private:
     // picker/placement controls can retune it live. Null when a different
     // renderer (e.g. Inochi2D) is active, and the style controls are disabled.
     avatar::CharacterAvatarRenderer* characterControl_{nullptr};
+    // Non-owning: aliases renderer_ when it is an Inochi2dAvatarRenderer, so the
+    // size/position controls can retune the real puppet live. Null otherwise.
+    avatar::inochi2d::Inochi2dAvatarRenderer* inochiControl_{nullptr};
     int characterIndex_{0};
     int placementMode_{0};
     int corner_{1};
