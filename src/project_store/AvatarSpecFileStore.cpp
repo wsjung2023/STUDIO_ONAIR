@@ -168,10 +168,12 @@ bool renameRelative(HANDLE file, HANDLE parent,
     }
     using Setter = NTSTATUS(NTAPI*)(
         HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
+    constexpr std::size_t kMaximumRenameBytes = 512U;
     const std::size_t bytes =
         offsetof(RenameInformation, fileName) +
         target.size() * sizeof(wchar_t);
-    std::vector<std::byte> storage(bytes);
+    if (bytes > kMaximumRenameBytes) return false;
+    alignas(void*) std::array<std::byte, kMaximumRenameBytes> storage{};
     auto* rename =
         reinterpret_cast<RenameInformation*>(storage.data());
     rename->replaceIfExists = TRUE;
@@ -181,7 +183,7 @@ bool renameRelative(HANDLE file, HANDLE parent,
     std::memcpy(rename->fileName, target.data(), rename->fileNameLength);
     IO_STATUS_BLOCK status{};
     return reinterpret_cast<Setter>(address)(
-               file, &status, rename, static_cast<ULONG>(storage.size()),
+               file, &status, rename, static_cast<ULONG>(bytes),
                static_cast<FILE_INFORMATION_CLASS>(10)) >= 0;
 }
 
@@ -318,6 +320,7 @@ public:
 #endif
 
 private:
+    friend class ChildAuthority;
 #ifdef _WIN32
     RootAuthority(fs::path path, HANDLE handle, WindowsIdentity identity)
         : path_(std::move(path)), handle_(handle), identity_(identity) {}
@@ -328,6 +331,13 @@ private:
 #endif
 
     [[nodiscard]] Result<void> rejectAlias(std::string_view name) const;
+#ifdef _WIN32
+    [[nodiscard]] Result<void> exactChildEntryMatches(
+        std::string_view name, const WindowsIdentity& identity) const;
+#else
+    [[nodiscard]] Result<void> exactChildEntryMatches(
+        std::string_view name, const struct stat& identity) const;
+#endif
 
     fs::path path_;
 #ifdef _WIN32
@@ -460,7 +470,8 @@ Result<std::vector<std::string>> RootAuthority::listChildren() const {
         return ioError("avatar root enumeration failed");
     }
 #else
-    const int duplicate = ::dup(descriptor_);
+    const int duplicate = ::openat(
+        descriptor_, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     DIR* directory = duplicate < 0 ? nullptr : ::fdopendir(duplicate);
     if (directory == nullptr) {
         if (duplicate >= 0) (void)::close(duplicate);
@@ -487,6 +498,7 @@ Result<std::vector<std::string>> RootAuthority::listChildren() const {
     (void)::closedir(directory);
     if (reason != 0) return ioError("avatar root enumeration failed");
 #endif
+    if (auto valid = revalidate(); !valid.hasValue()) return valid.error();
     return names;
 }
 
@@ -502,6 +514,82 @@ Result<void> RootAuthority::rejectAlias(std::string_view name) const {
     }
     return core::ok();
 }
+
+#ifdef _WIN32
+Result<void> RootAuthority::exactChildEntryMatches(
+    std::string_view name, const WindowsIdentity& identity) const {
+    const std::wstring wideName = fs::path{name}.wstring();
+    const auto current = openRelative(
+        handle_, wideName, FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN,
+        FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT |
+            FILE_OPEN_REPARSE_POINT);
+    const auto currentIdentity = identityOf(current.handle, true);
+    std::array<wchar_t, 1024> finalPath{};
+    const DWORD finalLength =
+        current.handle == INVALID_HANDLE_VALUE
+            ? 0U
+            : GetFinalPathNameByHandleW(
+                  current.handle, finalPath.data(),
+                  static_cast<DWORD>(finalPath.size()), FILE_NAME_NORMALIZED);
+    const fs::path finalName =
+        finalLength == 0U || finalLength >= finalPath.size()
+            ? fs::path{}
+            : fs::path{std::wstring_view{finalPath.data(), finalLength}}
+                  .filename();
+    if (current.handle != INVALID_HANDLE_VALUE)
+        (void)CloseHandle(current.handle);
+    if (!currentIdentity.has_value() ||
+        !sameIdentity(*currentIdentity, identity) ||
+        finalName.wstring() != wideName) {
+        return unsafeError("avatar directory spelling or identity changed");
+    }
+    if (auto aliases = rejectAlias(name); !aliases.hasValue())
+        return aliases.error();
+    return revalidate();
+}
+#else
+Result<void> RootAuthority::exactChildEntryMatches(
+    std::string_view name, const struct stat& identity) const {
+    const int duplicate = ::openat(
+        descriptor_, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    DIR* directory = duplicate < 0 ? nullptr : ::fdopendir(duplicate);
+    if (directory == nullptr) {
+        if (duplicate >= 0) (void)::close(duplicate);
+        return ioError("avatar root could not be enumerated");
+    }
+    bool foundExact = false;
+    const std::string requestedKey = domain::portablePathAliasKey(name);
+    errno = 0;
+    while (const dirent* entry = ::readdir(directory)) {
+        const std::string child{entry->d_name};
+        if (child == "." || child == "..") continue;
+        if (domain::portablePathAliasKey(child) != requestedKey) continue;
+        struct stat information {};
+        if (::fstatat(descriptor_, child.c_str(), &information,
+                      AT_SYMLINK_NOFOLLOW) != 0) {
+            (void)::closedir(directory);
+            return ioError("avatar child could not be inspected");
+        }
+        if (child != name || !S_ISDIR(information.st_mode) ||
+            S_ISLNK(information.st_mode)) {
+            (void)::closedir(directory);
+            return unsafeError("avatar directory has a non-canonical alias");
+        }
+        if (!sameIdentity(information, identity)) {
+            (void)::closedir(directory);
+            return unsafeError("avatar directory identity changed");
+        }
+        foundExact = true;
+    }
+    const int reason = errno;
+    (void)::closedir(directory);
+    if (reason != 0) return ioError("avatar root enumeration failed");
+    if (!foundExact)
+        return unsafeError("avatar directory exact name disappeared");
+    return revalidate();
+}
+#endif
 
 Result<ChildAuthority> RootAuthority::child(std::string_view name,
                                             bool create) const {
@@ -549,6 +637,11 @@ Result<ChildAuthority> RootAuthority::child(std::string_view name,
         (void)CloseHandle(opened.handle);
         return ioError("avatar root directory could not be flushed");
     }
+    if (auto exact = exactChildEntryMatches(name, *identity);
+        !exact.hasValue()) {
+        (void)CloseHandle(opened.handle);
+        return exact.error();
+    }
     return ChildAuthority{this, std::string{name}, opened.handle, *identity};
 #else
     const std::string childName{name};
@@ -582,6 +675,11 @@ Result<ChildAuthority> RootAuthority::child(std::string_view name,
         !sameIdentity(opened, current)) {
         if (childDescriptor >= 0) (void)::close(childDescriptor);
         return unsafeError("avatar directory binding is unsafe");
+    }
+    if (auto exact = exactChildEntryMatches(name, opened);
+        !exact.hasValue()) {
+        (void)::close(childDescriptor);
+        return exact.error();
     }
     return ChildAuthority{this, childName, childDescriptor, opened};
 #endif
@@ -651,8 +749,84 @@ Result<void> ChildAuthority::revalidate() const {
         return unsafeError("avatar directory identity changed");
     }
 #endif
+    return root_->exactChildEntryMatches(name_, identity_);
+}
+
+#ifdef _WIN32
+Result<void> finalizeReadIdentity(
+    HANDLE retained, HANDLE child, std::wstring_view name,
+    const WindowsIdentity& initialIdentity, std::uint64_t initialSize,
+    std::size_t bytesRead) {
+    BY_HANDLE_FILE_INFORMATION retainedInformation{};
+    LARGE_INTEGER finalSize{};
+    const auto retainedIdentity = identityOf(retained, false);
+    if (!retainedIdentity.has_value() ||
+        GetFileInformationByHandle(retained, &retainedInformation) == FALSE ||
+        retainedInformation.nNumberOfLinks != 1U) {
+        return unsafeError("avatar spec retained file became unsafe");
+    }
+    const auto named = openRelative(
+        child, name, FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN,
+        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT |
+            FILE_OPEN_REPARSE_POINT);
+    if (named.handle == INVALID_HANDLE_VALUE) {
+        if (reparseStatus(named.status))
+            return unsafeError("avatar spec named file became a reparse point");
+        return ioError("avatar spec named file changed while reading");
+    }
+    BY_HANDLE_FILE_INFORMATION namedInformation{};
+    const auto namedIdentity = identityOf(named.handle, false);
+    const bool namedSafe =
+        namedIdentity.has_value() &&
+        GetFileInformationByHandle(named.handle, &namedInformation) != FALSE &&
+        namedInformation.nNumberOfLinks == 1U;
+    (void)CloseHandle(named.handle);
+    if (!namedSafe)
+        return unsafeError("avatar spec named file became unsafe");
+    if (!sameIdentity(*retainedIdentity, initialIdentity) ||
+        !sameIdentity(*namedIdentity, initialIdentity) ||
+        GetFileSizeEx(retained, &finalSize) == FALSE ||
+        finalSize.QuadPart < 0 ||
+        static_cast<std::uint64_t>(finalSize.QuadPart) != initialSize ||
+        static_cast<std::uint64_t>(finalSize.QuadPart) != bytesRead) {
+        return ioError("avatar spec file changed while reading");
+    }
     return core::ok();
 }
+#else
+Result<void> finalizeReadIdentity(
+    int retained, int child, std::string_view name,
+    const struct stat& initialIdentity, std::size_t bytesRead) {
+    struct stat retainedInformation {};
+    struct stat namedInformation {};
+    if (::fstat(retained, &retainedInformation) != 0) {
+        return ioError("avatar spec retained file could not be inspected");
+    }
+    if (!S_ISREG(retainedInformation.st_mode) ||
+        retainedInformation.st_nlink != 1) {
+        return unsafeError("avatar spec retained file became unsafe");
+    }
+    if (::fstatat(child, std::string{name}.c_str(), &namedInformation,
+                  AT_SYMLINK_NOFOLLOW) != 0) {
+        return ioError("avatar spec named file changed while reading");
+    }
+    if (!S_ISREG(namedInformation.st_mode) ||
+        S_ISLNK(namedInformation.st_mode) ||
+        namedInformation.st_nlink != 1) {
+        return unsafeError("avatar spec named file became unsafe");
+    }
+    if (!sameIdentity(retainedInformation, initialIdentity) ||
+        !sameIdentity(namedInformation, initialIdentity) ||
+        retainedInformation.st_size != initialIdentity.st_size ||
+        retainedInformation.st_size < 0 ||
+        static_cast<std::uint64_t>(retainedInformation.st_size) !=
+            bytesRead) {
+        return ioError("avatar spec file changed while reading");
+    }
+    return core::ok();
+}
+#endif
 
 Result<std::string> ChildAuthority::read(std::string_view fileName) const {
     if (auto valid = revalidate(); !valid.hasValue()) return valid.error();
@@ -701,23 +875,11 @@ Result<std::string> ChildAuthority::read(std::string_view fileName) const {
             return parseError("avatar spec file exceeds 8 MiB");
         }
     }
-    LARGE_INTEGER finalSize{};
-    const auto current = openRelative(
-        handle_, wideName, FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN,
-        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT |
-            FILE_OPEN_REPARSE_POINT);
-    const auto currentIdentity = identityOf(current.handle, false);
-    const bool stable =
-        GetFileSizeEx(opened.handle, &finalSize) != FALSE &&
-        finalSize.QuadPart == initialSize.QuadPart &&
-        static_cast<std::uint64_t>(finalSize.QuadPart) == contents.size() &&
-        currentIdentity.has_value() &&
-        sameIdentity(*identity, *currentIdentity);
-    if (current.handle != INVALID_HANDLE_VALUE)
-        (void)CloseHandle(current.handle);
+    auto finalIdentity = finalizeReadIdentity(
+        opened.handle, handle_, wideName, *identity,
+        static_cast<std::uint64_t>(initialSize.QuadPart), contents.size());
     (void)CloseHandle(opened.handle);
-    if (!stable) return ioError("avatar spec file changed while reading");
+    if (!finalIdentity.hasValue()) return finalIdentity.error();
 #else
     const std::string name{fileName};
     const int opened =
@@ -752,21 +914,71 @@ Result<std::string> ChildAuthority::read(std::string_view fileName) const {
             return parseError("avatar spec file exceeds 8 MiB");
         }
     }
-    struct stat finalInformation {};
-    struct stat named {};
-    if (::fstat(file.get(), &finalInformation) != 0 ||
-        finalInformation.st_size != initial.st_size ||
-        static_cast<std::uint64_t>(finalInformation.st_size) !=
-            contents.size() ||
-        ::fstatat(descriptor_, name.c_str(), &named,
-                  AT_SYMLINK_NOFOLLOW) != 0 ||
-        !sameIdentity(initial, named)) {
-        return ioError("avatar spec file changed while reading");
+    if (auto finalIdentity = finalizeReadIdentity(
+            file.get(), descriptor_, name, initial, contents.size());
+        !finalIdentity.hasValue()) {
+        return finalIdentity.error();
     }
 #endif
     if (auto valid = revalidate(); !valid.hasValue()) return valid.error();
     return contents;
 }
+
+AppError withCleanupFailure(const AppError& primary) {
+    return {primary.code(), primary.message() + "; temporary cleanup failed",
+            primary.issueCode(), primary.messageKey()};
+}
+
+#ifdef _WIN32
+Result<void> inspectPromotedTarget(
+    HANDLE child, std::wstring_view name,
+    const WindowsIdentity& expectedIdentity) {
+    const auto promoted = openRelative(
+        child, name, FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN,
+        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT |
+            FILE_OPEN_REPARSE_POINT);
+    if (promoted.handle == INVALID_HANDLE_VALUE) {
+        if (reparseStatus(promoted.status))
+            return unsafeError("promoted avatar spec is a reparse point");
+        return ioError("promoted avatar spec could not be opened");
+    }
+    BY_HANDLE_FILE_INFORMATION information{};
+    const auto identity = identityOf(promoted.handle, false);
+    const bool safe =
+        identity.has_value() &&
+        GetFileInformationByHandle(promoted.handle, &information) != FALSE &&
+        information.nNumberOfLinks == 1U &&
+        sameIdentity(*identity, expectedIdentity);
+    (void)CloseHandle(promoted.handle);
+    if (!safe)
+        return unsafeError("promoted avatar spec identity is unsafe");
+    return core::ok();
+}
+#else
+Result<void> inspectPromotedTarget(
+    int child, std::string_view name,
+    const struct stat& expectedIdentity) {
+    const std::string target{name};
+    const int opened =
+        ::openat(child, target.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (opened < 0) {
+        if (errno == ELOOP)
+            return unsafeError("promoted avatar spec is a symbolic link");
+        return ioError("promoted avatar spec could not be opened");
+    }
+    ScopedDescriptor promoted{opened};
+    struct stat information {};
+    if (::fstat(promoted.get(), &information) != 0) {
+        return ioError("promoted avatar spec could not be inspected");
+    }
+    if (!S_ISREG(information.st_mode) || information.st_nlink != 1 ||
+        !sameIdentity(information, expectedIdentity)) {
+        return unsafeError("promoted avatar spec identity is unsafe");
+    }
+    return core::ok();
+}
+#endif
 
 Result<void> ChildAuthority::write(std::string_view fileName,
                                    std::string_view contents) const {
@@ -813,13 +1025,25 @@ Result<void> ChildAuthority::write(std::string_view fileName,
     if (created.handle == INVALID_HANDLE_VALUE)
         return ioError("avatar spec temporary file could not be created");
     HANDLE temporaryHandle = created.handle;
-    auto discardTemporary = [&] {
+    auto discardTemporary = [&](const AppError& failure) -> AppError {
         FILE_DISPOSITION_INFO disposition{TRUE};
-        (void)SetFileInformationByHandle(
-            temporaryHandle, FileDispositionInfo, &disposition,
-            static_cast<DWORD>(sizeof(disposition)));
-        (void)CloseHandle(temporaryHandle);
+        const bool removed =
+            SetFileInformationByHandle(
+                temporaryHandle, FileDispositionInfo, &disposition,
+                static_cast<DWORD>(sizeof(disposition))) != FALSE;
+        const bool closed = CloseHandle(temporaryHandle) != FALSE;
+        temporaryHandle = INVALID_HANDLE_VALUE;
+        return removed && closed ? failure : withCleanupFailure(failure);
     };
+    BY_HANDLE_FILE_INFORMATION temporaryInformation{};
+    const auto temporaryIdentity = identityOf(temporaryHandle, false);
+    if (!temporaryIdentity.has_value() ||
+        GetFileInformationByHandle(temporaryHandle,
+                                   &temporaryInformation) == FALSE ||
+        temporaryInformation.nNumberOfLinks != 1U) {
+        return discardTemporary(
+            unsafeError("avatar spec temporary file identity is unsafe"));
+    }
     std::size_t written = 0U;
     while (written < contents.size()) {
         const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(
@@ -829,32 +1053,39 @@ Result<void> ChildAuthority::write(std::string_view fileName,
         if (WriteFile(temporaryHandle, contents.data() + written, chunk,
                       &count, nullptr) == FALSE ||
             count == 0U) {
-            discardTemporary();
-            return ioError("avatar spec temporary file could not be written");
+            return discardTemporary(
+                ioError("avatar spec temporary file could not be written"));
         }
         written += count;
     }
     if (FlushFileBuffers(temporaryHandle) == FALSE) {
-        discardTemporary();
-        return ioError("avatar spec temporary file could not be flushed");
+        return discardTemporary(
+            ioError("avatar spec temporary file could not be flushed"));
     }
     if (auto valid = revalidate(); !valid.hasValue()) {
-        discardTemporary();
-        return valid.error();
+        return discardTemporary(valid.error());
     }
     if (auto inspected = inspectTarget(); !inspected.hasValue()) {
-        discardTemporary();
-        return inspected.error();
+        return discardTemporary(inspected.error());
     }
     if (!renameRelative(temporaryHandle, handle_, wideTarget)) {
-        discardTemporary();
-        return ioError("avatar spec target could not be replaced");
+        return discardTemporary(
+            ioError("avatar spec target could not be replaced"));
     }
-    (void)CloseHandle(temporaryHandle);
+    if (CloseHandle(temporaryHandle) == FALSE) {
+        temporaryHandle = INVALID_HANDLE_VALUE;
+        return ioError("promoted avatar spec handle could not be closed");
+    }
     temporaryHandle = INVALID_HANDLE_VALUE;
     if (FlushFileBuffers(handle_) == FALSE) {
         return ioError("avatar spec directory could not be flushed");
     }
+    if (auto promoted = inspectPromotedTarget(
+            handle_, wideTarget, *temporaryIdentity);
+        !promoted.hasValue()) {
+        return promoted.error();
+    }
+    if (auto valid = revalidate(); !valid.hasValue()) return valid.error();
 #else
     struct stat existing {};
     if (::fstatat(descriptor_, target.c_str(), &existing,
@@ -870,9 +1101,20 @@ Result<void> ChildAuthority::write(std::string_view fileName,
     if (created < 0)
         return ioError("avatar spec temporary file could not be created");
     ScopedDescriptor temporaryFile{created};
-    auto cleanup = [&] {
-        (void)::unlinkat(descriptor_, temporary.c_str(), 0);
+    auto cleanup = [&](const AppError& failure) -> AppError {
+        if (::unlinkat(descriptor_, temporary.c_str(), 0) != 0 &&
+            errno != ENOENT) {
+            return withCleanupFailure(failure);
+        }
+        return failure;
     };
+    struct stat temporaryIdentity {};
+    if (::fstat(temporaryFile.get(), &temporaryIdentity) != 0 ||
+        !S_ISREG(temporaryIdentity.st_mode) ||
+        temporaryIdentity.st_nlink != 1) {
+        return cleanup(
+            unsafeError("avatar spec temporary file identity is unsafe"));
+    }
     std::size_t written = 0U;
     while (written < contents.size()) {
         const ssize_t count =
@@ -880,37 +1122,42 @@ Result<void> ChildAuthority::write(std::string_view fileName,
                     contents.size() - written);
         if (count < 0 && errno == EINTR) continue;
         if (count <= 0) {
-            cleanup();
-            return ioError("avatar spec temporary file could not be written");
+            return cleanup(
+                ioError("avatar spec temporary file could not be written"));
         }
         written += static_cast<std::size_t>(count);
     }
     if (::fsync(temporaryFile.get()) != 0) {
-        cleanup();
-        return ioError("avatar spec temporary file could not be flushed");
+        return cleanup(
+            ioError("avatar spec temporary file could not be flushed"));
     }
     if (auto valid = revalidate(); !valid.hasValue()) {
-        cleanup();
-        return valid.error();
+        return cleanup(valid.error());
     }
     if (::fstatat(descriptor_, target.c_str(), &existing,
                   AT_SYMLINK_NOFOLLOW) == 0) {
         if (!S_ISREG(existing.st_mode) || existing.st_nlink != 1) {
-            cleanup();
-            return unsafeError("avatar spec target identity is unsafe");
+            return cleanup(
+                unsafeError("avatar spec target identity is unsafe"));
         }
     } else if (errno != ENOENT) {
-        cleanup();
-        return ioError("avatar spec target could not be inspected");
+        return cleanup(
+            ioError("avatar spec target could not be inspected"));
     }
     if (::renameat(descriptor_, temporary.c_str(),
                    descriptor_, target.c_str()) != 0) {
-        cleanup();
-        return ioError("avatar spec target could not be replaced");
+        return cleanup(
+            ioError("avatar spec target could not be replaced"));
     }
     if (::fsync(descriptor_) != 0) {
         return ioError("avatar spec directory could not be flushed");
     }
+    if (auto promoted = inspectPromotedTarget(
+            descriptor_, target, temporaryIdentity);
+        !promoted.hasValue()) {
+        return promoted.error();
+    }
+    if (auto valid = revalidate(); !valid.hasValue()) return valid.error();
 #endif
     return core::ok();
 }
@@ -1061,6 +1308,8 @@ Result<std::vector<AvatarId>> AvatarSpecFileStore::list() const {
         }
     }
     std::sort(result.begin(), result.end());
+    if (auto valid = root.value()->revalidate(); !valid.hasValue())
+        return valid.error();
     return result;
 }
 

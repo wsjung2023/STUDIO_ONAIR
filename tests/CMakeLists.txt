@@ -162,6 +162,14 @@ cs_apply_warnings(cs_tests)
 
 gtest_discover_tests(cs_tests)
 
+add_test(
+    NAME AvatarSpecStorageAuthorityAudit
+    COMMAND ${CMAKE_COMMAND}
+        -DRepositoryRoot=${PROJECT_SOURCE_DIR}
+        -P
+            "${PROJECT_SOURCE_DIR}/tests/scripts/AvatarSpecStorageAuthorityAuditTest.cmake"
+)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(cs_avatar_spec_authority_posix_fixture
         helpers/AvatarSpecStorageAuthorityPosixFixture.cpp
@@ -175,6 +183,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         -Wl,--wrap=fsync
         -Wl,--wrap=read
         -Wl,--wrap=openat
+        -Wl,--wrap=renameat
+        -Wl,--wrap=readdir
+        -Wl,--wrap=unlinkat
     )
     set_target_properties(cs_avatar_spec_authority_posix_fixture PROPERTIES
         AUTOMOC OFF

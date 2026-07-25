@@ -7,10 +7,13 @@
 #include <cstdarg>
 #include <cstring>
 #include <filesystem>
+#include <iostream>
 #include <string>
 
 #ifndef _WIN32
+#include <dirent.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -30,19 +33,49 @@ using creator::project_store::AvatarSpecFileStore;
 
 #ifndef _WIN32
 int fsyncFailuresRemaining = 0;
+bool failNextRegularFileFsync = false;
 bool growOnRead = false;
 bool rebindOnAvatarOpen = false;
+bool rebindAfterPromotion = false;
+bool rebindEmptyListOnEof = false;
+bool rebindOnMissingBackup = false;
+bool introduceAliasAfterChildOpen = false;
+bool failTemporaryCleanup = false;
+enum class ReadMutation {
+    None,
+    AddHardLink,
+    ReplaceWithSymlink,
+};
+ReadMutation readMutation = ReadMutation::None;
 fs::path growthTarget;
+fs::path readMutationTarget;
+fs::path replacementFile;
+fs::path displacedFile;
 fs::path avatarDirectory;
 fs::path displacedDirectory;
 fs::path replacementDirectory;
+fs::path rootDirectory;
+fs::path displacedRoot;
 
 extern "C" int __real_fsync(int descriptor);
 extern "C" ssize_t __real_read(int descriptor, void* buffer,
                                std::size_t count);
 extern "C" int __real_openat(int directory, const char* path, int flags, ...);
+extern "C" int __real_renameat(int oldDirectory, const char* oldPath,
+                                int newDirectory, const char* newPath);
+extern "C" dirent* __real_readdir(DIR* directory);
+extern "C" int __real_unlinkat(int directory, const char* path, int flags);
 
 extern "C" int __wrap_fsync(int descriptor) {
+    if (failNextRegularFileFsync) {
+        struct stat information {};
+        if (::fstat(descriptor, &information) == 0 &&
+            S_ISREG(information.st_mode)) {
+            failNextRegularFileFsync = false;
+            errno = EIO;
+            return -1;
+        }
+    }
     if (fsyncFailuresRemaining > 0) {
         --fsyncFailuresRemaining;
         errno = EIO;
@@ -64,6 +97,19 @@ extern "C" ssize_t __wrap_read(int descriptor, void* buffer,
             (void)::close(target);
         }
     }
+    if (result > 0 && readMutation != ReadMutation::None) {
+        const ReadMutation requested = readMutation;
+        readMutation = ReadMutation::None;
+        std::error_code ignored;
+        if (requested == ReadMutation::AddHardLink) {
+            fs::create_hard_link(growthTarget, readMutationTarget, ignored);
+        } else {
+            fs::rename(growthTarget, displacedFile, ignored);
+            if (!ignored) {
+                fs::create_symlink(replacementFile, growthTarget, ignored);
+            }
+        }
+    }
     return result;
 }
 
@@ -75,7 +121,17 @@ extern "C" int __wrap_openat(int directory, const char* path, int flags, ...) {
         mode = static_cast<mode_t>(va_arg(arguments, int));
         va_end(arguments);
     }
-    if (rebindOnAvatarOpen && path != nullptr &&
+    const int result =
+        (flags & O_CREAT) != 0
+            ? __real_openat(directory, path, flags, mode)
+            : __real_openat(directory, path, flags);
+    if (result >= 0 && introduceAliasAfterChildOpen && path != nullptr &&
+        std::strcmp(path, "hero") == 0 && (flags & O_DIRECTORY) != 0) {
+        introduceAliasAfterChildOpen = false;
+        std::error_code ignored;
+        fs::create_directory(rootDirectory / "Hero", ignored);
+    }
+    if (result >= 0 && rebindOnAvatarOpen && path != nullptr &&
         std::strcmp(path, "avatar.json") == 0) {
         rebindOnAvatarOpen = false;
         std::error_code ignored;
@@ -85,9 +141,49 @@ extern "C" int __wrap_openat(int directory, const char* path, int flags, ...) {
                                          avatarDirectory, ignored);
         }
     }
-    return (flags & O_CREAT) != 0
-               ? __real_openat(directory, path, flags, mode)
-               : __real_openat(directory, path, flags);
+    if (result < 0 && rebindOnMissingBackup && path != nullptr &&
+        std::strcmp(path, "avatar.last-good.json") == 0) {
+        rebindOnMissingBackup = false;
+        std::error_code ignored;
+        fs::rename(rootDirectory, displacedRoot, ignored);
+        if (!ignored) fs::create_directory(rootDirectory, ignored);
+    }
+    return result;
+}
+
+extern "C" int __wrap_renameat(int oldDirectory, const char* oldPath,
+                                int newDirectory, const char* newPath) {
+    const int result =
+        __real_renameat(oldDirectory, oldPath, newDirectory, newPath);
+    if (result == 0 && rebindAfterPromotion && newPath != nullptr &&
+        std::strcmp(newPath, "avatar.json") == 0) {
+        rebindAfterPromotion = false;
+        std::error_code ignored;
+        fs::rename(avatarDirectory, displacedDirectory, ignored);
+        if (!ignored) fs::create_directory(avatarDirectory, ignored);
+    }
+    return result;
+}
+
+extern "C" dirent* __wrap_readdir(DIR* directory) {
+    dirent* result = __real_readdir(directory);
+    if (result == nullptr && rebindEmptyListOnEof) {
+        rebindEmptyListOnEof = false;
+        std::error_code ignored;
+        fs::rename(rootDirectory, displacedRoot, ignored);
+        if (!ignored) fs::create_directory(rootDirectory, ignored);
+    }
+    return result;
+}
+
+extern "C" int __wrap_unlinkat(int directory, const char* path, int flags) {
+    if (failTemporaryCleanup && path != nullptr &&
+        std::strncmp(path, ".avatar.part-", 13U) == 0) {
+        failTemporaryCleanup = false;
+        errno = EACCES;
+        return -1;
+    }
+    return __real_unlinkat(directory, path, flags);
 }
 #endif
 
@@ -146,7 +242,12 @@ int main() {
         return 3;
     }
     fsyncFailuresRemaining = 0;
-    if (!store.save(spec).hasValue()) return 4;
+    const auto initialSave = store.save(spec);
+    if (!initialSave.hasValue()) {
+        std::cerr << "INITIAL_SAVE_ERROR " << initialSave.error().message()
+                  << '\n';
+        return 4;
+    }
 
     growthTarget = parent / "avatars" / "hero" / "avatar.json";
     fs::remove(parent / "avatars" / "hero" / "avatar.last-good.json",
@@ -176,7 +277,120 @@ int main() {
         return 8;
     }
 
+    int reviewerFailures = 0;
+    const auto expectReviewerCase = [&](bool passed, const char* name) {
+        if (passed) return;
+        ++reviewerFailures;
+        std::cerr << "REVIEWER_RED " << name << '\n';
+    };
+
+    const fs::path promotionRoot = parent / "promotion" / "avatars";
+    if (!fs::create_directories(promotionRoot)) return 10;
+    AvatarSpecFileStore promotionStore{promotionRoot};
+    if (!promotionStore.save(spec).hasValue()) return 11;
+    avatarDirectory = promotionRoot / "hero";
+    displacedDirectory = promotionRoot / "hero-promoted";
+    rebindAfterPromotion = true;
+    const auto promoted = promotionStore.save(spec);
+    expectReviewerCase(
+        !promoted.hasValue() &&
+            promoted.error().code() == ErrorCode::InvalidArgument &&
+            !rebindAfterPromotion,
+        "post-promotion-rebind");
+
+    const fs::path hardLinkRoot = parent / "read-hardlink" / "avatars";
+    if (!fs::create_directories(hardLinkRoot)) return 13;
+    AvatarSpecFileStore hardLinkStore{hardLinkRoot};
+    if (!hardLinkStore.save(spec).hasValue()) return 14;
+    growthTarget = hardLinkRoot / "hero" / "avatar.json";
+    readMutationTarget = parent / "read-hardlink" / "outside-link.json";
+    readMutation = ReadMutation::AddHardLink;
+    const auto hardLinked = hardLinkStore.load(spec.avatarId());
+    expectReviewerCase(
+        !hardLinked.hasValue() &&
+            hardLinked.error().code() == ErrorCode::InvalidArgument &&
+            readMutation == ReadMutation::None,
+        "hardlink-during-read");
+
+    const fs::path replacementRoot = parent / "read-replace" / "avatars";
+    if (!fs::create_directories(replacementRoot)) return 16;
+    AvatarSpecFileStore replacementStore{replacementRoot};
+    if (!replacementStore.save(spec).hasValue()) return 17;
+    growthTarget = replacementRoot / "hero" / "avatar.json";
+    replacementFile = parent / "read-replace" / "outside.json";
+    displacedFile = parent / "read-replace" / "original.json";
+    fs::copy_file(growthTarget, replacementFile);
+    readMutation = ReadMutation::ReplaceWithSymlink;
+    const auto replaced = replacementStore.load(spec.avatarId());
+    expectReviewerCase(
+        !replaced.hasValue() &&
+            replaced.error().code() == ErrorCode::InvalidArgument &&
+            readMutation == ReadMutation::None,
+        "symlink-replacement-during-read");
+
+    const fs::path emptyListRoot = parent / "list-empty" / "avatars";
+    if (!fs::create_directories(emptyListRoot)) return 19;
+    AvatarSpecFileStore emptyListStore{emptyListRoot};
+    rootDirectory = emptyListRoot;
+    displacedRoot = parent / "list-empty" / "avatars-displaced";
+    rebindEmptyListOnEof = true;
+    const auto emptyListed = emptyListStore.list();
+    expectReviewerCase(
+        !emptyListed.hasValue() &&
+            emptyListed.error().code() == ErrorCode::InvalidArgument &&
+            !rebindEmptyListOnEof,
+        "empty-list-root-rebind");
+
+    const fs::path lastListRoot = parent / "list-last" / "avatars";
+    if (!fs::create_directories(lastListRoot / "hero")) return 21;
+    AvatarSpecFileStore lastListStore{lastListRoot};
+    rootDirectory = lastListRoot;
+    displacedRoot = parent / "list-last" / "avatars-displaced";
+    rebindOnMissingBackup = true;
+    const auto lastListed = lastListStore.list();
+    expectReviewerCase(
+        !lastListed.hasValue() &&
+            lastListed.error().code() == ErrorCode::InvalidArgument &&
+            !rebindOnMissingBackup,
+        "last-entry-list-root-rebind");
+
+    const fs::path aliasRoot = parent / "alias-after-open" / "avatars";
+    if (!fs::create_directories(aliasRoot)) return 23;
+    AvatarSpecFileStore aliasStore{aliasRoot};
+    rootDirectory = aliasRoot;
+    introduceAliasAfterChildOpen = true;
+    const auto aliased = aliasStore.save(spec);
+    expectReviewerCase(
+        !aliased.hasValue() &&
+            aliased.error().code() == ErrorCode::InvalidArgument &&
+            !introduceAliasAfterChildOpen &&
+            fs::is_directory(aliasRoot / "Hero"),
+        "alias-after-child-open");
+
+    const fs::path cleanupRoot = parent / "cleanup" / "avatars";
+    if (!fs::create_directories(cleanupRoot)) return 25;
+    AvatarSpecFileStore cleanupStore{cleanupRoot};
+    if (!cleanupStore.save(spec).hasValue()) return 26;
+    failNextRegularFileFsync = true;
+    failTemporaryCleanup = true;
+    const auto cleanupFailed = cleanupStore.save(spec);
+    expectReviewerCase(
+        !cleanupFailed.hasValue() &&
+            cleanupFailed.error().message().find("cleanup") !=
+                std::string::npos &&
+            !failNextRegularFileFsync && !failTemporaryCleanup,
+        "cleanup-failure-surfaced");
+    bool foundResidue = false;
+    for (const auto& entry :
+         fs::directory_iterator(cleanupRoot / "hero")) {
+        if (entry.path().filename().string().starts_with(".avatar.part-")) {
+            foundResidue = true;
+        }
+    }
+    expectReviewerCase(foundResidue, "cleanup-residue-observable");
+
     fs::remove_all(parent, error);
-    return error ? 9 : 0;
+    if (error) return 9;
+    return reviewerFailures == 0 ? 0 : 30 + reviewerFailures;
 #endif
 }

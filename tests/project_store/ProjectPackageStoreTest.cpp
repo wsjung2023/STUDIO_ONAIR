@@ -141,6 +141,16 @@ protected:
         out << json.dump(2);
     }
 
+    void replaceManifestDatabase(std::string_view database) {
+        const fs::path path = packagePath_ / "manifest.json";
+        std::ifstream in{path, std::ios::binary};
+        auto json = nlohmann::json::parse(in);
+        in.close();
+        json["database"] = database;
+        std::ofstream out{path, std::ios::binary | std::ios::trunc};
+        out << json.dump(2);
+    }
+
     void writeBytes(const fs::path& path, std::string_view bytes) {
         fs::create_directories(path.parent_path());
         std::ofstream out{path, std::ios::binary};
@@ -197,6 +207,7 @@ TEST_F(ProjectPackageStoreTest, OpenRejectsManifestDatabaseMismatch) {
 
 TEST_F(ProjectPackageStoreTest, OpenDoesNotCreateAMissingDatabase) {
     ASSERT_TRUE(store_.create(packagePath_, "Missing DB").hasValue());
+    ASSERT_TRUE(fs::remove(packagePath_ / "avatars"));
     ASSERT_TRUE(fs::remove(packagePath_ / "project.db"));
 
     const auto result = store_.open(packagePath_);
@@ -204,6 +215,29 @@ TEST_F(ProjectPackageStoreTest, OpenDoesNotCreateAMissingDatabase) {
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::NotFound);
     EXPECT_FALSE(fs::exists(packagePath_ / "project.db"));
+    EXPECT_FALSE(fs::exists(packagePath_ / "avatars"));
+}
+
+TEST_F(ProjectPackageStoreTest, FailedOpenWithInvalidDatabasePathDoesNotProvisionAvatars) {
+    ASSERT_TRUE(store_.create(packagePath_, "Invalid DB path").hasValue());
+    ASSERT_TRUE(fs::remove(packagePath_ / "avatars"));
+    replaceManifestDatabase("../outside.db");
+
+    const auto result = store_.open(packagePath_);
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_FALSE(fs::exists(packagePath_ / "avatars"));
+}
+
+TEST_F(ProjectPackageStoreTest, FailedOpenWithCorruptDatabaseDoesNotProvisionAvatars) {
+    ASSERT_TRUE(store_.create(packagePath_, "Corrupt DB").hasValue());
+    ASSERT_TRUE(fs::remove(packagePath_ / "avatars"));
+    writeBytes(packagePath_ / "project.db", "not a sqlite database");
+
+    const auto result = store_.open(packagePath_);
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_FALSE(fs::exists(packagePath_ / "avatars"));
 }
 
 TEST_F(ProjectPackageStoreTest, OpenSafelyProvisionsAvatarDirectoryForOlderProject) {
@@ -245,6 +279,7 @@ TEST_F(ProjectPackageStoreTest, OpenRejectsAvatarDirectorySymlinkOrReparsePoint)
 
 TEST_F(ProjectPackageStoreTest, OpenRejectsDatabaseHardLinkedFromOutsidePackage) {
     ASSERT_TRUE(store_.create(packagePath_, "Hard Link").hasValue());
+    ASSERT_TRUE(fs::remove(packagePath_ / "avatars"));
     const fs::path outsideDatabase = root_ / "outside.db";
     ASSERT_TRUE(fs::copy_file(packagePath_ / "project.db", outsideDatabase));
     ASSERT_TRUE(fs::remove(packagePath_ / "project.db"));
@@ -257,6 +292,7 @@ TEST_F(ProjectPackageStoreTest, OpenRejectsDatabaseHardLinkedFromOutsidePackage)
 
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    EXPECT_FALSE(fs::exists(packagePath_ / "avatars"));
 }
 
 TEST_F(ProjectPackageStoreTest, OpenRejectsDatabaseReparseFromOutsidePackage) {

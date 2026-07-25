@@ -293,11 +293,6 @@ Result<ValidatedDatabase> openValidatedDatabase(const fs::path& packagePath) {
     JsonProjectStore manifests;
     auto loaded = manifests.load(packagePath);
     if (!loaded.hasValue()) return loaded.error();
-    if (auto avatars = internal::ensureAvatarDirectoryDurably(
-            packagePath, loaded.value().directories.avatars);
-        !avatars.hasValue()) {
-        return avatars.error();
-    }
     auto databasePath = validatedRelativeDatabasePath(loaded.value().database);
     if (!databasePath.hasValue()) return databasePath.error();
     auto existingDatabase = validatedExistingDatabase(packagePath, databasePath.value());
@@ -651,6 +646,12 @@ Result<OpenProjectResult> ProjectPackageStore::open(const fs::path& packagePath)
     auto candidates = opened.value().database.scanRecovery(
         opened.value().package.path, opened.value().package.manifest.name);
     if (!candidates.hasValue()) return candidates.error();
+    if (auto avatars = internal::ensureAvatarDirectoryDurably(
+            opened.value().package.path,
+            opened.value().package.manifest.directories.avatars);
+        !avatars.hasValue()) {
+        return avatars.error();
+    }
     return OpenProjectResult{.package = std::move(opened.value().package),
                              .recoveryCandidates = std::move(candidates).value(),
                              .databasePath = std::move(opened.value().databasePath),
