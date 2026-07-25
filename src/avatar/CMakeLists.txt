@@ -61,6 +61,8 @@ cs_add_qtfree_library(cs_avatar
         openseeface/OpenSeeFaceUdpSource.cpp
         openseeface/OpenSeeFaceProcessSupervisor.h
         openseeface/OpenSeeFaceProcessSupervisor.cpp
+        inochi2d/Inochi2dRuntimeManifest.h
+        inochi2d/Inochi2dRuntimeManifest.cpp
         inochi2d/Inochi2dModelRuntime.h
         inochi2d/Inochi2dModelRuntime.cpp
         inochi2d/Inochi2dAvatarRenderer.h
@@ -74,6 +76,10 @@ cs_add_qtfree_library(cs_avatar
 )
 
 target_include_directories(cs_avatar PRIVATE ${PROJECT_BINARY_DIR}/generated)
+
+if(CS_ENABLE_INOCHI2D)
+    add_dependencies(cs_avatar cs_inochi2d_runtime_audit)
+endif()
 
 if(WIN32)
     target_link_libraries(cs_avatar PUBLIC ws2_32)

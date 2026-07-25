@@ -99,6 +99,16 @@
       }
     },
     {
+      "name": "windows-inochi2d-debug",
+      "displayName": "Windows Debug with audited pre-0.9 Inochi2D C FFI",
+      "inherits": "windows-debug",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CS_ENABLE_INOCHI2D": "ON",
+        "CS_INOCHI2D_ROOT": "${sourceDir}/build/inochi2d/prefix/windows-x64"
+      }
+    },
+    {
       "name": "macos-debug",
       "displayName": "macOS Debug (AppleClang + Ninja)",
       "inherits": "base",
@@ -129,6 +139,7 @@
     { "name": "windows-whisper-debug", "configurePreset": "windows-whisper-debug" },
     { "name": "windows-whisper-release", "configurePreset": "windows-whisper-release" },
     { "name": "windows-avatar-packs-debug", "configurePreset": "windows-avatar-packs-debug" },
+    { "name": "windows-inochi2d-debug", "configurePreset": "windows-inochi2d-debug" },
     { "name": "macos-debug", "configurePreset": "macos-debug" },
     { "name": "macos-release", "configurePreset": "macos-release" }
   ],
@@ -148,6 +159,7 @@
     { "name": "windows-whisper-debug", "inherits": "test-base", "configurePreset": "windows-whisper-debug" },
     { "name": "windows-whisper-release", "inherits": "test-base", "configurePreset": "windows-whisper-release" },
     { "name": "windows-avatar-packs-debug", "inherits": "test-base", "configurePreset": "windows-avatar-packs-debug" },
+    { "name": "windows-inochi2d-debug", "inherits": "test-base", "configurePreset": "windows-inochi2d-debug" },
     { "name": "macos-debug", "inherits": "test-base", "configurePreset": "macos-debug" },
     { "name": "macos-release", "inherits": "test-base", "configurePreset": "macos-release" }
   ]

@@ -99,6 +99,7 @@ add_executable(cs_tests
     avatar/AvatarMotionPipelineTest.cpp
     avatar/AvatarMotionPlaybackTest.cpp
     avatar/AvatarMotionPlaybackRendererTest.cpp
+    avatar/inochi2d/Inochi2dRuntimeManifestTest.cpp
     avatar/inochi2d/Inochi2dModelRuntimeTest.cpp
     avatar/inochi2d/Inochi2dAvatarRendererTest.cpp
     avatar/AvatarTrackingSessionTest.cpp
@@ -749,6 +750,12 @@ if(CS_ENABLE_WHISPER)
 endif()
 
 if(WIN32)
+    add_test(
+        NAME Inochi2dBootstrapPolicy
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File
+                "${PROJECT_SOURCE_DIR}/tests/scripts/Inochi2dBootstrapPolicyTest.ps1"
+    )
     add_test(
         NAME MltBootstrapPolicy
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass

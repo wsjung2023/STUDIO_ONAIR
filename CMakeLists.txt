@@ -17,11 +17,13 @@ option(CS_ENABLE_MLT "Build the audited MLT edit-engine adapter" OFF)
 option(CS_ENABLE_RNNOISE "Build the audited RNNoise denoise adapter" OFF)
 option(CS_ENABLE_WHISPER "Build the audited whisper.cpp transcription adapter" OFF)
 option(CS_ENABLE_AVATAR_PACKS "Build signed avatar package support" OFF)
+option(CS_ENABLE_INOCHI2D "Enable the audited pre-0.9 Inochi2D C-FFI runtime" OFF)
 set(CS_FFMPEG_ROOT "" CACHE PATH "Audited FFmpeg dynamic-library prefix")
 set(CS_MLT_ROOT "" CACHE PATH "Audited MLT dynamic-library prefix")
 set(CS_RNNOISE_ROOT "" CACHE PATH "Audited RNNoise static-library prefix")
 set(CS_WHISPER_ROOT "" CACHE PATH "Audited whisper.cpp install prefix")
 set(CS_SODIUM_ROOT "" CACHE PATH "Audited libsodium prefix")
+set(CS_INOCHI2D_ROOT "" CACHE PATH "Audited Inochi2D C-FFI runtime prefix")
 
 if(CS_ENABLE_MLT AND NOT CS_ENABLE_FFMPEG)
     message(FATAL_ERROR
@@ -30,6 +32,46 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(CreatorStudioTargets)
+
+if(CS_ENABLE_INOCHI2D)
+    if(NOT CS_INOCHI2D_ROOT)
+        message(FATAL_ERROR
+            "CS_ENABLE_INOCHI2D requires CS_INOCHI2D_ROOT from scripts/bootstrap_inochi2d.ps1")
+    endif()
+    if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(CS_INOCHI2D_EXPECTED_TARGET windows-x64)
+        set(CS_INOCHI2D_POWERSHELL powershell)
+    elseif(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
+        set(CS_INOCHI2D_EXPECTED_TARGET macos-arm64)
+        set(CS_INOCHI2D_POWERSHELL pwsh)
+    elseif(ANDROID AND CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a"
+           AND CMAKE_SYSTEM_VERSION GREATER_EQUAL 26)
+        set(CS_INOCHI2D_EXPECTED_TARGET android-arm64)
+        set(CS_INOCHI2D_POWERSHELL pwsh)
+    else()
+        message(FATAL_ERROR
+            "CS_ENABLE_INOCHI2D has no audited runtime for this target")
+    endif()
+    execute_process(
+        COMMAND ${CS_INOCHI2D_POWERSHELL} -NoProfile
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_inochi2d_runtime.ps1"
+            -RuntimeRoot "${CS_INOCHI2D_ROOT}"
+            -ExpectedTarget "${CS_INOCHI2D_EXPECTED_TARGET}"
+        RESULT_VARIABLE CS_INOCHI2D_VERIFY_RESULT
+    )
+    if(NOT CS_INOCHI2D_VERIFY_RESULT EQUAL 0)
+        message(FATAL_ERROR
+            "CS_INOCHI2D_ROOT failed audited runtime verification")
+    endif()
+    add_custom_target(cs_inochi2d_runtime_audit
+        COMMAND ${CS_INOCHI2D_POWERSHELL} -NoProfile
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_inochi2d_runtime.ps1"
+            -RuntimeRoot "${CS_INOCHI2D_ROOT}"
+            -ExpectedTarget "${CS_INOCHI2D_EXPECTED_TARGET}"
+        COMMENT "Auditing the staged Inochi2D C-FFI runtime"
+        VERBATIM
+    )
+endif()
 
 if(CS_ENABLE_FFMPEG)
     if(NOT CS_FFMPEG_ROOT)
