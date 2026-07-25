@@ -62,7 +62,9 @@ TEST_F(JsonProjectStoreTest, CreateUsesRequestedPortraitCanvas) {
     EXPECT_EQ(created.value().canvas.width, 1080);
     EXPECT_EQ(created.value().canvas.height, 1920);
     // Default (no canvas arg) stays landscape so existing callers are unchanged.
-    fs::path landscapeDir = packageDir_.parent_path() / "landscape.cstudio";
+    // Nest under packageDir_ (removed in TearDown) so repeat runs never collide
+    // with a leftover from a previous run.
+    fs::path landscapeDir = packageDir_ / "landscape.cstudio";
     const auto landscape = store_.create(landscapeDir, "Wide");
     ASSERT_TRUE(landscape.hasValue()) << landscape.error().message();
     EXPECT_EQ(landscape.value().canvas.width, 1920);
