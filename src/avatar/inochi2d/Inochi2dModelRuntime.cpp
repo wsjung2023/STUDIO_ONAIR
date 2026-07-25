@@ -2,8 +2,11 @@
 
 #include "core/AppError.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <optional>
 #include <string>
@@ -200,6 +203,62 @@ public:
                                 "Inochi2D draw list contains a non-finite vertex"};
             }
             vertices.push_back({source.x, source.y, source.u, source.v});
+        }
+
+        // Optional diagnostic: dump every draw command (state/blend/mask/texture
+        // and world-space bounding box) so the puppet's real layer structure can
+        // be inspected. Enabled only when CS_INOCHI2D_DUMP is set.
+        {
+            char dump[8] = {0};
+            std::size_t dumpLen = 0;
+#ifdef _WIN32
+            const bool wantDump =
+                getenv_s(&dumpLen, dump, sizeof dump, "CS_INOCHI2D_DUMP") == 0 &&
+                dumpLen > 0;
+#else
+            const char* dumpEnv = std::getenv("CS_INOCHI2D_DUMP");
+            const bool wantDump = dumpEnv != nullptr && dumpEnv[0] != '\0';
+#endif
+            if (wantDump) {
+                std::fprintf(stderr,
+                             "[i2d-dump] commands=%u vertices=%zu indices=%zu\n",
+                             commandCount, vertices.size(),
+                             static_cast<std::size_t>(indexCount));
+                for (std::uint32_t ci = 0; ci < commandCount; ++ci) {
+                    const auto& c = commands[ci];
+                    float minx = 1e30F, miny = 1e30F, maxx = -1e30F, maxy = -1e30F;
+                    bool has = false;
+                    const auto endi =
+                        static_cast<std::uint64_t>(c.idxOffset) + c.elemCount;
+                    if (endi <= indexCount) {
+                        for (std::uint32_t o = 0; o < c.elemCount; ++o) {
+                            const auto vi =
+                                static_cast<std::uint64_t>(indexData[c.idxOffset + o]) +
+                                c.vtxOffset;
+                            if (vi < vertexCount) {
+                                const auto& v = vertices[static_cast<std::size_t>(vi)];
+                                has = true;
+                                minx = std::min(minx, v.x);
+                                maxx = std::max(maxx, v.x);
+                                miny = std::min(miny, v.y);
+                                maxy = std::max(maxy, v.y);
+                            }
+                        }
+                    }
+                    int tw = 0, th = 0;
+                    if (c.sources[0] != nullptr) {
+                        tw = static_cast<int>(textureGetWidth_(c.sources[0]));
+                        th = static_cast<int>(textureGetHeight_(c.sources[0]));
+                    }
+                    std::fprintf(stderr,
+                                 "[i2d] #%3u state=%u blend=%2u mask=%u elem=%5u "
+                                 "tex=%dx%d bbox=(%.0f,%.0f)-(%.0f,%.0f)%s\n",
+                                 ci, c.state, c.blendMode, c.maskMode, c.elemCount,
+                                 tw, th, has ? minx : 0.F, has ? miny : 0.F,
+                                 has ? maxx : 0.F, has ? maxy : 0.F,
+                                 has ? "" : " [empty]");
+                }
+            }
         }
 
         std::vector<AvatarSoftwareRenderInput> batches;
