@@ -207,6 +207,12 @@ public:
              ++commandIndex) {
             const auto& command = commands[commandIndex];
             if (command.elemCount == 0U) continue;
+            // A mask-definition pass (IN_DRAW_STATE_DEFINE_MASK = 1) draws a shape
+            // into the stencil, not the colour buffer. The reference consumer never
+            // paints it; rendering it as visible geometry lays an opaque mask
+            // silhouette over the character (a solid shape across the face), so
+            // skip mask-definition draws here.
+            if (command.state == 1U) continue;
             const auto end = static_cast<std::uint64_t>(command.idxOffset) +
                              command.elemCount;
             // Skip a command this software rasteriser cannot safely draw -- an
