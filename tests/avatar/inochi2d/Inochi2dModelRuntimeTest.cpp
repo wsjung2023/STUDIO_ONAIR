@@ -31,7 +31,7 @@ TEST(Inochi2dModelRuntimeTest, ReportsMissingModelBeforeLoadingRuntime) {
     EXPECT_EQ(result.error().code(), ErrorCode::NotFound);
 }
 
-TEST(Inochi2dModelRuntimeTest, ReportsUnsupportedExternalSdkAfterModelValidation) {
+TEST(Inochi2dModelRuntimeTest, RejectsRawLibraryPathAfterModelValidation) {
     const auto runtime = std::filesystem::path{
 #ifdef _WIN32
         L"C:\\Windows"
@@ -51,7 +51,7 @@ TEST(Inochi2dModelRuntimeTest, ReportsUnsupportedExternalSdkAfterModelValidation
     std::error_code ignored;
     std::filesystem::remove(model, ignored);
     ASSERT_FALSE(result.hasValue());
-    EXPECT_EQ(result.error().code(), ErrorCode::UnsupportedVersion);
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidState);
 }
 
 }  // namespace

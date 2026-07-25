@@ -14,7 +14,7 @@ namespace creator::avatar::inochi2d {
 class Inochi2dAvatarRenderer final : public IAvatarRenderer {
 public:
     [[nodiscard]] static core::Result<std::unique_ptr<Inochi2dAvatarRenderer>> open(
-        const std::filesystem::path& libraryPath,
+        const std::filesystem::path& runtimeRoot,
         const std::filesystem::path& modelPath, std::uint32_t width,
         std::uint32_t height);
 

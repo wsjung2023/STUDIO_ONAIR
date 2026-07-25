@@ -2,6 +2,7 @@
 
 #include "avatar/AvatarParameterMapper.h"
 #include "avatar/AvatarSoftwareRasterizer.h"
+#include "avatar/inochi2d/Inochi2dRuntimeManifest.h"
 #include "core/Result.h"
 
 #include <filesystem>
@@ -17,7 +18,7 @@ namespace creator::avatar::inochi2d {
 class Inochi2dModelRuntime final {
 public:
     [[nodiscard]] static core::Result<std::unique_ptr<Inochi2dModelRuntime>> open(
-        const std::filesystem::path& libraryPath,
+        const std::filesystem::path& runtimeRoot,
         const std::filesystem::path& modelPath);
 
     ~Inochi2dModelRuntime();

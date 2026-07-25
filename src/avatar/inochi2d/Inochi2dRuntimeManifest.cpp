@@ -176,6 +176,54 @@ bool isApprovedWindowsImport(std::string_view name) {
 
 }  // namespace
 
+class Inochi2dVerifiedRuntime::Impl final {
+public:
+    ~Impl() {
+#ifdef _WIN32
+        if (module != nullptr) FreeLibrary(module);
+        for (const auto handle : fileHandles) {
+            if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+        }
+        if (rootHandle != INVALID_HANDLE_VALUE) CloseHandle(rootHandle);
+#endif
+    }
+
+    Inochi2dRuntimeInfo runtimeInfo;
+#ifdef _WIN32
+    HANDLE rootHandle{INVALID_HANDLE_VALUE};
+    std::vector<HANDLE> fileHandles;
+    HMODULE module{nullptr};
+#endif
+};
+
+Inochi2dVerifiedRuntime::Inochi2dVerifiedRuntime(std::unique_ptr<Impl> impl)
+    : impl_(std::move(impl)) {}
+Inochi2dVerifiedRuntime::~Inochi2dVerifiedRuntime() = default;
+Inochi2dVerifiedRuntime::Inochi2dVerifiedRuntime(
+    Inochi2dVerifiedRuntime&&) noexcept = default;
+Inochi2dVerifiedRuntime& Inochi2dVerifiedRuntime::operator=(
+    Inochi2dVerifiedRuntime&&) noexcept = default;
+
+const Inochi2dRuntimeInfo& Inochi2dVerifiedRuntime::info() const noexcept {
+    return impl_->runtimeInfo;
+}
+
+void* Inochi2dVerifiedRuntime::resolveSymbol(
+    std::string_view name) const noexcept {
+#ifdef _WIN32
+    if (!impl_ || impl_->module == nullptr || name.empty() ||
+        name.find('\0') != std::string_view::npos) {
+        return nullptr;
+    }
+    const std::string terminated{name};
+    return reinterpret_cast<void*>(
+        GetProcAddress(impl_->module, terminated.c_str()));
+#else
+    static_cast<void>(name);
+    return nullptr;
+#endif
+}
+
 Result<Inochi2dRuntimeInfo> Inochi2dRuntimeManifest::loadAndVerify(
     const std::filesystem::path& runtimeRoot) {
     const auto platform = currentPlatform();
@@ -184,6 +232,9 @@ Result<Inochi2dRuntimeInfo> Inochi2dRuntimeManifest::loadAndVerify(
             "This process target has no audited Inochi2D runtime");
     }
 
+    if (isReparsePoint(runtimeRoot)) {
+        return invalid("Inochi2D runtime root is missing or redirected");
+    }
     std::error_code error;
     const auto root = std::filesystem::weakly_canonical(runtimeRoot, error);
     const bool rootIsDirectory =
@@ -478,6 +529,89 @@ Result<Inochi2dRuntimeInfo> Inochi2dRuntimeManifest::loadAndVerify(
     }
     info.librarySha256 = std::move(librarySha256);
     return info;
+}
+
+Result<Inochi2dVerifiedRuntime> Inochi2dRuntimeManifest::openVerified(
+    const std::filesystem::path& runtimeRoot) {
+#ifndef _WIN32
+    static_cast<void>(runtimeRoot);
+    return unsupported(
+        "This process target has no audited Inochi2D runtime loader");
+#else
+    auto impl = std::make_unique<Inochi2dVerifiedRuntime::Impl>();
+    impl->rootHandle = CreateFileW(
+        runtimeRoot.c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (impl->rootHandle == INVALID_HANDLE_VALUE) {
+        return invalid("Inochi2D runtime root is missing or redirected");
+    }
+    FILE_ATTRIBUTE_TAG_INFO rootAttributes{};
+    if (!GetFileInformationByHandleEx(
+            impl->rootHandle, FileAttributeTagInfo, &rootAttributes,
+            sizeof(rootAttributes)) ||
+        (rootAttributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0U ||
+        (rootAttributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U) {
+        return invalid("Inochi2D runtime root is missing or redirected");
+    }
+
+    std::error_code error;
+    const auto root = std::filesystem::weakly_canonical(runtimeRoot, error);
+    if (error) {
+        return invalid("Inochi2D runtime root is missing or redirected");
+    }
+    constexpr std::array<std::wstring_view, 6> leasedRelativePaths{
+        L"runtime-manifest.json",
+        L"LICENSE",
+        L"THIRD_PARTY_NOTICES.txt",
+        L"bin\\inochi2d.dll",
+        L"bin\\druntime-ldc-shared.dll",
+        L"bin\\phobos2-ldc-shared.dll",
+    };
+    impl->fileHandles.reserve(leasedRelativePaths.size());
+    for (const auto relative : leasedRelativePaths) {
+        const auto path = root / std::filesystem::path{relative};
+        const auto handle =
+            CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                        OPEN_EXISTING,
+                        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                        nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            return invalid(
+                "Inochi2D runtime artifact could not be leased");
+        }
+        impl->fileHandles.push_back(handle);
+        FILE_ATTRIBUTE_TAG_INFO attributes{};
+        if (!GetFileInformationByHandleEx(
+                handle, FileAttributeTagInfo, &attributes,
+                sizeof(attributes)) ||
+            (attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0U ||
+            (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U) {
+            return invalid(
+                "Inochi2D runtime artifact is redirected");
+        }
+    }
+
+    auto verified = loadAndVerify(root);
+    if (!verified.hasValue()) return verified.error();
+    const auto libraryPath = verified.value().libraryPath;
+    impl->module = LoadLibraryExW(
+        libraryPath.c_str(), nullptr,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (impl->module == nullptr) {
+        return AppError{ErrorCode::NotFound,
+                        "Verified Inochi2D runtime could not be loaded"};
+    }
+    for (const auto required : kRequiredSymbols) {
+        const std::string name{required};
+        if (GetProcAddress(impl->module, name.c_str()) == nullptr) {
+            return unsupported(
+                "Verified Inochi2D runtime export could not be resolved");
+        }
+    }
+    impl->runtimeInfo = std::move(verified).value();
+    return Inochi2dVerifiedRuntime{std::move(impl)};
+#endif
 }
 
 }  // namespace creator::avatar::inochi2d

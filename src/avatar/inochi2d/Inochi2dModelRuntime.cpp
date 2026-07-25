@@ -5,17 +5,9 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
-
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
 
 namespace creator::avatar::inochi2d {
 namespace {
@@ -86,30 +78,16 @@ class Inochi2dModelRuntime::Impl final {
 public:
     ~Impl() { close(); }
 
-    Result<void> load(const std::filesystem::path& libraryPath,
+    Result<void> load(const std::filesystem::path& runtimeRoot,
                       const std::filesystem::path& modelPath) {
         std::error_code error;
-        if (!std::filesystem::is_regular_file(libraryPath, error)) {
-            return AppError{ErrorCode::NotFound,
-                            "Inochi2D runtime library is not available"};
-        }
         if (!std::filesystem::is_regular_file(modelPath, error)) {
             return AppError{ErrorCode::NotFound,
                             "Inochi2D model file is not available"};
         }
-#ifdef _WIN32
-        library_ = LoadLibraryW(libraryPath.c_str());
-        if (library_ == nullptr) {
-            return AppError{ErrorCode::NotFound,
-                            "Inochi2D runtime could not be loaded"};
-        }
-#else
-        library_ = dlopen(libraryPath.c_str(), RTLD_NOW | RTLD_LOCAL);
-        if (library_ == nullptr) {
-            return AppError{ErrorCode::NotFound,
-                            "Inochi2D runtime could not be loaded"};
-        }
-#endif
+        auto verified = Inochi2dRuntimeManifest::openVerified(runtimeRoot);
+        if (!verified.hasValue()) return verified.error();
+        runtime_.emplace(std::move(verified).value());
         if (!resolve()) {
             close();
             return AppError{ErrorCode::UnsupportedVersion,
@@ -263,17 +241,7 @@ public:
     void close() noexcept {
         if (puppet_ != nullptr && freePuppet_ != nullptr) freePuppet_(puppet_);
         puppet_ = nullptr;
-#ifdef _WIN32
-        if (library_ != nullptr) {
-            FreeLibrary(library_);
-            library_ = nullptr;
-        }
-#else
-        if (library_ != nullptr) {
-            dlclose(library_);
-            library_ = nullptr;
-        }
-#endif
+        runtime_.reset();
         loadPuppet_ = nullptr;
         freePuppet_ = nullptr;
         getParameters_ = nullptr;
@@ -338,11 +306,9 @@ private:
 
     template <typename Function>
     Function symbol(const char* name) const noexcept {
-#ifdef _WIN32
-        return reinterpret_cast<Function>(GetProcAddress(library_, name));
-#else
-        return reinterpret_cast<Function>(dlsym(library_, name));
-#endif
+        return runtime_.has_value()
+                   ? reinterpret_cast<Function>(runtime_->resolveSymbol(name))
+                   : nullptr;
     }
 
     bool resolve() noexcept {
@@ -372,11 +338,7 @@ private:
                textureGetChannels_ != nullptr && textureGetPixels_ != nullptr;
     }
 
-#ifdef _WIN32
-    HMODULE library_{nullptr};
-#else
-    void* library_{nullptr};
-#endif
+    std::optional<Inochi2dVerifiedRuntime> runtime_;
     void* puppet_{nullptr};
     PuppetLoad loadPuppet_{nullptr};
     PuppetFree freePuppet_{nullptr};
@@ -401,10 +363,10 @@ Inochi2dModelRuntime::Inochi2dModelRuntime(std::unique_ptr<Impl> impl)
 Inochi2dModelRuntime::~Inochi2dModelRuntime() = default;
 
 Result<std::unique_ptr<Inochi2dModelRuntime>> Inochi2dModelRuntime::open(
-    const std::filesystem::path& libraryPath,
+    const std::filesystem::path& runtimeRoot,
     const std::filesystem::path& modelPath) {
     auto impl = std::make_unique<Impl>();
-    auto loaded = impl->load(libraryPath, modelPath);
+    auto loaded = impl->load(runtimeRoot, modelPath);
     if (!loaded.hasValue()) return loaded.error();
     return std::unique_ptr<Inochi2dModelRuntime>{
         new Inochi2dModelRuntime{std::move(impl)}};

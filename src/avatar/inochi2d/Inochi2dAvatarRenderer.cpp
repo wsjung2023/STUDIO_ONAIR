@@ -8,10 +8,10 @@
 namespace creator::avatar::inochi2d {
 
 core::Result<std::unique_ptr<Inochi2dAvatarRenderer>>
-Inochi2dAvatarRenderer::open(const std::filesystem::path& libraryPath,
+Inochi2dAvatarRenderer::open(const std::filesystem::path& runtimeRoot,
                              const std::filesystem::path& modelPath,
                              std::uint32_t width, std::uint32_t height) {
-    auto runtime = Inochi2dModelRuntime::open(libraryPath, modelPath);
+    auto runtime = Inochi2dModelRuntime::open(runtimeRoot, modelPath);
     if (!runtime.hasValue()) return runtime.error();
     return std::unique_ptr<Inochi2dAvatarRenderer>{
         new Inochi2dAvatarRenderer{std::move(runtime).value(), width, height}};

@@ -7,6 +7,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -260,6 +261,12 @@ public:
     }
 
     [[nodiscard]] const fs::path& root() const noexcept { return root_; }
+    [[nodiscard]] fs::path libraryPath() const {
+        return root_ / fs::path{currentPlatform().libraryPath};
+    }
+    [[nodiscard]] fs::path dependencyPath() const {
+        return root_ / "bin/druntime-ldc-shared.dll";
+    }
 
 private:
     static void writeLibrary(const fs::path& path, bool matchingArchitecture,
@@ -451,6 +458,54 @@ TEST(Inochi2dRuntimeManifestTest, AcceptsBootstrappedProductionRuntime) {
 
     ASSERT_TRUE(result.hasValue()) << result.error().message();
     EXPECT_EQ(result.value().target, "windows-x64");
+}
+#endif
+
+#if defined(_WIN32) && defined(_M_X64)
+TEST(Inochi2dRuntimeManifestTest, RejectsOriginalRedirectedRuntimeRoot) {
+    RuntimeFixture fixture;
+    fixture.writeValidRuntime();
+    const auto link = fs::temp_directory_path() /
+                      ("creator-studio-inochi2d-root-link-" +
+                       std::to_string(std::chrono::steady_clock::now()
+                                          .time_since_epoch()
+                                          .count()));
+    std::error_code error;
+    fs::create_directory_symlink(fixture.root(), link, error);
+    if (error) {
+        const std::wstring command =
+            L"cmd.exe /d /c mklink /J \"" + link.native() + L"\" \"" +
+            fixture.root().native() + L"\" >nul";
+        ASSERT_EQ(_wsystem(command.c_str()), 0)
+            << "Could not create a directory junction";
+    }
+
+    const auto result = Inochi2dRuntimeManifest::openVerified(link);
+
+    fs::remove(link, error);
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidState);
+}
+
+TEST(Inochi2dRuntimeManifestTest, RetainsLibraryAndDependencyFileLeases) {
+    RuntimeFixture fixture;
+    fixture.writeValidRuntime();
+    {
+        const auto result =
+            Inochi2dRuntimeManifest::openVerified(fixture.root());
+        ASSERT_TRUE(result.hasValue()) << result.error().message();
+
+        std::ofstream libraryOverwrite(
+            fixture.libraryPath(), std::ios::binary | std::ios::trunc);
+        std::ofstream dependencyOverwrite(
+            fixture.dependencyPath(), std::ios::binary | std::ios::trunc);
+
+        EXPECT_FALSE(libraryOverwrite.is_open());
+        EXPECT_FALSE(dependencyOverwrite.is_open());
+    }
+    std::ofstream libraryAfterRelease(
+        fixture.libraryPath(), std::ios::binary | std::ios::trunc);
+    EXPECT_TRUE(libraryAfterRelease.is_open());
 }
 #endif
 
