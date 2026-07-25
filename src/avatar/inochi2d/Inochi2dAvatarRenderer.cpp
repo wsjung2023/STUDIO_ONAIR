@@ -54,6 +54,27 @@ void fitBatchesToFrame(std::vector<AvatarSoftwareRenderInput>& batches,
     }
 }
 
+// Gentle idle motion so a puppet with no live tracking still feels alive: a slow
+// vertical "breath" plus a slighter, slower horizontal sway shift the whole
+// framed puppet by a few percent. Subtle enough to sit under real facial
+// tracking once a rigged model drives the expression parameters.
+void applyIdleMotion(std::vector<AvatarSoftwareRenderInput>& batches,
+                     std::uint32_t width, std::uint32_t height,
+                     core::TimestampNs timestamp) {
+    const double seconds =
+        static_cast<double>(timestamp.time_since_epoch().count()) / 1'000'000'000.0;
+    const float breatheY = static_cast<float>(std::sin(seconds * 1.9)) *
+                           static_cast<float>(height) * 0.02F;
+    const float swayX = static_cast<float>(std::sin(seconds * 0.8)) *
+                        static_cast<float>(width) * 0.01F;
+    for (auto& batch : batches) {
+        for (auto& vertex : batch.vertices) {
+            vertex.x += swayX;
+            vertex.y += breatheY;
+        }
+    }
+}
+
 }  // namespace
 
 core::Result<std::unique_ptr<Inochi2dAvatarRenderer>>
@@ -91,6 +112,7 @@ core::Result<AvatarRenderFrame> Inochi2dAvatarRenderer::render(
     auto batches = runtime_->renderSnapshot(deltaSeconds);
     if (!batches.hasValue()) return batches.error();
     fitBatchesToFrame(batches.value(), width_, height_);
+    applyIdleMotion(batches.value(), width_, height_, timestamp);
     auto frame = AvatarSoftwareRasterizer::renderBatches(
         timestamp, width_, height_, batches.value());
     if (!frame.hasValue()) return frame.error();

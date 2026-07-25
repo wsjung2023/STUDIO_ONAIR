@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -71,24 +72,39 @@ TEST(Inochi2dAvatarRendererTest, RendersRealPuppetToVisiblePixels) {
     }
     EXPECT_GT(opaque, 0U) << "the rendered puppet frame is fully transparent";
 
-    const std::string outPath = readEnv("CS_INOCHI2D_RENDER_OUT");
-    if (!outPath.empty()) {
+    const auto dumpRgba = [&](const creator::avatar::AvatarRenderFrame& f,
+                              const std::string& path) {
+        if (path.empty()) return;
+        const auto data = f.bytes();
+        const std::uint32_t rowStride = f.stride();
         std::vector<std::uint8_t> rgba;
         rgba.reserve(static_cast<std::size_t>(kWidth) * kHeight * 4);
         for (std::uint32_t y = 0; y < kHeight; ++y) {
             for (std::uint32_t x = 0; x < kWidth; ++x) {
-                const std::size_t p =
-                    static_cast<std::size_t>(y) * stride + static_cast<std::size_t>(x) * 4;
-                rgba.push_back(bytes[p + 2]);  // R
-                rgba.push_back(bytes[p + 1]);  // G
-                rgba.push_back(bytes[p + 0]);  // B
-                rgba.push_back(bytes[p + 3]);  // A
+                const std::size_t p = static_cast<std::size_t>(y) * rowStride +
+                                      static_cast<std::size_t>(x) * 4;
+                rgba.push_back(data[p + 2]);  // R
+                rgba.push_back(data[p + 1]);  // G
+                rgba.push_back(data[p + 0]);  // B
+                rgba.push_back(data[p + 3]);  // A
             }
         }
-        std::ofstream out(outPath, std::ios::binary);
+        std::ofstream out(path, std::ios::binary);
         out.write(reinterpret_cast<const char*>(rgba.data()),
                   static_cast<std::streamsize>(rgba.size()));
-    }
+    };
+    dumpRgba(frame.value(), readEnv("CS_INOCHI2D_RENDER_OUT"));
+
+    // Idle motion: a frame rendered ~0.83 s later must differ from the first --
+    // the puppet gently breathes/sways so it is not a frozen picture.
+    auto laterFrame = renderer.value()->render(
+        TimestampNs{creator::core::DurationNs{830'000'000}}, {});
+    ASSERT_TRUE(laterFrame.hasValue()) << laterFrame.error().message();
+    const auto laterBytes = laterFrame.value().bytes();
+    EXPECT_FALSE(std::equal(bytes.begin(), bytes.end(), laterBytes.begin(),
+                            laterBytes.end()))
+        << "idle motion produced an identical frame 0.83 s later";
+    dumpRgba(laterFrame.value(), readEnv("CS_INOCHI2D_RENDER_OUT2"));
 }
 
 #endif  // CS_INOCHI2D_ACTUAL_ROOT
