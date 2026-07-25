@@ -33,6 +33,13 @@ class ProjectController final : public QObject, public IRecordingPersistence {
     // on-demand sync intermittently revokes local write access ("이 위치에
     // 저장할 권한이 없습니다").
     Q_PROPERTY(QUrl defaultProjectFolder READ defaultProjectFolder CONSTANT)
+    // The open project's canvas, surfaced so the live Studio preview can frame
+    // itself to the project aspect (9:16 shorts vs 16:9). Defaults describe a
+    // landscape canvas when no project is open. NOTIFY projectChanged already
+    // fires on every open.
+    Q_PROPERTY(int canvasWidth READ canvasWidth NOTIFY projectChanged)
+    Q_PROPERTY(int canvasHeight READ canvasHeight NOTIFY projectChanged)
+    Q_PROPERTY(bool portrait READ portrait NOTIFY projectChanged)
 
 public:
     explicit ProjectController(QObject* parent = nullptr);
@@ -52,7 +59,17 @@ public:
     [[nodiscard]] QVariantList recoveries() const { return recoveries_; }
     [[nodiscard]] QString statusMessage() const { return statusMessage_; }
     [[nodiscard]] QUrl defaultProjectFolder() const;
+    [[nodiscard]] int canvasWidth() const;
+    [[nodiscard]] int canvasHeight() const;
+    [[nodiscard]] bool portrait() const;
     [[nodiscard]] std::optional<std::filesystem::path> recordingPackagePath() const;
+
+    /// Default composition box (normalized [0,1] x/y/width/height + zOrder) for a
+    /// role ("screen"/"camera"/"avatar") on the open project's PORTRAIT canvas, so
+    /// the live Studio preview lays sources out exactly as the shorts export will.
+    /// Returns an empty map for a landscape canvas or a non-video role, letting
+    /// the caller keep its own fallback.
+    Q_INVOKABLE QVariantMap defaultCompositionTransform(const QString& role) const;
 
     /// `portrait` selects a 9:16 (1080x1920) shorts canvas; false (default)
     /// keeps the 16:9 (1920x1080) landscape canvas and existing QML callers.

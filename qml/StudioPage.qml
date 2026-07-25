@@ -75,8 +75,18 @@ Item {
     function compositionValue(roleName, key, fallbackValue) {
         const revision = studioWorkflowController.activeSourceModel.revision
         const values = studioWorkflowController.activeSourceModel.transformForRole(roleName)
-        return revision >= 0 && values && values[key] !== undefined
-               ? values[key] : fallbackValue
+        if (revision >= 0 && values && values[key] !== undefined)
+            return values[key]
+        // On a portrait (9:16) project the export forces the shorts band layout
+        // (screen top / camera bottom). Fall the live preview back to those same
+        // boxes so what you record is what you export. Landscape returns an empty
+        // map here and keeps the fallback below.
+        if (projectController.portrait) {
+            const vertical = projectController.defaultCompositionTransform(roleName)
+            if (vertical && vertical[key] !== undefined)
+                return vertical[key]
+        }
+        return fallbackValue
     }
 
     function compositionEnabled(roleName) {
@@ -1058,6 +1068,25 @@ Item {
                     border.color: studioController.recording ? theme.danger : theme.border
                     border.width: studioController.recording ? 2 : 1
 
+                    // Aspect-locked canvas: 9:16 for portrait (shorts), 16:9 for
+                    // landscape, centered and letterboxed within the stage (the
+                    // surrounding dark rectangle becomes the letterbox bars). Every
+                    // live composition surface lives inside this frame, so their
+                    // normalized [0,1] transforms map to the true export canvas and
+                    // the preview is WYSIWYG.
+                    Item {
+                        id: canvasFrame
+                        objectName: "studioCanvasFrame"
+                        readonly property real canvasAspect:
+                            (projectController.canvasWidth > 0
+                             && projectController.canvasHeight > 0)
+                                ? projectController.canvasWidth / projectController.canvasHeight
+                                : (16 / 9)
+                        anchors.centerIn: parent
+                        width: Math.min(parent.width, parent.height * canvasAspect)
+                        height: canvasAspect > 0 ? width / canvasAspect : parent.height
+                        clip: true
+
                     TestPattern {
                         anchors.fill: parent
                         anchors.margins: 2
@@ -1223,6 +1252,7 @@ Item {
                                 font.bold: true
                             }
                         }
+                    }
                     }
 
                     Label {
@@ -1754,7 +1784,9 @@ Item {
                 Layout.leftMargin: theme.spaceLg
                 Layout.rightMargin: theme.spaceLg
                 Layout.topMargin: theme.spaceLg
-                Layout.preferredHeight: Math.round(width * 9 / 16)
+                // 9:16 tall for portrait (shorts), 16:9 for landscape.
+                Layout.preferredHeight: Math.round(
+                    width * (projectController.portrait ? 16 / 9 : 9 / 16))
                 radius: theme.radiusMd
                 color: theme.bgDeep
                 border.color: root.recordActive ? theme.danger : theme.border

@@ -5,6 +5,8 @@
 #include "app/EditorPreviewItem.h"
 #include "app/MediaBinModel.h"
 #include "app/TimelineTrackModel.h"
+#include "app/VerticalLayout.h"
+#include "domain/StudioScene.h"
 #include "avatar/AvatarParameterMapper.h"
 #include "avatar/PlaceholderAvatarRenderer.h"
 #include "avatar/SyntheticFaceTrackingProvider.h"
@@ -82,12 +84,39 @@ class FakeProjectController final : public QObject {
     Q_PROPERTY(QVariantList recentProjects READ recentProjects CONSTANT)
     Q_PROPERTY(QVariantList recoveries READ recoveries CONSTANT)
     Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
+    Q_PROPERTY(int canvasWidth READ canvasWidth NOTIFY projectStateChanged)
+    Q_PROPERTY(int canvasHeight READ canvasHeight NOTIFY projectStateChanged)
+    Q_PROPERTY(bool portrait READ portrait NOTIFY projectStateChanged)
 
 public:
     using QObject::QObject;
 
     [[nodiscard]] bool busy() const noexcept { return false; }
     [[nodiscard]] bool hasOpenProject() const noexcept { return hasOpenProject_; }
+    [[nodiscard]] int canvasWidth() const noexcept { return canvasWidth_; }
+    [[nodiscard]] int canvasHeight() const noexcept { return canvasHeight_; }
+    [[nodiscard]] bool portrait() const noexcept { return canvasHeight_ > canvasWidth_; }
+    // Mirrors the real ProjectController: portrait projects hand the live preview
+    // the shorts export boxes; landscape returns an empty map.
+    Q_INVOKABLE QVariantMap defaultCompositionTransform(const QString& role) const {
+        const auto parsed =
+            creator::domain::studioSourceRoleFromName(role.toStdString());
+        if (!parsed.hasValue()) return {};
+        const auto box = creator::app::verticalDefaultTransform(
+            parsed.value(), canvasWidth_, canvasHeight_);
+        if (!box.has_value()) return {};
+        return QVariantMap{{QStringLiteral("x"), box->x()},
+                           {QStringLiteral("y"), box->y()},
+                           {QStringLiteral("width"), box->width()},
+                           {QStringLiteral("height"), box->height()},
+                           {QStringLiteral("zOrder"), box->zOrder()}};
+    }
+    void setCanvas(int width, int height) {
+        if (canvasWidth_ == width && canvasHeight_ == height) return;
+        canvasWidth_ = width;
+        canvasHeight_ = height;
+        emit projectStateChanged();
+    }
     [[nodiscard]] QString projectName() const { return {}; }
     [[nodiscard]] QUrl projectUrl() const { return {}; }
     [[nodiscard]] QVariantList recentProjects() const { return {}; }
@@ -121,6 +150,8 @@ signals:
 
 private:
     bool hasOpenProject_{false};
+    int canvasWidth_{1920};
+    int canvasHeight_{1080};
 };
 
 class FakeExportController final : public QObject {
@@ -1586,6 +1617,9 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
         QStringLiteral("studioWorkflowController"), &studioWorkflowController);
     engine.rootContext()->setContextProperty(
         QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
+    FakeProjectController projectController;
+    engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
+                                             &projectController);
     QQmlComponent component{
         &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/StudioPage.qml"))};
 
@@ -1646,6 +1680,9 @@ TEST(QmlSmokeTest, StudioShortcutsShareVisibleActionsAndStateGuards) {
         QStringLiteral("studioWorkflowController"), &studioWorkflowController);
     engine.rootContext()->setContextProperty(
         QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
+    FakeProjectController projectController;
+    engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
+                                             &projectController);
     QQmlComponent component{
         &engine,
         QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/StudioPage.qml"))};
@@ -1740,6 +1777,49 @@ TEST(QmlSmokeTest, StudioShortcutsShareVisibleActionsAndStateGuards) {
                     .toBool());
 }
 
+TEST(QmlSmokeTest, StudioPageLocksCanvasAspectToProjectOrientation) {
+    // The live preview canvas must lock to the project aspect: 9:16 for a
+    // portrait (shorts) project, 16:9 for landscape. canvasAspect is bound
+    // straight to projectController.canvas*, so it proves the WYSIWYG framing
+    // without needing a rendered window.
+    const auto aspectFor = [](int canvasWidth, int canvasHeight) -> double {
+        QQmlEngine engine;
+        FakeStudioController studioController;
+        FakeScreenCaptureController screenCaptureController;
+        FakeDeviceCaptureController deviceCaptureController;
+        FakeStudioWorkflowController studioWorkflowController;
+        FakeShortcutSettingsController shortcutSettingsController;
+        FakeProjectController projectController;
+        projectController.setCanvas(canvasWidth, canvasHeight);
+        engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
+                                                 &studioController);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("screenCaptureController"), &screenCaptureController);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("deviceCaptureController"), &deviceCaptureController);
+        installAvatarController(engine);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("studioWorkflowController"), &studioWorkflowController);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
+        engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
+                                                 &projectController);
+        QQmlComponent component{
+            &engine,
+            QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/StudioPage.qml"))};
+        std::unique_ptr<QObject> object{component.create()};
+        EXPECT_NE(object, nullptr) << component.errorString().toStdString();
+        if (!object) return -1.0;
+        auto* frame = object->findChild<QObject*>(QStringLiteral("studioCanvasFrame"));
+        EXPECT_NE(frame, nullptr);
+        if (!frame) return -1.0;
+        return frame->property("canvasAspect").toReal();
+    };
+
+    EXPECT_NEAR(aspectFor(1080, 1920), 1080.0 / 1920.0, 1e-6);  // portrait 9:16
+    EXPECT_NEAR(aspectFor(1920, 1080), 1920.0 / 1080.0, 1e-6);  // landscape 16:9
+}
+
 TEST(QmlSmokeTest, StudioPageProvidesModelDrivenAccessibleWorkflowAtAllSizes) {
     const std::array<std::tuple<int, int, qreal>, 3> fixtures{
         std::tuple{1280, 720, 1.0}, std::tuple{1440, 900, 1.0},
@@ -1765,6 +1845,9 @@ TEST(QmlSmokeTest, StudioPageProvidesModelDrivenAccessibleWorkflowAtAllSizes) {
             QStringLiteral("studioWorkflowController"), &studioWorkflowController);
         engine.rootContext()->setContextProperty(
             QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
+        FakeProjectController projectController;
+        engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
+                                                 &projectController);
         QQmlComponent component{
             &engine,
             QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/StudioPage.qml"))};

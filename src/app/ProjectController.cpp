@@ -2,8 +2,10 @@
 
 #include "app/ProjectWorker.h"
 #include "app/RecentProjectRegistry.h"
+#include "app/VerticalLayout.h"
 #include "core/AppError.h"
 #include "domain/Identifiers.h"
+#include "domain/StudioScene.h"
 #include "project_store/ProjectPackageStore.h"
 
 #include <QDir>
@@ -125,6 +127,34 @@ QString ProjectController::projectId() const {
 
 QUrl ProjectController::projectUrl() const {
     return project_.value(QStringLiteral("url")).toUrl();
+}
+
+int ProjectController::canvasWidth() const {
+    // No project open -> report a landscape default so portrait() is false.
+    return project_.value(QStringLiteral("canvasWidth"), 1920).toInt();
+}
+
+int ProjectController::canvasHeight() const {
+    return project_.value(QStringLiteral("canvasHeight"), 1080).toInt();
+}
+
+bool ProjectController::portrait() const {
+    return canvasHeight() > canvasWidth();
+}
+
+QVariantMap ProjectController::defaultCompositionTransform(const QString& role) const {
+    const auto parsed = domain::studioSourceRoleFromName(role.toStdString());
+    if (!parsed.hasValue()) return {};
+    const auto box =
+        verticalDefaultTransform(parsed.value(), canvasWidth(), canvasHeight());
+    if (!box.has_value()) return {};  // landscape or audio role -> caller keeps its own
+    return QVariantMap{
+        {QStringLiteral("x"), box->x()},
+        {QStringLiteral("y"), box->y()},
+        {QStringLiteral("width"), box->width()},
+        {QStringLiteral("height"), box->height()},
+        {QStringLiteral("zOrder"), box->zOrder()},
+    };
 }
 
 void ProjectController::setBusy(bool value) {
