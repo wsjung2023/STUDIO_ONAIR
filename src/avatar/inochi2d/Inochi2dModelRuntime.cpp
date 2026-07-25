@@ -209,28 +209,32 @@ public:
             if (command.elemCount == 0U) continue;
             const auto end = static_cast<std::uint64_t>(command.idxOffset) +
                              command.elemCount;
+            // Skip a command this software rasteriser cannot safely draw -- an
+            // out-of-range index span, or a mask/composite pass that carries no
+            // texture source -- instead of failing the whole frame, so a model
+            // that uses features beyond this renderer still draws its textured
+            // parts. (An empty result is still reported as an error below.)
             if (end > indexCount || command.sources[0] == nullptr) {
-                return AppError{ErrorCode::ParseFailure,
-                                "Inochi2D draw command is outside its buffers"};
+                continue;
             }
             auto texture = copyTexture(command.sources[0]);
-            if (!texture.hasValue()) return texture.error();
+            if (!texture.hasValue()) continue;
             AvatarSoftwareRenderInput batch;
             batch.vertices = vertices;
             batch.texture = std::move(texture).value();
             batch.indices.reserve(command.elemCount);
+            bool commandInBounds = true;
             for (std::uint32_t offset = 0; offset < command.elemCount; ++offset) {
                 const auto vertexIndex = static_cast<std::uint64_t>(
                     indexData[command.idxOffset + offset]) + command.vtxOffset;
                 if (vertexIndex >= vertexCount) {
-                    return AppError{ErrorCode::ParseFailure,
-                                    "Inochi2D draw command references an invalid vertex"};
+                    commandInBounds = false;
+                    break;
                 }
                 batch.indices.push_back(static_cast<std::uint32_t>(vertexIndex));
             }
-            if (batch.indices.size() % 3U != 0U) {
-                return AppError{ErrorCode::ParseFailure,
-                                "Inochi2D draw command is not triangle-aligned"};
+            if (!commandInBounds || batch.indices.size() % 3U != 0U) {
+                continue;
             }
             batches.push_back(std::move(batch));
         }
