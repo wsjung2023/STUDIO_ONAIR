@@ -30,6 +30,29 @@ set_target_properties(cs_crash_recovery_fixture PROPERTIES
 )
 cs_apply_warnings(cs_crash_recovery_fixture)
 
+if(WIN32)
+    add_library(cs_inochi2d_pe_fixture SHARED
+        helpers/Inochi2dPeFixture.cpp
+    )
+    add_library(cs_inochi2d_pe_missing_export_fixture SHARED
+        helpers/Inochi2dPeFixture.cpp
+    )
+    target_compile_definitions(cs_inochi2d_pe_missing_export_fixture
+        PRIVATE CS_INOCHI2D_FIXTURE_OMIT_DRAW=1
+    )
+    set_target_properties(
+        cs_inochi2d_pe_fixture
+        cs_inochi2d_pe_missing_export_fixture
+        PROPERTIES
+            AUTOMOC OFF
+            AUTOUIC OFF
+            AUTORCC OFF
+            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+    cs_apply_warnings(cs_inochi2d_pe_fixture)
+    cs_apply_warnings(cs_inochi2d_pe_missing_export_fixture)
+endif()
+
 add_executable(cs_tests
     ${PROJECT_SOURCE_DIR}/src/app/TimelineEditService.cpp
     core/ResultTest.cpp
@@ -158,6 +181,21 @@ target_compile_definitions(cs_tests PRIVATE
     CS_EVENT_SCHEMA_PATH="${PROJECT_SOURCE_DIR}/schemas/event.schema.json"
 )
 add_dependencies(cs_tests cs_crash_recovery_fixture)
+if(WIN32)
+    target_compile_definitions(cs_tests PRIVATE
+        CS_INOCHI2D_PE_FIXTURE_PATH="$<TARGET_FILE:cs_inochi2d_pe_fixture>"
+        CS_INOCHI2D_PE_MISSING_EXPORT_FIXTURE_PATH="$<TARGET_FILE:cs_inochi2d_pe_missing_export_fixture>"
+    )
+    add_dependencies(cs_tests
+        cs_inochi2d_pe_fixture
+        cs_inochi2d_pe_missing_export_fixture
+    )
+endif()
+if(CS_ENABLE_INOCHI2D)
+    target_compile_definitions(cs_tests PRIVATE
+        CS_INOCHI2D_ACTUAL_ROOT="${CS_INOCHI2D_ROOT}"
+    )
+endif()
 
 cs_apply_warnings(cs_tests)
 
@@ -763,6 +801,18 @@ if(WIN32)
                 -File
                     "${PROJECT_SOURCE_DIR}/tests/scripts/Inochi2dRuntimeLoadProbeTest.ps1"
                 -RuntimeRoot "${CS_INOCHI2D_ROOT}"
+        )
+        add_test(
+            NAME Inochi2dBinaryVerifier
+            COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File
+                    "${PROJECT_SOURCE_DIR}/tests/scripts/Inochi2dBinaryVerifierTest.ps1"
+                -RuntimeRoot "${CS_INOCHI2D_ROOT}"
+                -VerifierPath
+                    "${PROJECT_SOURCE_DIR}/scripts/verify_inochi2d_runtime.ps1"
+                -ValidFixture "$<TARGET_FILE:cs_inochi2d_pe_fixture>"
+                -MissingExportFixture
+                    "$<TARGET_FILE:cs_inochi2d_pe_missing_export_fixture>"
         )
     endif()
     add_test(

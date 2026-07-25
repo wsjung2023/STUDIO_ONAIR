@@ -77,8 +77,9 @@ tests/acceptance/
 - Produces: option `CS_ENABLE_INOCHI2D`, `CS_INOCHI2D_ROOT`,
   `Inochi2dRuntimeManifest::loadAndVerify(root)`.
 - Consumed by: renderer factory and release packaging.
-- Supported bootstrap targets are `windows-x64`, `macos-arm64`, and
-  `android-arm64`; each has a separate staged manifest and library hash.
+- The audited bootstrap target is currently `windows-x64` only. Mach-O and ELF
+  remain explicitly unsupported until bounded binary parsers and physical
+  target builds exist.
 
 - [ ] **Step 1: Add the failing pin and runtime-manifest tests**
 
@@ -116,9 +117,8 @@ Expected: pin policy fails and the C++ type does not exist.
 
 1. download `https://github.com/Inochi2D/inochi2d/archive/refs/tags/v0.8.7.tar.gz`;
 2. verify `cf0b7bdedc61452614f44f497f0165c3da76ce0b5c7c8b59a29c6fa45e980aa2`;
-3. build the dynamic C-FFI with LDC release mode for the requested exact target:
-   MSVC-compatible x64 on Windows, arm64 Darwin on macOS, or arm64 Android API
-   26 with the checked NDK toolchain;
+3. build the dynamic C-FFI with LDC release mode for the audited
+   MSVC-compatible Windows x64 target;
 4. stage only the C-FFI runtime library and BSD-2-Clause notice under
    `build/inochi2d/prefix/<target>`;
 5. write `runtime-manifest.json` with version, commit, archive hash, library
@@ -126,10 +126,9 @@ Expected: pin policy fails and the C++ type does not exist.
    `IN_VEC2_POSITION`, and the 16 exact symbols currently resolved by
    `Inochi2dModelRuntime.cpp`.
 
-The verifier rejects extra DLL/dylib files, wrong ABI mode, missing symbols,
-changed hashes, or a target/architecture mismatch before `LoadLibraryW` or
-`dlopen`. Android loads the verified staged `.so` through the same C-FFI symbol
-table; it does not substitute a separate Java renderer.
+The verifier rejects extra DLLs, wrong ABI mode, missing actual PE exports,
+unapproved imports, changed hashes, or a target/architecture mismatch before
+`LoadLibraryExW`. Mach-O and ELF remain fail-closed and are not release claims.
 
 - [ ] **Step 4: Run policy, bootstrap, manifest, and existing runtime tests**
 

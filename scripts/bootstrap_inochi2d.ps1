@@ -1,13 +1,12 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("windows-x64", "macos-arm64", "android-arm64")]
+    [ValidateSet("windows-x64")]
     [string]$Target,
     [string]$BuildRoot = "",
     [string]$InstallRoot = "",
     [string]$OfficialArchivePath = "",
-    [string]$LdcRoot = "",
-    [string]$AndroidNdkRoot = ""
+    [string]$LdcRoot = ""
 )
 
 # Source-build the pre-0.9 C FFI from one immutable, signed upstream Nightly
@@ -339,76 +338,6 @@ if ($Target -eq "windows-x64") {
     $SdkIdentity =
         "Windows SDK $($env:WindowsSDKVersion.TrimEnd('\')); " +
         "MSVC $($env:VCToolsVersion.TrimEnd('\'))"
-}
-elseif ($Target -eq "macos-arm64") {
-    if (-not (Get-Command sw_vers -ErrorAction SilentlyContinue) -or
-        (& uname -m) -ne "arm64") {
-        throw "macos-arm64 must be source-built on an arm64 macOS host"
-    }
-    $BuildArguments += "--arch=arm64-apple-macos"
-    $env:MACOSX_DEPLOYMENT_TARGET = "13.0"
-    $TargetTriple = "arm64-apple-darwin"
-    $MinimumPlatform = "macos-13.0"
-    $BuiltLibrary = Join-Path $SourceRoot "out/libinochi2d.dylib"
-    $StagedRelative = "lib/libinochi2d.dylib"
-    $SymbolTool = (Get-Command nm -ErrorAction Stop).Source
-    $SymbolArguments = @("-gU")
-    $SdkVersion = (& xcrun --sdk macosx --show-sdk-version) -join " "
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($SdkVersion)) {
-        throw "Could not identify the checked macOS SDK"
-    }
-    $SdkIdentity = "macOS SDK $SdkVersion; deployment target 13.0"
-}
-else {
-    if ([string]::IsNullOrWhiteSpace($AndroidNdkRoot)) {
-        $AndroidNdkRoot = $env:ANDROID_NDK_HOME
-    }
-    if ([string]::IsNullOrWhiteSpace($AndroidNdkRoot)) {
-        throw "android-arm64 requires -AndroidNdkRoot or ANDROID_NDK_HOME"
-    }
-    $AndroidNdkRoot = [System.IO.Path]::GetFullPath($AndroidNdkRoot)
-    $PropertiesPath = Join-Path $AndroidNdkRoot "source.properties"
-    if (-not (Test-Path -LiteralPath $PropertiesPath -PathType Leaf)) {
-        throw "Android NDK source.properties is missing"
-    }
-    $HostTag = if ($env:OS -eq "Windows_NT") { "windows-x86_64" }
-        elseif ((& uname -s) -eq "Darwin") { "darwin-x86_64" }
-        else { "linux-x86_64" }
-    $ToolchainBin = Join-Path $AndroidNdkRoot `
-        "toolchains/llvm/prebuilt/$HostTag/bin"
-    $AndroidClang = Join-Path $ToolchainBin `
-        $(if ($env:OS -eq "Windows_NT") {
-            "aarch64-linux-android26-clang.cmd"
-        } else {
-            "aarch64-linux-android26-clang"
-        })
-    $AndroidNm = Join-Path $ToolchainBin `
-        $(if ($env:OS -eq "Windows_NT") { "llvm-nm.exe" } else { "llvm-nm" })
-    foreach ($Tool in @($AndroidClang, $AndroidNm)) {
-        if (-not (Test-Path -LiteralPath $Tool -PathType Leaf)) {
-            throw "Checked Android NDK API 26 tool is missing: $Tool"
-        }
-    }
-    $TargetProbe = (& $Ldc.Source -mtriple=aarch64-linux-android26 --version) `
-        -join "`n"
-    if ($LASTEXITCODE -ne 0 -or
-        $TargetProbe -notmatch 'aarch64.*android26') {
-        throw "LDC lacks the checked Android arm64 API 26 cross target"
-    }
-    $BuildArguments += "--arch=aarch64-linux-android26"
-    $env:CC = $AndroidClang
-    $env:CXX = $AndroidClang.Replace("clang", "clang++")
-    $env:DFLAGS = "-mtriple=aarch64-linux-android26 -gcc=$AndroidClang"
-    $TargetTriple = "aarch64-linux-android26"
-    $MinimumPlatform = "android-api-26"
-    $BuiltLibrary = Join-Path $SourceRoot "out/libinochi2d.so"
-    $StagedRelative = "lib/libinochi2d.so"
-    $SymbolTool = $AndroidNm
-    $SymbolArguments = @("--defined-only", "--dynamic")
-    $NdkRevision = Get-Content -LiteralPath $PropertiesPath |
-        Select-String -Pattern '^Pkg\.Revision\s*='
-    if (-not $NdkRevision) { throw "Could not identify the checked Android NDK" }
-    $SdkIdentity = "Android NDK $($NdkRevision.Line.Split('=')[1].Trim()); API 26"
 }
 
 Push-Location $SourceRoot

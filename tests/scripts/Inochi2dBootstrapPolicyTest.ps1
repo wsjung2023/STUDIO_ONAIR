@@ -27,13 +27,12 @@ foreach ($Pattern in @(
     'ExpectedSourceArchiveSha256',
     'Get-FileHash',
     'if \(\$ArchiveHash -ne \$ExpectedSourceArchiveSha256\)',
-    'ValidateSet\("windows-x64",\s*"macos-arm64",\s*"android-arm64"\)',
+    'ValidateSet\("windows-x64"\)',
     'dub',
     '--config=dynamic',
     '--compiler=ldc2',
     '--build=release',
     'IN_VEC2_POSITION',
-    'android-api-26',
     'runtime-manifest\.json',
     'verify_inochi2d_runtime\.ps1',
     'BSD-2-Clause'
@@ -129,10 +128,20 @@ foreach ($Pattern in @(
     'ExpectedTarget',
     'Get-FileHash',
     'unexpected',
-    'runtime-manifest\.json'
+    'runtime-manifest\.json',
+    'Get-WindowsX64DllInfo',
+    'COFF characteristics',
+    'export name table',
+    'import descriptor'
 )) {
     if ($Verifier -notmatch $Pattern) {
         throw "Inochi2D runtime verifier is missing a fail-closed check: $Pattern"
+    }
+}
+foreach ($UnsupportedTarget in @("macos-arm64", "android-arm64")) {
+    if ($Bootstrap -match [regex]::Escape($UnsupportedTarget) -or
+        $Verifier -match [regex]::Escape($UnsupportedTarget)) {
+        throw "Inochi2D scripts advertise unsupported target: $UnsupportedTarget"
     }
 }
 
@@ -168,6 +177,7 @@ $Bom = Get-Content -LiteralPath (Join-Path $RepositoryRoot "legal/OSS_BOM.csv") 
 $Row = $Bom -split "\r?\n" | Where-Object { $_ -match '^Inochi2D,' }
 foreach ($Pattern in @(
     'BSD-2-Clause',
+    'Windows x64 only',
     '0\.8\.7-nightly\+66fa768',
     '66fa76834b28037db0c871c656563422f697879e',
     '79f1f51641380ac992b5ecca2ab49245f111517ca4185ca832ffb0460f6cd4fb'

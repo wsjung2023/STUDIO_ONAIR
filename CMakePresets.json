@@ -100,7 +100,7 @@
     },
     {
       "name": "windows-inochi2d-debug",
-      "displayName": "Windows Debug with audited pre-0.9 Inochi2D C FFI",
+      "displayName": "Windows x64 Debug with audited Inochi2D C FFI",
       "inherits": "windows-debug",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {

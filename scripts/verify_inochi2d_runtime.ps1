@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$RuntimeRoot,
     [Parameter(Mandatory = $true)]
-    [ValidateSet("windows-x64", "macos-arm64", "android-arm64")]
+    [ValidateSet("windows-x64")]
     [string]$ExpectedTarget
 )
 
@@ -52,16 +52,6 @@ $TargetPolicy = @{
         minimum = "windows-10-1809"
         library = "bin/inochi2d.dll"
     }
-    "macos-arm64" = @{
-        triple = "arm64-apple-darwin"
-        minimum = "macos-13.0"
-        library = "lib/libinochi2d.dylib"
-    }
-    "android-arm64" = @{
-        triple = "aarch64-linux-android26"
-        minimum = "android-api-26"
-        library = "lib/libinochi2d.so"
-    }
 }
 
 function Resolve-ContainedPath {
@@ -106,61 +96,234 @@ function Assert-RegularUnredirectedFile {
     }
 }
 
-function Read-FilePrefix {
-    param([string]$Path, [int]$Count = 512)
-    $Stream = [System.IO.File]::Open(
-        $Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read,
-        [System.IO.FileShare]::Read)
-    try {
-        $Buffer = New-Object byte[] $Count
-        $Read = $Stream.Read($Buffer, 0, $Buffer.Length)
-        if ($Read -eq $Buffer.Length) { return $Buffer }
-        $Result = New-Object byte[] $Read
-        [Array]::Copy($Buffer, $Result, $Read)
-        return $Result
-    }
-    finally {
-        $Stream.Dispose()
+function Assert-ByteRange {
+    param(
+        [byte[]]$Bytes,
+        [long]$Offset,
+        [long]$Length,
+        [string]$Description
+    )
+    if ($Offset -lt 0 -or $Length -lt 0 -or
+        $Offset -gt $Bytes.LongLength -or
+        $Length -gt ($Bytes.LongLength - $Offset)) {
+        throw "Malformed Inochi2D PE: $Description"
     }
 }
 
-function Assert-TargetArchitecture {
-    param([string]$Path, [string]$Target)
-    [byte[]]$Bytes = Read-FilePrefix -Path $Path
-    if ($Target -eq "windows-x64") {
-        if ($Bytes.Length -lt 70 -or $Bytes[0] -ne 0x4d -or
-            $Bytes[1] -ne 0x5a) {
-            throw "Inochi2D runtime is not a PE library"
-        }
-        $PeOffset = [BitConverter]::ToUInt32($Bytes, 0x3c)
-        if ($PeOffset -gt ($Bytes.Length - 6) -or
-            $Bytes[$PeOffset] -ne 0x50 -or
-            $Bytes[$PeOffset + 1] -ne 0x45 -or
-            $Bytes[$PeOffset + 2] -ne 0 -or
-            $Bytes[$PeOffset + 3] -ne 0 -or
-            [BitConverter]::ToUInt16($Bytes, $PeOffset + 4) -ne 0x8664) {
-            throw "Inochi2D runtime is not an x64 MSVC-compatible PE library"
-        }
-        return
+function Get-PeUInt16 {
+    param([byte[]]$Bytes, [long]$Offset, [string]$Description)
+    Assert-ByteRange $Bytes $Offset 2 $Description
+    return [BitConverter]::ToUInt16($Bytes, [int]$Offset)
+}
+
+function Get-PeUInt32 {
+    param([byte[]]$Bytes, [long]$Offset, [string]$Description)
+    Assert-ByteRange $Bytes $Offset 4 $Description
+    return [BitConverter]::ToUInt32($Bytes, [int]$Offset)
+}
+
+function Convert-PeRvaToFileOffset {
+    param(
+        [byte[]]$Bytes,
+        [uint32]$Rva,
+        [long]$Length,
+        [uint32]$HeadersSize,
+        [object[]]$Sections,
+        [string]$Description
+    )
+    if ($Rva -lt $HeadersSize) {
+        Assert-ByteRange $Bytes $Rva $Length $Description
+        return [long]$Rva
     }
-    if ($Target -eq "macos-arm64") {
-        $Expected = @(0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01)
-        if ($Bytes.Length -lt 8) {
-            throw "Inochi2D runtime is not an arm64 Mach-O library"
+    foreach ($Section in $Sections) {
+        [uint64]$MappedSize =
+            [Math]::Max($Section.VirtualSize, $Section.RawSize)
+        if ([uint64]$Rva -lt [uint64]$Section.VirtualAddress) {
+            continue
         }
-        for ($Index = 0; $Index -lt $Expected.Count; ++$Index) {
-            if ($Bytes[$Index] -ne $Expected[$Index]) {
-                throw "Inochi2D runtime is not an arm64 Mach-O library"
+        [uint64]$Delta = [uint64]$Rva - [uint64]$Section.VirtualAddress
+        if ($Delta -gt $MappedSize -or
+            [uint64]$Length -gt ($MappedSize - $Delta) -or
+            $Delta -gt [uint64]$Section.RawSize -or
+            [uint64]$Length -gt ([uint64]$Section.RawSize - $Delta)) {
+            continue
+        }
+        [uint64]$Offset = [uint64]$Section.RawOffset + $Delta
+        Assert-ByteRange $Bytes ([long]$Offset) $Length $Description
+        return [long]$Offset
+    }
+    throw "Malformed Inochi2D PE: $Description"
+}
+
+function Get-PeAsciiString {
+    param([byte[]]$Bytes, [long]$Offset, [string]$Description)
+    Assert-ByteRange $Bytes $Offset 1 $Description
+    $Builder = [System.Text.StringBuilder]::new()
+    for ([long]$Index = $Offset;
+        $Index -lt $Bytes.LongLength -and $Builder.Length -le 1024;
+        ++$Index) {
+        $Value = $Bytes[$Index]
+        if ($Value -eq 0) {
+            if ($Builder.Length -eq 0) {
+                throw "Malformed Inochi2D PE: $Description"
             }
+            return $Builder.ToString()
         }
-        return
+        if ($Value -lt 0x20 -or $Value -gt 0x7e) {
+            throw "Malformed Inochi2D PE: $Description"
+        }
+        $Builder.Append([char]$Value) | Out-Null
     }
-    if ($Bytes.Length -lt 20 -or $Bytes[0] -ne 0x7f -or
-        $Bytes[1] -ne 0x45 -or $Bytes[2] -ne 0x4c -or
-        $Bytes[3] -ne 0x46 -or $Bytes[4] -ne 2 -or $Bytes[5] -ne 1 -or
-        [BitConverter]::ToUInt16($Bytes, 18) -ne 183) {
-        throw "Inochi2D runtime is not an arm64 ELF library"
+    throw "Malformed Inochi2D PE: $Description"
+}
+
+function Get-WindowsX64DllInfo {
+    param([string]$Path, [switch]$SkipExports)
+    $Item = Get-Item -LiteralPath $Path -Force
+    if ($Item.Length -le 0 -or $Item.Length -gt 64MB) {
+        throw "Inochi2D runtime binary has an invalid size"
     }
+    [byte[]]$Bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($Bytes.Length -lt 64 -or
+        (Get-PeUInt16 $Bytes 0 "DOS header") -ne 0x5a4d) {
+        throw "Inochi2D runtime is not a PE image"
+    }
+    $PeOffset = Get-PeUInt32 $Bytes 0x3c "PE header offset"
+    Assert-ByteRange $Bytes $PeOffset 24 "PE header"
+    if ((Get-PeUInt32 $Bytes $PeOffset "PE signature") -ne 0x00004550) {
+        throw "Inochi2D PE signature is invalid"
+    }
+    $Coff = [long]$PeOffset + 4
+    $Machine = Get-PeUInt16 $Bytes $Coff "COFF machine"
+    $SectionCount = Get-PeUInt16 $Bytes ($Coff + 2) "COFF section count"
+    $OptionalSize = Get-PeUInt16 $Bytes ($Coff + 16) "optional header size"
+    $Characteristics =
+        Get-PeUInt16 $Bytes ($Coff + 18) "COFF characteristics"
+    if ($Machine -ne 0x8664 -or $SectionCount -le 0 -or
+        $SectionCount -gt 96 -or
+        ($Characteristics -band 0x2002) -ne 0x2002) {
+        throw "Inochi2D image is not an x64 DLL"
+    }
+    $Optional = $Coff + 20
+    if ($OptionalSize -lt 128) {
+        throw "Inochi2D image is not PE32+"
+    }
+    Assert-ByteRange $Bytes $Optional $OptionalSize "optional header"
+    if ((Get-PeUInt16 $Bytes $Optional "optional header magic") -ne 0x020b) {
+        throw "Inochi2D image is not PE32+"
+    }
+    $DirectoryCount =
+        Get-PeUInt32 $Bytes ($Optional + 108) "data directory count"
+    $HeadersSize = Get-PeUInt32 $Bytes ($Optional + 60) "header size"
+    if ($DirectoryCount -lt 2 -or $HeadersSize -eq 0) {
+        throw "Inochi2D PE data directories are missing"
+    }
+    $SectionTable = $Optional + $OptionalSize
+    Assert-ByteRange $Bytes $SectionTable ($SectionCount * 40) "section table"
+    $Sections = @()
+    for ($Index = 0; $Index -lt $SectionCount; ++$Index) {
+        $Offset = $SectionTable + $Index * 40
+        $Section = [pscustomobject]@{
+            VirtualSize =
+                Get-PeUInt32 $Bytes ($Offset + 8) "section virtual size"
+            VirtualAddress =
+                Get-PeUInt32 $Bytes ($Offset + 12) "section virtual address"
+            RawSize = Get-PeUInt32 $Bytes ($Offset + 16) "section raw size"
+            RawOffset = Get-PeUInt32 $Bytes ($Offset + 20) "section raw offset"
+        }
+        Assert-ByteRange $Bytes $Section.RawOffset $Section.RawSize `
+            "section raw data"
+        $Sections += $Section
+    }
+
+    $ExportRva = Get-PeUInt32 $Bytes ($Optional + 112) "export RVA"
+    $ExportSize = Get-PeUInt32 $Bytes ($Optional + 116) "export size"
+    $ImportRva = Get-PeUInt32 $Bytes ($Optional + 120) "import RVA"
+    $ImportSize = Get-PeUInt32 $Bytes ($Optional + 124) "import size"
+    if (-not $SkipExports -and
+        ($ExportRva -eq 0 -or $ExportSize -lt 40)) {
+        throw "Inochi2D PE export directory is missing"
+    }
+    $Exports = [System.Collections.Generic.List[string]]::new()
+    if (-not $SkipExports) {
+        $ExportOffset = Convert-PeRvaToFileOffset $Bytes $ExportRva 40 `
+            $HeadersSize $Sections "export directory"
+        $NameCount =
+            Get-PeUInt32 $Bytes ($ExportOffset + 24) "export name count"
+        $NamesRva =
+            Get-PeUInt32 $Bytes ($ExportOffset + 32) "export name table RVA"
+        if ($NameCount -eq 0 -or $NameCount -gt 65536 -or $NamesRva -eq 0) {
+            throw "Inochi2D PE export name table is invalid"
+        }
+        $NamesOffset = Convert-PeRvaToFileOffset $Bytes $NamesRva `
+            ($NameCount * 4) $HeadersSize $Sections "export name table"
+        for ($Index = 0; $Index -lt $NameCount; ++$Index) {
+            $NameRva = Get-PeUInt32 $Bytes ($NamesOffset + $Index * 4) `
+                "export name RVA"
+            $NameOffset = Convert-PeRvaToFileOffset $Bytes $NameRva 1 `
+                $HeadersSize $Sections "export name"
+            $Exports.Add(
+                (Get-PeAsciiString $Bytes $NameOffset "export name"))
+        }
+        if (@($Exports | Sort-Object -Unique).Count -ne $Exports.Count) {
+            throw "Inochi2D PE contains duplicate exports"
+        }
+    }
+
+    $Imports = [System.Collections.Generic.List[string]]::new()
+    if ($ImportRva -ne 0 -or $ImportSize -ne 0) {
+        if ($ImportRva -eq 0 -or $ImportSize -lt 20) {
+            throw "Inochi2D PE import directory is invalid"
+        }
+        $MaximumDescriptors = [Math]::Min(
+            [Math]::Floor($ImportSize / 20), 65536)
+        $Terminated = $false
+        for ($Index = 0; $Index -lt $MaximumDescriptors; ++$Index) {
+            $DescriptorRva = [uint32]($ImportRva + $Index * 20)
+            $Descriptor = Convert-PeRvaToFileOffset $Bytes $DescriptorRva 20 `
+                $HeadersSize $Sections "import descriptor"
+            $AllZero = $true
+            for ($Field = 0; $Field -lt 5; ++$Field) {
+                if ((Get-PeUInt32 $Bytes ($Descriptor + $Field * 4) `
+                    "import descriptor") -ne 0) {
+                    $AllZero = $false
+                }
+            }
+            if ($AllZero) {
+                $Terminated = $true
+                break
+            }
+            $NameRva =
+                Get-PeUInt32 $Bytes ($Descriptor + 12) "import name RVA"
+            if ($NameRva -eq 0) {
+                throw "Inochi2D PE import name is invalid"
+            }
+            $NameOffset = Convert-PeRvaToFileOffset $Bytes $NameRva 1 `
+                $HeadersSize $Sections "import name"
+            $Imports.Add(
+                (Get-PeAsciiString $Bytes $NameOffset `
+                    "import name").ToLowerInvariant())
+        }
+        if (-not $Terminated) {
+            throw "Inochi2D PE import table is unterminated"
+        }
+    }
+    return [pscustomobject]@{
+        Exports = @($Exports | Sort-Object)
+        Imports = @($Imports | Sort-Object -Unique)
+    }
+}
+
+function Test-ApprovedWindowsImport {
+    param([string]$Name)
+    $Allowed = @(
+        "advapi32.dll", "comctl32.dll", "kernel32.dll", "msvfw32.dll",
+        "shell32.dll", "shlwapi.dll", "user32.dll", "vcruntime140.dll",
+        "ws2_32.dll", "druntime-ldc-shared.dll",
+        "phobos2-ldc-shared.dll"
+    )
+    return $Allowed -ccontains $Name -or
+        ($Name.StartsWith("api-ms-win-") -and $Name.EndsWith(".dll"))
 }
 
 $RuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
@@ -311,7 +474,32 @@ if ($ExpectedTarget -eq "windows-x64") {
         }
     }
 }
-Assert-TargetArchitecture $LibraryPath $ExpectedTarget
+else {
+    throw "Inochi2D binary inspection is not implemented for $ExpectedTarget"
+}
+
+$LibraryInfo = Get-WindowsX64DllInfo $LibraryPath
+foreach ($Symbol in $RequiredSymbols) {
+    if ($LibraryInfo.Exports -cnotcontains $Symbol) {
+        throw "Inochi2D runtime DLL is missing required export: $Symbol"
+    }
+}
+foreach ($Imported in $LibraryInfo.Imports) {
+    if (-not (Test-ApprovedWindowsImport $Imported)) {
+        throw "Inochi2D runtime DLL imports an unapproved library: $Imported"
+    }
+}
+foreach ($Relative in $ExpectedWindowsLdcRuntimeHashes.Keys) {
+    $DependencyPath = Resolve-ContainedPath $RuntimeRoot $Relative
+    $DependencyInfo = Get-WindowsX64DllInfo $DependencyPath -SkipExports
+    foreach ($Imported in $DependencyInfo.Imports) {
+        if (-not (Test-ApprovedWindowsImport $Imported)) {
+            throw (
+                "Inochi2D dependency DLL imports an unapproved library: " +
+                "$Imported")
+        }
+    }
+}
 
 Write-Host (
     "Verified audited Inochi2D $ExpectedVersion runtime: " +

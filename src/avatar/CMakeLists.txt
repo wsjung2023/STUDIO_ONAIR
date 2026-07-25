@@ -63,6 +63,8 @@ cs_add_qtfree_library(cs_avatar
         openseeface/OpenSeeFaceProcessSupervisor.cpp
         inochi2d/Inochi2dRuntimeManifest.h
         inochi2d/Inochi2dRuntimeManifest.cpp
+        inochi2d/Inochi2dBinaryInspector.h
+        inochi2d/Inochi2dBinaryInspector.cpp
         inochi2d/Inochi2dModelRuntime.h
         inochi2d/Inochi2dModelRuntime.cpp
         inochi2d/Inochi2dAvatarRenderer.h

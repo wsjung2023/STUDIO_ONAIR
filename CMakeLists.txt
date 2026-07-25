@@ -38,20 +38,13 @@ if(CS_ENABLE_INOCHI2D)
         message(FATAL_ERROR
             "CS_ENABLE_INOCHI2D requires CS_INOCHI2D_ROOT from scripts/bootstrap_inochi2d.ps1")
     endif()
-    if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
-        set(CS_INOCHI2D_EXPECTED_TARGET windows-x64)
-        set(CS_INOCHI2D_POWERSHELL powershell)
-    elseif(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
-        set(CS_INOCHI2D_EXPECTED_TARGET macos-arm64)
-        set(CS_INOCHI2D_POWERSHELL pwsh)
-    elseif(ANDROID AND CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a"
-           AND CMAKE_SYSTEM_VERSION GREATER_EQUAL 26)
-        set(CS_INOCHI2D_EXPECTED_TARGET android-arm64)
-        set(CS_INOCHI2D_POWERSHELL pwsh)
-    else()
+    if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
         message(FATAL_ERROR
-            "CS_ENABLE_INOCHI2D has no audited runtime for this target")
+            "CS_ENABLE_INOCHI2D is currently audited only for Windows x64; "
+            "Mach-O and ELF binary verification is not implemented")
     endif()
+    set(CS_INOCHI2D_EXPECTED_TARGET windows-x64)
+    set(CS_INOCHI2D_POWERSHELL powershell)
     execute_process(
         COMMAND ${CS_INOCHI2D_POWERSHELL} -NoProfile
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_inochi2d_runtime.ps1"

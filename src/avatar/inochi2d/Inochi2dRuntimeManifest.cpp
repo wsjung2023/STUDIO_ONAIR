@@ -1,5 +1,6 @@
 #include "avatar/inochi2d/Inochi2dRuntimeManifest.h"
 
+#include "avatar/inochi2d/Inochi2dBinaryInspector.h"
 #include "core/AppError.h"
 #include "core/Sha256.h"
 
@@ -89,12 +90,6 @@ constexpr PlatformIdentity currentPlatform() {
 #if defined(_WIN32) && defined(_M_X64)
     return {"windows-x64", "x86_64-pc-windows-msvc", "windows-10-1809",
             "bin/inochi2d.dll"};
-#elif defined(__APPLE__) && defined(__aarch64__)
-    return {"macos-arm64", "arm64-apple-darwin", "macos-13.0",
-            "lib/libinochi2d.dylib"};
-#elif defined(__ANDROID__) && defined(__aarch64__)
-    return {"android-arm64", "aarch64-linux-android26", "android-api-26",
-            "lib/libinochi2d.so"};
 #else
     return {};
 #endif
@@ -168,50 +163,15 @@ Result<void> validateRelativePath(const std::string& text) {
     return core::ok();
 }
 
-Result<std::vector<std::uint8_t>> readPrefix(
-    const std::filesystem::path& path, std::size_t bytes) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) {
-        return AppError{ErrorCode::IoFailure,
-                        "Could not read the Inochi2D runtime library"};
-    }
-    std::vector<std::uint8_t> result(bytes);
-    input.read(reinterpret_cast<char*>(result.data()),
-               static_cast<std::streamsize>(result.size()));
-    result.resize(static_cast<std::size_t>(input.gcount()));
-    return result;
-}
-
-bool isExpectedArchitecture(const std::filesystem::path& library,
-                            std::string_view target) {
-    auto prefixResult = readPrefix(library, 512U);
-    if (!prefixResult.hasValue()) return false;
-    const auto& bytes = prefixResult.value();
-    if (target == "windows-x64") {
-        if (bytes.size() < 0x46U || bytes[0] != 'M' || bytes[1] != 'Z') {
-            return false;
-        }
-        const auto peOffset =
-            static_cast<std::uint32_t>(bytes[0x3c]) |
-            (static_cast<std::uint32_t>(bytes[0x3d]) << 8U) |
-            (static_cast<std::uint32_t>(bytes[0x3e]) << 16U) |
-            (static_cast<std::uint32_t>(bytes[0x3f]) << 24U);
-        if (peOffset > bytes.size() - 6U) return false;
-        return bytes[peOffset] == 'P' && bytes[peOffset + 1U] == 'E' &&
-               bytes[peOffset + 2U] == 0 && bytes[peOffset + 3U] == 0 &&
-               bytes[peOffset + 4U] == 0x64 && bytes[peOffset + 5U] == 0x86;
-    }
-    if (target == "macos-arm64") {
-        return bytes.size() >= 8U && bytes[0] == 0xcf && bytes[1] == 0xfa &&
-               bytes[2] == 0xed && bytes[3] == 0xfe && bytes[4] == 0x0c &&
-               bytes[5] == 0x00 && bytes[6] == 0x00 && bytes[7] == 0x01;
-    }
-    if (target == "android-arm64") {
-        return bytes.size() >= 20U && bytes[0] == 0x7f && bytes[1] == 'E' &&
-               bytes[2] == 'L' && bytes[3] == 'F' && bytes[4] == 2 &&
-               bytes[5] == 1 && bytes[18] == 0xb7 && bytes[19] == 0;
-    }
-    return false;
+bool isApprovedWindowsImport(std::string_view name) {
+    static const std::unordered_set<std::string_view> systemLibraries{
+        "advapi32.dll",   "comctl32.dll",  "kernel32.dll",
+        "msvfw32.dll",    "shell32.dll",   "shlwapi.dll",
+        "user32.dll",     "vcruntime140.dll",
+        "ws2_32.dll",     "druntime-ldc-shared.dll",
+        "phobos2-ldc-shared.dll"};
+    return systemLibraries.contains(name) ||
+           (name.starts_with("api-ms-win-") && name.ends_with(".dll"));
 }
 
 }  // namespace
@@ -479,9 +439,36 @@ Result<Inochi2dRuntimeInfo> Inochi2dRuntimeManifest::loadAndVerify(
                 "Inochi2D runtime dependency hash does not match"};
         }
     }
-    if (!isExpectedArchitecture(library, platform.target)) {
-        return unsupported(
-            "Inochi2D runtime library architecture is not approved");
+    auto libraryInspection = inspectWindowsX64Dll(library);
+    if (!libraryInspection.hasValue()) return libraryInspection.error();
+    const std::unordered_set<std::string> actualExports{
+        libraryInspection.value().exports.begin(),
+        libraryInspection.value().exports.end()};
+    for (const auto required : kRequiredSymbols) {
+        if (!actualExports.contains(std::string{required})) {
+            return unsupported(
+                "Inochi2D runtime DLL is missing a required C FFI export");
+        }
+    }
+    for (const auto& imported : libraryInspection.value().imports) {
+        if (!isApprovedWindowsImport(imported)) {
+            return unsupported(
+                "Inochi2D runtime DLL imports an unapproved library");
+        }
+    }
+    for (const auto& [relative, unusedHash] : runtimeDependencies) {
+        static_cast<void>(unusedHash);
+        auto dependencyInspection =
+            inspectWindowsX64Dll(root / pathFromUtf8(relative));
+        if (!dependencyInspection.hasValue()) {
+            return dependencyInspection.error();
+        }
+        for (const auto& imported : dependencyInspection.value().imports) {
+            if (!isApprovedWindowsImport(imported)) {
+                return unsupported(
+                    "Inochi2D dependency DLL imports an unapproved library");
+            }
+        }
     }
 
     info.libraryPath = std::filesystem::weakly_canonical(library, error);

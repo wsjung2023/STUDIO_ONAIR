@@ -3,6 +3,7 @@
 #include "core/Sha256.h"
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 #include <array>
 #include <chrono>
@@ -79,12 +80,6 @@ constexpr PlatformIdentity currentPlatform() {
 #if defined(_WIN32) && defined(_M_X64)
     return {"windows-x64", "x86_64-pc-windows-msvc", "windows-10-1809",
             "bin/inochi2d.dll"};
-#elif defined(__APPLE__) && defined(__aarch64__)
-    return {"macos-arm64", "arm64-apple-darwin", "macos-13.0",
-            "lib/libinochi2d.dylib"};
-#elif defined(__ANDROID__) && defined(__aarch64__)
-    return {"android-arm64", "aarch64-linux-android26", "android-api-26",
-            "lib/libinochi2d.so"};
 #else
     return {};
 #endif
@@ -110,12 +105,13 @@ public:
         std::string_view abiMode = "IN_VEC2_POSITION",
         std::string_view targetOverride = {},
         std::string_view omittedSymbol = {},
-        bool matchingArchitecture = true) {
+        bool matchingArchitecture = true,
+        bool binaryMissingExport = false) {
         const auto platform = currentPlatform();
         ASSERT_FALSE(platform.target.empty());
         const auto library = root_ / fs::path{platform.libraryPath};
         fs::create_directories(library.parent_path());
-        writeLibraryHeader(library, matchingArchitecture);
+        writeLibrary(library, matchingArchitecture, binaryMissingExport);
         {
             std::ofstream notice(root_ / "LICENSE",
                                  std::ios::binary | std::ios::trunc);
@@ -135,9 +131,14 @@ public:
         for (auto& [relative, dependencyHash] : runtimeDependencies) {
             const auto dependency = root_ / fs::path{relative};
             fs::create_directories(dependency.parent_path());
+#if defined(_WIN32) && defined(_M_X64)
+            fs::copy_file(fs::path{CS_INOCHI2D_PE_FIXTURE_PATH}, dependency,
+                          fs::copy_options::overwrite_existing);
+#else
             std::ofstream output(dependency, std::ios::binary | std::ios::trunc);
             output << "real dependency fixture: " << relative;
             output.close();
+#endif
             auto hashResult = creator::core::sha256File(dependency);
             ASSERT_TRUE(hashResult.hasValue()) << hashResult.error().message();
             dependencyHash = std::move(hashResult).value();
@@ -227,39 +228,82 @@ public:
         output << "tampered";
     }
 
+    void clearLibraryDllFlagAndRefreshHash() const {
+#if defined(_WIN32) && defined(_M_X64)
+        const auto library = root_ / fs::path{currentPlatform().libraryPath};
+        std::fstream stream(library, std::ios::binary | std::ios::in |
+                                         std::ios::out);
+        ASSERT_TRUE(stream.is_open());
+        stream.seekg(0x3c);
+        std::array<unsigned char, 4> offsetBytes{};
+        stream.read(reinterpret_cast<char*>(offsetBytes.data()),
+                    static_cast<std::streamsize>(offsetBytes.size()));
+        const auto peOffset = static_cast<std::uint32_t>(offsetBytes[0]) |
+                              (static_cast<std::uint32_t>(offsetBytes[1]) << 8U) |
+                              (static_cast<std::uint32_t>(offsetBytes[2]) << 16U) |
+                              (static_cast<std::uint32_t>(offsetBytes[3]) << 24U);
+        const auto characteristicsOffset =
+            static_cast<std::streamoff>(peOffset + 22U);
+        stream.seekg(characteristicsOffset);
+        std::array<unsigned char, 2> characteristics{};
+        stream.read(reinterpret_cast<char*>(characteristics.data()), 2);
+        auto value = static_cast<std::uint16_t>(characteristics[0]) |
+                     (static_cast<std::uint16_t>(characteristics[1]) << 8U);
+        value &= static_cast<std::uint16_t>(~0x2000U);
+        characteristics[0] = static_cast<unsigned char>(value & 0xffU);
+        characteristics[1] = static_cast<unsigned char>(value >> 8U);
+        stream.seekp(characteristicsOffset);
+        stream.write(reinterpret_cast<const char*>(characteristics.data()), 2);
+        stream.close();
+        refreshLibraryHash();
+#endif
+    }
+
     [[nodiscard]] const fs::path& root() const noexcept { return root_; }
 
 private:
-    static void writeLibraryHeader(const fs::path& path,
-                                   bool matchingArchitecture) {
-        static_cast<void>(matchingArchitecture);
-        std::vector<unsigned char> bytes;
+    static void writeLibrary(const fs::path& path, bool matchingArchitecture,
+                             bool binaryMissingExport) {
 #if defined(_WIN32) && defined(_M_X64)
-        bytes.resize(128U);
-        bytes[0] = 'M';
-        bytes[1] = 'Z';
-        bytes[0x3c] = 0x40;
-        bytes[0x40] = 'P';
-        bytes[0x41] = 'E';
-        bytes[0x44] = matchingArchitecture ? 0x64 : 0x4c;
-        bytes[0x45] = matchingArchitecture ? 0x86 : 0x01;
-#elif defined(__APPLE__) && defined(__aarch64__)
-        bytes = {0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01};
-        if (!matchingArchitecture) bytes[4] = 0x07;
-#elif defined(__ANDROID__) && defined(__aarch64__)
-        bytes.resize(64U);
-        bytes[0] = 0x7f;
-        bytes[1] = 'E';
-        bytes[2] = 'L';
-        bytes[3] = 'F';
-        bytes[4] = 2;
-        bytes[5] = 1;
-        bytes[18] = matchingArchitecture ? 0xb7 : 0x3e;
-        bytes[19] = 0x00;
+        const auto fixture =
+            fs::path{binaryMissingExport
+                         ? CS_INOCHI2D_PE_MISSING_EXPORT_FIXTURE_PATH
+                         : CS_INOCHI2D_PE_FIXTURE_PATH};
+        fs::copy_file(fixture, path, fs::copy_options::overwrite_existing);
+        if (!matchingArchitecture) {
+            std::fstream stream(path, std::ios::binary | std::ios::in |
+                                          std::ios::out);
+            ASSERT_TRUE(stream.is_open());
+            stream.seekg(0x3c);
+            std::array<unsigned char, 4> offsetBytes{};
+            stream.read(reinterpret_cast<char*>(offsetBytes.data()), 4);
+            const auto peOffset =
+                static_cast<std::uint32_t>(offsetBytes[0]) |
+                (static_cast<std::uint32_t>(offsetBytes[1]) << 8U) |
+                (static_cast<std::uint32_t>(offsetBytes[2]) << 16U) |
+                (static_cast<std::uint32_t>(offsetBytes[3]) << 24U);
+            stream.seekp(static_cast<std::streamoff>(peOffset + 4U));
+            const std::array<unsigned char, 2> x86Machine{0x4c, 0x01};
+            stream.write(reinterpret_cast<const char*>(x86Machine.data()), 2);
+        }
+#else
+        static_cast<void>(path);
+        static_cast<void>(matchingArchitecture);
+        static_cast<void>(binaryMissingExport);
 #endif
-        std::ofstream output(path, std::ios::binary | std::ios::trunc);
-        output.write(reinterpret_cast<const char*>(bytes.data()),
-                     static_cast<std::streamsize>(bytes.size()));
+    }
+
+    void refreshLibraryHash() const {
+        const auto library = root_ / fs::path{currentPlatform().libraryPath};
+        const auto hash = creator::core::sha256File(library);
+        ASSERT_TRUE(hash.hasValue()) << hash.error().message();
+        const auto manifestPath = root_ / "runtime-manifest.json";
+        std::ifstream input(manifestPath, std::ios::binary);
+        auto manifest = nlohmann::json::parse(input);
+        input.close();
+        manifest["library"]["sha256"] = hash.value();
+        std::ofstream output(manifestPath, std::ios::binary | std::ios::trunc);
+        output << manifest.dump();
     }
 
     fs::path root_;
@@ -376,5 +420,38 @@ TEST(Inochi2dRuntimeManifestTest, RejectsChangedRuntimeDependency) {
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::IoFailure);
 }
+
+#if defined(_WIN32) && defined(_M_X64)
+TEST(Inochi2dRuntimeManifestTest, RejectsDllMissingActualRequiredExport) {
+    RuntimeFixture fixture;
+    fixture.writeValidRuntime("IN_VEC2_POSITION", {}, {}, true, true);
+
+    const auto result = Inochi2dRuntimeManifest::loadAndVerify(fixture.root());
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::UnsupportedVersion);
+}
+
+TEST(Inochi2dRuntimeManifestTest, RejectsPeImageWithoutDllCharacteristic) {
+    RuntimeFixture fixture;
+    fixture.writeValidRuntime();
+    fixture.clearLibraryDllFlagAndRefreshHash();
+
+    const auto result = Inochi2dRuntimeManifest::loadAndVerify(fixture.root());
+
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().code(), ErrorCode::UnsupportedVersion);
+}
+#endif
+
+#if defined(CS_INOCHI2D_ACTUAL_ROOT)
+TEST(Inochi2dRuntimeManifestTest, AcceptsBootstrappedProductionRuntime) {
+    const auto result =
+        Inochi2dRuntimeManifest::loadAndVerify(CS_INOCHI2D_ACTUAL_ROOT);
+
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    EXPECT_EQ(result.value().target, "windows-x64");
+}
+#endif
 
 }  // namespace
