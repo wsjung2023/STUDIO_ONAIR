@@ -288,6 +288,45 @@ if(CS_ENABLE_AVATAR_PACKS)
     )
     cs_apply_warnings(cs_avatar_pack_tests)
     gtest_discover_tests(cs_avatar_pack_tests)
+
+    add_executable(cs_avatar_foundation_acceptance_tests
+        acceptance/AvatarFoundationAcceptanceTest.cpp
+        avatar_pack_adapter/SignedAvatarPackFixture.cpp
+    )
+    target_include_directories(cs_avatar_foundation_acceptance_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/tests"
+    )
+    target_link_libraries(cs_avatar_foundation_acceptance_tests PRIVATE
+        cs_avatar_pack_adapter
+        cs_avatar
+        cs_core
+        cs_project_store
+        miniz
+        Sodium::Sodium
+        GTest::gtest_main
+    )
+    set_target_properties(cs_avatar_foundation_acceptance_tests PROPERTIES
+        AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF
+    )
+    target_compile_definitions(cs_avatar_foundation_acceptance_tests PRIVATE
+        CS_ACCEPTANCE_BINARY_PATH="$<TARGET_FILE:cs_avatar_foundation_acceptance_tests>"
+        CS_SHIPPED_CREATOR_STUDIO_PATH="$<TARGET_FILE:creator_studio>"
+        CS_SHIPPED_AVATAR_PACK_ADAPTER_PATH="$<TARGET_FILE:cs_avatar_pack_adapter>"
+        CS_SHIPPED_AVATAR_LIBRARY_PATH="$<TARGET_FILE:cs_avatar>"
+        CS_SHIPPED_PROJECT_STORE_PATH="$<TARGET_FILE:cs_project_store>"
+    )
+    add_dependencies(cs_avatar_foundation_acceptance_tests creator_studio)
+    add_custom_command(
+        TARGET cs_avatar_foundation_acceptance_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:Sodium::Sodium>
+            $<TARGET_FILE_DIR:cs_avatar_foundation_acceptance_tests>
+        VERBATIM
+    )
+    cs_apply_warnings(cs_avatar_foundation_acceptance_tests)
+    gtest_discover_tests(cs_avatar_foundation_acceptance_tests)
 endif()
 
 # cs_cursor (R2-01 cursor telemetry core) is Qt-free, so its tests live in their
@@ -758,6 +797,10 @@ if(WIN32 AND CS_ENABLE_AVATAR_PACKS)
             -RuntimeRoot "${CS_SODIUM_ROOT}"
             -Qt6Dir "${Qt6_DIR}"
             -MinizSourceRoot "${miniz_SOURCE_DIR}"
+            -JsonSourceRoot "${nlohmann_json_SOURCE_DIR}"
+            -JsonValidatorSourceRoot
+                "${nlohmann_json_schema_validator_SOURCE_DIR}"
+            -SqliteSourceRoot "${sqlite_amalgamation_SOURCE_DIR}"
             -ScratchRoot "${PROJECT_BINARY_DIR}/avatar-pack-cmake-trust-ctest"
     )
     add_test(
@@ -767,6 +810,10 @@ if(WIN32 AND CS_ENABLE_AVATAR_PACKS)
             -RepositoryRoot "${PROJECT_SOURCE_DIR}"
             -RuntimeRoot "${CS_SODIUM_ROOT}"
             -Qt6Dir "${Qt6_DIR}"
+            -JsonSourceRoot "${nlohmann_json_SOURCE_DIR}"
+            -JsonValidatorSourceRoot
+                "${nlohmann_json_schema_validator_SOURCE_DIR}"
+            -SqliteSourceRoot "${sqlite_amalgamation_SOURCE_DIR}"
             -ScratchRoot
                 "${PROJECT_SOURCE_DIR}/build/avatar-pack-post-configure-audit-ctest"
     )

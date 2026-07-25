@@ -6,6 +6,12 @@ param(
     [string]$Qt6Dir,
     [Parameter(Mandatory = $true)]
     [string]$MinizSourceRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$JsonSourceRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$JsonValidatorSourceRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$SqliteSourceRoot,
     [string]$ScratchRoot = ""
 )
 
@@ -24,6 +30,10 @@ $RuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
 $ScratchRoot = [System.IO.Path]::GetFullPath($ScratchRoot)
 $Qt6Dir = [System.IO.Path]::GetFullPath($Qt6Dir)
 $MinizSourceRoot = [System.IO.Path]::GetFullPath($MinizSourceRoot)
+$JsonSourceRoot = [System.IO.Path]::GetFullPath($JsonSourceRoot)
+$JsonValidatorSourceRoot =
+    [System.IO.Path]::GetFullPath($JsonValidatorSourceRoot)
+$SqliteSourceRoot = [System.IO.Path]::GetFullPath($SqliteSourceRoot)
 $BuildRoot = [System.IO.Path]::GetFullPath(
     (Join-Path $RepositoryRoot "build")
 ).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
@@ -40,7 +50,10 @@ foreach ($RequiredPath in @(
     (Join-Path $RuntimeRoot "bin/libsodium.dll"),
     (Join-Path $Qt6Dir "Qt6Config.cmake"),
     (Join-Path $MinizSourceRoot "miniz.c"),
-    (Join-Path $MinizSourceRoot "miniz.h")
+    (Join-Path $MinizSourceRoot "miniz.h"),
+    (Join-Path $JsonSourceRoot "include/nlohmann/json.hpp"),
+    (Join-Path $JsonValidatorSourceRoot "CMakeLists.txt"),
+    (Join-Path $SqliteSourceRoot "sqlite3.c")
 )) {
     if (-not (Test-Path -LiteralPath $RequiredPath -PathType Leaf)) {
         throw "CMake trust test input is missing: $RequiredPath"
@@ -87,7 +100,10 @@ function Invoke-Configure {
         "-DCS_WARNINGS_AS_ERRORS=ON",
         "-DCS_ENABLE_AVATAR_PACKS=ON",
         "-DCS_SODIUM_ROOT=$SodiumRoot",
-        "-DQt6_DIR=$Qt6Dir"
+        "-DQt6_DIR=$Qt6Dir",
+        "-DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON=$JsonSourceRoot",
+        "-DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON_SCHEMA_VALIDATOR=$JsonValidatorSourceRoot",
+        "-DFETCHCONTENT_SOURCE_DIR_SQLITE_AMALGAMATION=$SqliteSourceRoot"
     ) + $AdditionalArguments
     $LogPath = Join-Path $ScratchRoot "$Name.log"
     $SavedPreference = $ErrorActionPreference

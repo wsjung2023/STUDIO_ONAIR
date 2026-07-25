@@ -2,6 +2,7 @@
 
 #include "avatar_pack_adapter/AvatarPackValidator.h"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -31,6 +32,9 @@ struct SignedPackOptions final {
 class SignedAvatarPackFixture final {
 public:
     explicit SignedAvatarPackFixture(std::filesystem::path workspace);
+    SignedAvatarPackFixture(
+        std::filesystem::path workspace,
+        const std::array<std::uint8_t, crypto_sign_SEEDBYTES>& seed);
 
     [[nodiscard]] TrustedAvatarKey trustedKey() const;
     [[nodiscard]] std::filesystem::path writePack(

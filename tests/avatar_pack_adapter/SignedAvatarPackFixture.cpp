@@ -231,16 +231,33 @@ void writeStoredZip(const std::filesystem::path& path,
     if (!output) throw std::runtime_error{"test ZIP could not be written"};
 }
 
+void prepareFixtureWorkspace(const std::filesystem::path& workspace) {
+    if (sodium_init() < 0) {
+        throw std::runtime_error{"libsodium fixture initialization failed"};
+    }
+    std::filesystem::create_directories(workspace);
+}
+
 }  // namespace
 
 SignedAvatarPackFixture::SignedAvatarPackFixture(
     std::filesystem::path workspace)
     : workspace_(std::move(workspace)) {
-    if (sodium_init() < 0 ||
-        crypto_sign_keypair(publicKey_.data(), secretKey_.data()) != 0) {
+    prepareFixtureWorkspace(workspace_);
+    if (crypto_sign_keypair(publicKey_.data(), secretKey_.data()) != 0) {
         throw std::runtime_error{"libsodium fixture initialization failed"};
     }
-    std::filesystem::create_directories(workspace_);
+}
+
+SignedAvatarPackFixture::SignedAvatarPackFixture(
+    std::filesystem::path workspace,
+    const std::array<std::uint8_t, crypto_sign_SEEDBYTES>& seed)
+    : workspace_(std::move(workspace)) {
+    prepareFixtureWorkspace(workspace_);
+    if (crypto_sign_seed_keypair(publicKey_.data(), secretKey_.data(),
+                                 seed.data()) != 0) {
+        throw std::runtime_error{"libsodium fixture initialization failed"};
+    }
 }
 
 TrustedAvatarKey SignedAvatarPackFixture::trustedKey() const {

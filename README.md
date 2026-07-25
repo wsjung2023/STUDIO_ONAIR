@@ -1,5 +1,59 @@
 # Creator Studio Starter Pack v0.1
 
+## Signed avatar packages
+
+Signed avatar package support is opt-in. From a Developer PowerShell, create
+the audited libsodium prefix once and configure the dedicated preset:
+
+```powershell
+.\scripts\bootstrap_sodium.ps1
+cmake --preset windows-avatar-packs-debug
+cmake --build --preset windows-avatar-packs-debug
+ctest --preset windows-avatar-packs-debug
+```
+
+The equivalent cache contract is
+`-DCS_ENABLE_AVATAR_PACKS=ON -DCS_SODIUM_ROOT=<audited-prefix>`.
+Configuration fails closed if the libsodium prefix or pinned miniz source
+does not match its recorded digest.
+
+`FileAvatarCatalog::open` receives a caller-selected, current-user-private
+catalog root. Its immediate parent must already exist and be durable. Installed
+content is stored below:
+
+```text
+<catalog-root>/
+├─ installed/<package-id>/<package-version>/
+├─ staging/
+└─ catalog.lock
+```
+
+Avatar specifications belong to the project package, separately from the
+global asset catalog:
+
+```text
+<project>.cstudio/
+└─ avatars/<avatar-id>/
+   ├─ avatar.json
+   └─ avatar.last-good.json
+```
+
+### Commercial-use evidence wording
+
+Use the explicit UI label **“상업용 사용 권한 증빙 확인 필요” /
+“Commercial-use evidence review required”**. It means Creator Studio
+re-evaluated the current signed manifests and can show the evidence and every
+blocking right. It is not a legal guarantee, legal advice, or a promise that
+an asset is commercially safe.
+
+Imported models do not acquire trusted rights merely by being imported.
+Their license, provenance, and required permissions remain user-confirmed,
+and unresolved or conditional rights must remain blocking. Recorded evidence
+is audit history only; authorization is recalculated from current manifests.
+
+Exact miniz and libsodium versions, hashes, notices, and source locations are
+recorded in `legal/THIRD_PARTY_NOTICES.md`.
+
 화면 녹화, 카메라, 오디오, 버튜버, 비선형 편집을 하나의 프로젝트로 묶는 데스크톱 크리에이터 스튜디오의 개발 착수 패키지입니다.
 
 이 저장소는 데모용 일회성 MVP가 아니라, 상용 제품까지 그대로 확장하는 것을 전제로 한 **초기 제품 골격**입니다.
