@@ -5,6 +5,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -12,12 +15,15 @@
 namespace creator::avatar::inochi2d {
 namespace {
 
-// The runtime emits vertices in the puppet's own pixel space, which is usually
-// larger than -- and off-centre from -- the target frame (a raw pass would clip
-// the head and show only a slice of the body). Normalise every vertex so the
-// puppet's bounding box sits centred within the frame with a small margin,
-// preserving aspect ratio, so the whole character is visible and consistently
-// framed regardless of how the source puppet was authored.
+// The runtime emits vertices in the puppet's own pixel space. Inochi2D models are
+// authored full-height with the head at the top (smallest Y) and legs at the
+// bottom, but a VTuber overlay wants head-and-shoulders -- fitting the whole body
+// shrinks the character to an unrecognisable sliver in the frame. So crop to the
+// upper band of the puppet (head + chest), tighten horizontally to what actually
+// falls in that band, and fit that region centred in the frame with a small
+// margin, preserving aspect ratio. Vertices below the crop are transformed with
+// the same scale/offset and simply fall outside the frame (the rasteriser clips
+// them), so no geometry is mutated -- only the framing changes.
 void fitBatchesToFrame(std::vector<AvatarSoftwareRenderInput>& batches,
                        std::uint32_t width, std::uint32_t height) {
     if (width == 0U || height == 0U) return;
@@ -33,8 +39,47 @@ void fitBatchesToFrame(std::vector<AvatarSoftwareRenderInput>& batches,
             maxY = std::max(maxY, vertex.y);
         }
     }
-    const float boundsWidth = maxX - minX;
-    const float boundsHeight = maxY - minY;
+    const float fullHeight = maxY - minY;
+    if (!(maxX - minX > 0.0F) || !(fullHeight > 0.0F)) return;
+
+    // Keep the top portion (head + shoulders/upper chest). Tuned to Inochi2D
+    // full-body puppets; a value near 0.35 lands a natural head-and-shoulders shot.
+    // Overridable via CS_INOCHI2D_CROP for visual tuning without a rebuild.
+    float upperBodyFraction = 0.35F;
+    {
+        char buf[16] = {0};
+        std::size_t len = 0;
+#ifdef _WIN32
+        if (getenv_s(&len, buf, sizeof buf, "CS_INOCHI2D_CROP") == 0 && len > 0) {
+#else
+        const char* env = std::getenv("CS_INOCHI2D_CROP");
+        if (env != nullptr && (std::snprintf(buf, sizeof buf, "%s", env), true)) {
+#endif
+            const float parsed = std::strtof(buf, nullptr);
+            if (parsed > 0.05F && parsed <= 1.0F) upperBodyFraction = parsed;
+        }
+    }
+    const float cropBottom = minY + upperBodyFraction * fullHeight;
+
+    // Horizontal extent of just the upper band -- the head/shoulders are much
+    // narrower than the full arm-span or leg stance, so this keeps the head large.
+    float cropMinX = std::numeric_limits<float>::max();
+    float cropMaxX = std::numeric_limits<float>::lowest();
+    for (const auto& batch : batches) {
+        for (const auto& vertex : batch.vertices) {
+            if (vertex.y <= cropBottom) {
+                cropMinX = std::min(cropMinX, vertex.x);
+                cropMaxX = std::max(cropMaxX, vertex.x);
+            }
+        }
+    }
+    if (!(cropMaxX > cropMinX)) {  // degenerate band -- fall back to full width
+        cropMinX = minX;
+        cropMaxX = maxX;
+    }
+
+    const float boundsWidth = cropMaxX - cropMinX;
+    const float boundsHeight = cropBottom - minY;
     if (!(boundsWidth > 0.0F) || !(boundsHeight > 0.0F)) return;
 
     constexpr float kMargin = 0.06F;  // 6% breathing room on each edge
@@ -42,8 +87,8 @@ void fitBatchesToFrame(std::vector<AvatarSoftwareRenderInput>& batches,
     const float availableHeight = static_cast<float>(height) * (1.0F - 2.0F * kMargin);
     const float scale =
         std::min(availableWidth / boundsWidth, availableHeight / boundsHeight);
-    const float centreX = (minX + maxX) * 0.5F;
-    const float centreY = (minY + maxY) * 0.5F;
+    const float centreX = (cropMinX + cropMaxX) * 0.5F;
+    const float centreY = (minY + cropBottom) * 0.5F;
     const float frameCentreX = static_cast<float>(width) * 0.5F;
     const float frameCentreY = static_cast<float>(height) * 0.5F;
     for (auto& batch : batches) {
