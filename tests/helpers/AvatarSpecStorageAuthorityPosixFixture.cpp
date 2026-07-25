@@ -41,6 +41,8 @@ bool rebindEmptyListOnEof = false;
 bool rebindOnMissingBackup = false;
 bool introduceAliasAfterChildOpen = false;
 bool failTemporaryCleanup = false;
+bool blockingFifoOpenAttempted = false;
+bool replacePromotedWithFifo = false;
 enum class ReadMutation {
     None,
     AddHardLink,
@@ -121,6 +123,15 @@ extern "C" int __wrap_openat(int directory, const char* path, int flags, ...) {
         mode = static_cast<mode_t>(va_arg(arguments, int));
         va_end(arguments);
     }
+    if (path != nullptr && (flags & O_NONBLOCK) == 0) {
+        struct stat information {};
+        if (::fstatat(directory, path, &information, AT_SYMLINK_NOFOLLOW) == 0 &&
+            S_ISFIFO(information.st_mode)) {
+            blockingFifoOpenAttempted = true;
+            errno = EWOULDBLOCK;
+            return -1;
+        }
+    }
     const int result =
         (flags & O_CREAT) != 0
             ? __real_openat(directory, path, flags, mode)
@@ -161,6 +172,12 @@ extern "C" int __wrap_renameat(int oldDirectory, const char* oldPath,
         std::error_code ignored;
         fs::rename(avatarDirectory, displacedDirectory, ignored);
         if (!ignored) fs::create_directory(avatarDirectory, ignored);
+    }
+    if (result == 0 && replacePromotedWithFifo && newPath != nullptr &&
+        std::strcmp(newPath, "avatar.json") == 0) {
+        replacePromotedWithFifo = false;
+        (void)__real_unlinkat(newDirectory, newPath, 0);
+        (void)::mkfifoat(newDirectory, newPath, 0600);
     }
     return result;
 }
@@ -388,6 +405,56 @@ int main() {
         }
     }
     expectReviewerCase(foundResidue, "cleanup-residue-observable");
+
+    const fs::path primaryFifoRoot = parent / "fifo-primary" / "avatars";
+    if (!fs::create_directories(primaryFifoRoot)) return 27;
+    AvatarSpecFileStore primaryFifoStore{primaryFifoRoot};
+    if (!primaryFifoStore.save(spec).hasValue()) return 28;
+    const fs::path primaryFifo =
+        primaryFifoRoot / "hero" / "avatar.json";
+    fs::remove(primaryFifo, error);
+    error.clear();
+    if (::mkfifo(primaryFifo.c_str(), 0600) != 0) return 29;
+    blockingFifoOpenAttempted = false;
+    const auto primaryFifoRead = primaryFifoStore.load(spec.avatarId());
+    expectReviewerCase(
+        !primaryFifoRead.hasValue() &&
+            primaryFifoRead.error().code() == ErrorCode::InvalidArgument &&
+            !blockingFifoOpenAttempted,
+        "primary-fifo-nonblocking");
+
+    const fs::path backupFifoRoot = parent / "fifo-backup" / "avatars";
+    if (!fs::create_directories(backupFifoRoot)) return 30;
+    AvatarSpecFileStore backupFifoStore{backupFifoRoot};
+    if (!backupFifoStore.save(spec).hasValue()) return 31;
+    fs::remove(backupFifoRoot / "hero" / "avatar.json", error);
+    error.clear();
+    const fs::path backupFifo =
+        backupFifoRoot / "hero" / "avatar.last-good.json";
+    fs::remove(backupFifo, error);
+    error.clear();
+    if (::mkfifo(backupFifo.c_str(), 0600) != 0) return 32;
+    blockingFifoOpenAttempted = false;
+    const auto backupFifoRead = backupFifoStore.load(spec.avatarId());
+    expectReviewerCase(
+        !backupFifoRead.hasValue() &&
+            backupFifoRead.error().code() == ErrorCode::InvalidArgument &&
+            !blockingFifoOpenAttempted,
+        "last-good-fifo-nonblocking");
+
+    const fs::path promotedFifoRoot =
+        parent / "fifo-promoted" / "avatars";
+    if (!fs::create_directories(promotedFifoRoot)) return 33;
+    AvatarSpecFileStore promotedFifoStore{promotedFifoRoot};
+    if (!promotedFifoStore.save(spec).hasValue()) return 34;
+    blockingFifoOpenAttempted = false;
+    replacePromotedWithFifo = true;
+    const auto promotedFifoWrite = promotedFifoStore.save(spec);
+    expectReviewerCase(
+        !promotedFifoWrite.hasValue() &&
+            promotedFifoWrite.error().code() == ErrorCode::InvalidArgument &&
+            !blockingFifoOpenAttempted && !replacePromotedWithFifo,
+        "promoted-fifo-nonblocking");
 
     fs::remove_all(parent, error);
     if (error) return 9;

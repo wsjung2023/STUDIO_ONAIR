@@ -133,6 +133,15 @@ TEST_F(AvatarSpecFileStoreTest, ListsOnlyValidStoredAvatarDirectoriesInStableOrd
     EXPECT_EQ(listed.value()[1].value(), "zebra");
 }
 
+TEST_F(AvatarSpecFileStoreTest, FreshStoreListIsEmpty) {
+    AvatarSpecFileStore store{root_ / "avatars"};
+
+    const auto listed = store.list();
+
+    ASSERT_TRUE(listed.hasValue()) << listed.error().message();
+    EXPECT_TRUE(listed.value().empty());
+}
+
 TEST_F(AvatarSpecFileStoreTest, RejectsIdentifiersThatCanEscapeOrAliasAPath) {
     AvatarSpecFileStore store{root_ / "avatars"};
     for (const std::string id : {"..", "../outside", R"(..\outside)", "/absolute",

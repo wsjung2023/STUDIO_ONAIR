@@ -452,22 +452,26 @@ Result<std::vector<std::string>> RootAuthority::listChildren() const {
     WIN32_FIND_DATAW data{};
     HANDLE search = FindFirstFileW(pattern.c_str(), &data);
     if (search == INVALID_HANDLE_VALUE) {
-        return ioError("avatar root could not be enumerated");
-    }
-    do {
-        const std::wstring_view wide{data.cFileName};
-        if (wide == L"." || wide == L"..") continue;
-        if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U) {
-            (void)FindClose(search);
-            return unsafeError("avatar root contains a reparse point");
+        if (GetLastError() != ERROR_FILE_NOT_FOUND) {
+            return ioError("avatar root could not be enumerated");
         }
-        if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0U) continue;
-        names.push_back(narrowAscii(wide));
-    } while (FindNextFileW(search, &data) != FALSE);
-    const DWORD reason = GetLastError();
-    (void)FindClose(search);
-    if (reason != ERROR_NO_MORE_FILES) {
-        return ioError("avatar root enumeration failed");
+    } else {
+        do {
+            const std::wstring_view wide{data.cFileName};
+            if (wide == L"." || wide == L"..") continue;
+            if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U) {
+                (void)FindClose(search);
+                return unsafeError("avatar root contains a reparse point");
+            }
+            if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0U)
+                continue;
+            names.push_back(narrowAscii(wide));
+        } while (FindNextFileW(search, &data) != FALSE);
+        const DWORD reason = GetLastError();
+        (void)FindClose(search);
+        if (reason != ERROR_NO_MORE_FILES) {
+            return ioError("avatar root enumeration failed");
+        }
     }
 #else
     const int duplicate = ::openat(
@@ -882,8 +886,9 @@ Result<std::string> ChildAuthority::read(std::string_view fileName) const {
     if (!finalIdentity.hasValue()) return finalIdentity.error();
 #else
     const std::string name{fileName};
-    const int opened =
-        ::openat(descriptor_, name.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    const int opened = ::openat(
+        descriptor_, name.c_str(),
+        O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
     if (opened < 0) {
         if (errno == ENOENT) return notFoundError();
         if (errno == ELOOP) return unsafeError("avatar spec file is a symbolic link");
@@ -960,8 +965,9 @@ Result<void> inspectPromotedTarget(
     int child, std::string_view name,
     const struct stat& expectedIdentity) {
     const std::string target{name};
-    const int opened =
-        ::openat(child, target.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    const int opened = ::openat(
+        child, target.c_str(),
+        O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
     if (opened < 0) {
         if (errno == ELOOP)
             return unsafeError("promoted avatar spec is a symbolic link");
