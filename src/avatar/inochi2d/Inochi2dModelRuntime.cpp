@@ -110,10 +110,10 @@ public:
         }
         std::uint32_t count = 0;
         void** parameters = getParameters_(puppet_, &count);
-        if (parameters == nullptr) {
-            return AppError{ErrorCode::IoFailure,
-                            "Inochi2D model returned no parameter list"};
-        }
+        // A static puppet legitimately exposes no parameter list. That is only a
+        // problem when the caller asks to set a parameter -- the lookup below then
+        // reports "not present" -- so an empty request renders the base pose.
+        if (parameters == nullptr) count = 0;
         for (const auto& value : values) {
             if (!std::isfinite(value.value)) {
                 return AppError{ErrorCode::InvalidArgument,

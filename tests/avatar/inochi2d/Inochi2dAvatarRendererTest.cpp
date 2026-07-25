@@ -2,6 +2,11 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -17,5 +22,75 @@ TEST(Inochi2dAvatarRendererTest, ReportsMissingRuntimeAsInvalidState) {
     ASSERT_FALSE(result.hasValue());
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidState);
 }
+
+#if defined(CS_INOCHI2D_ACTUAL_ROOT)
+
+// Reads an environment variable without tripping MSVC's C4996 on std::getenv.
+[[nodiscard]] std::string readEnv(const char* name) {
+#ifdef _WIN32
+    char buffer[2048] = {0};
+    std::size_t length = 0;
+    if (getenv_s(&length, buffer, sizeof buffer, name) != 0) return {};
+    return std::string{buffer};
+#else
+    const char* value = std::getenv(name);
+    return value != nullptr ? std::string{value} : std::string{};
+#endif
+}
+
+// End-to-end proof that the audited runtime loads a real .inx puppet and the
+// software rasteriser draws it. Point CS_INOCHI2D_SAMPLE_MODEL at a real .inx to
+// run; set CS_INOCHI2D_RENDER_OUT to dump tightly packed RGBA for visual review.
+TEST(Inochi2dAvatarRendererTest, RendersRealPuppetToVisiblePixels) {
+    const std::string modelPath = readEnv("CS_INOCHI2D_SAMPLE_MODEL");
+    if (modelPath.empty() || !std::filesystem::exists(modelPath)) {
+        GTEST_SKIP() << "Set CS_INOCHI2D_SAMPLE_MODEL to a real .inx puppet to run.";
+    }
+    constexpr std::uint32_t kWidth = 512;
+    constexpr std::uint32_t kHeight = 512;
+    auto renderer = Inochi2dAvatarRenderer::open(
+        CS_INOCHI2D_ACTUAL_ROOT, std::filesystem::path{modelPath}, kWidth, kHeight);
+    ASSERT_TRUE(renderer.hasValue()) << renderer.error().message();
+
+    auto frame = renderer.value()->render(TimestampNs{}, {});
+    ASSERT_TRUE(frame.hasValue()) << frame.error().message();
+    EXPECT_EQ(frame.value().width(), kWidth);
+    EXPECT_EQ(frame.value().height(), kHeight);
+
+    const auto bytes = frame.value().bytes();
+    const std::uint32_t stride = frame.value().stride();
+    ASSERT_FALSE(bytes.empty());
+
+    std::uint64_t opaque = 0;
+    for (std::uint32_t y = 0; y < kHeight; ++y) {
+        for (std::uint32_t x = 0; x < kWidth; ++x) {
+            const std::size_t alpha =
+                static_cast<std::size_t>(y) * stride + static_cast<std::size_t>(x) * 4 + 3;
+            if (alpha < bytes.size() && bytes[alpha] != 0) ++opaque;
+        }
+    }
+    EXPECT_GT(opaque, 0U) << "the rendered puppet frame is fully transparent";
+
+    const std::string outPath = readEnv("CS_INOCHI2D_RENDER_OUT");
+    if (!outPath.empty()) {
+        std::vector<std::uint8_t> rgba;
+        rgba.reserve(static_cast<std::size_t>(kWidth) * kHeight * 4);
+        for (std::uint32_t y = 0; y < kHeight; ++y) {
+            for (std::uint32_t x = 0; x < kWidth; ++x) {
+                const std::size_t p =
+                    static_cast<std::size_t>(y) * stride + static_cast<std::size_t>(x) * 4;
+                rgba.push_back(bytes[p + 2]);  // R
+                rgba.push_back(bytes[p + 1]);  // G
+                rgba.push_back(bytes[p + 0]);  // B
+                rgba.push_back(bytes[p + 3]);  // A
+            }
+        }
+        std::ofstream out(outPath, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(rgba.data()),
+                  static_cast<std::streamsize>(rgba.size()));
+    }
+}
+
+#endif  // CS_INOCHI2D_ACTUAL_ROOT
 
 }  // namespace
