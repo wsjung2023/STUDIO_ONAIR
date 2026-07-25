@@ -103,14 +103,20 @@ public:
         }
 
         // Format_ARGB32 stores 0xAARRGGBB, i.e. B,G,R,A in little-endian memory,
-        // which matches the packed BGRA capture bytes exactly.
+        // which matches the packed BGRA capture bytes exactly. These bytes are
+        // STRAIGHT (non-premultiplied) alpha, but Qt Quick's scene graph blends
+        // textures as PREMULTIPLIED. Opaque sources (screen/camera) are identical
+        // either way, but a source with real transparency -- the avatar overlay --
+        // blends washed-out and ghostly unless premultiplied first. Convert here so
+        // the avatar composites solid. convertToFormat also deep-copies, detaching
+        // from the capture buffer before the frame is released.
         const QImage wrapped{view->pixels, static_cast<int>(frame.width),
                              static_cast<int>(frame.height),
                              static_cast<qsizetype>(view->rowBytes),
                              QImage::Format_ARGB32};
-        // Detach from the capture buffer before the frame is released.
         QSGTexture* texture = window->createTextureFromImage(
-            wrapped.copy(), QQuickWindow::TextureHasAlphaChannel);
+            wrapped.convertToFormat(QImage::Format_ARGB32_Premultiplied),
+            QQuickWindow::TextureHasAlphaChannel);
         if (texture == nullptr) return false;
 
         imageNode_->setTexture(texture);  // ownsTexture: deletes the previous one
