@@ -113,6 +113,16 @@ EditorPreviewAudioOutput::~EditorPreviewAudioOutput() { stop(); }
 bool EditorPreviewAudioOutput::start() {
     if (active_) return true;
 
+    // Headless/test seam: when CS_DISABLE_PREVIEW_AUDIO is set, never open a real
+    // audio device. Unit tests for editor playback/command serialization must be
+    // deterministic regardless of whether the host has an audio device -- an
+    // opened device pulls audio continuously, which perturbs call sequences and
+    // adds a slow, flaky device-open. Video playback continues without audio, as
+    // it does when no device is present.
+    if (qEnvironmentVariableIsSet("CS_DISABLE_PREVIEW_AUDIO")) {
+        return false;
+    }
+
     const QAudioDevice device = QMediaDevices::defaultAudioOutput();
     if (device.isNull()) {
         emit errorOccurred(QStringLiteral(

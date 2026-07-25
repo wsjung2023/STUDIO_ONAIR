@@ -103,6 +103,16 @@ using creator::project_store::SqliteTimelineStore;
 
 namespace fs = std::filesystem;
 
+// Editor playback/serialization tests must not open a real audio device. On a
+// host that HAS an audio device, playback pulls audio continuously -- inserting
+// RequestMixedAudio engine calls that perturb exact call-sequence assertions --
+// and the device is slow/flaky to open. This disables the preview audio device
+// for the test's scope so the test behaves as on a headless CI host (no device).
+struct ScopedPreviewAudioDisabled final {
+    ScopedPreviewAudioDisabled() { qputenv("CS_DISABLE_PREVIEW_AUDIO", "1"); }
+    ~ScopedPreviewAudioDisabled() { qunsetenv("CS_DISABLE_PREVIEW_AUDIO"); }
+};
+
 bool waitUntil(const std::function<bool()>& predicate, int timeoutMs = 3000) {
     QElapsedTimer timer;
     timer.start();
@@ -730,6 +740,7 @@ TEST(EditorControllerDurableTest,
 
 TEST(EditorControllerDurableTest,
      SerializesDurableSplitAndPausesPlaybackBeforePreviewUpdate) {
+    const ScopedPreviewAudioDisabled noAudio;
     DurableControllerPackage package;
     auto engine = std::make_unique<FakeEditEngine>();
     FakeEditEngine* fake = engine.get();
@@ -982,6 +993,7 @@ TEST(EditorControllerTest, PublishesModelsBeforeAsynchronousEngineLoadCompletes)
 }
 
 TEST(EditorControllerTest, SerializesPlaybackAndIgnoresStaleSessionCallback) {
+    const ScopedPreviewAudioDisabled noAudio;
     auto engine = std::make_unique<FakeEditEngine>();
     FakeEditEngine* fake = engine.get();
     fake->failNext(FakeEditOperation::Load,
@@ -1497,6 +1509,7 @@ TEST(EditorControllerTest, RejectsFrameReturnedForDifferentPosition) {
 }
 
 TEST(EditorControllerTest, PlaybackKeepsOnlyOneFrameRequestInFlight) {
+    const ScopedPreviewAudioDisabled noAudio;
     auto state = std::make_shared<PreviewThreadState>();
     state->uiThread = std::this_thread::get_id();
     EditorController controller{
