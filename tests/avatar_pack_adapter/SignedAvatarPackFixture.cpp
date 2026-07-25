@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <array>
-#include <fstream>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -31,16 +30,21 @@ struct ZipEntry final {
     std::vector<std::uint8_t> contents;
 };
 
-void append16(std::vector<std::uint8_t>& output, std::uint16_t value) {
-    output.push_back(static_cast<std::uint8_t>(value & 0xffU));
-    output.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xffU));
-}
+struct ZipReadView final {
+    std::span<const std::uint8_t> contents;
+};
 
-void append32(std::vector<std::uint8_t>& output, std::uint32_t value) {
-    output.push_back(static_cast<std::uint8_t>(value & 0xffU));
-    output.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xffU));
-    output.push_back(static_cast<std::uint8_t>((value >> 16U) & 0xffU));
-    output.push_back(static_cast<std::uint8_t>((value >> 24U) & 0xffU));
+std::size_t readZipEntry(void* opaque, mz_uint64 offset, void* output,
+                         std::size_t requested) {
+    const auto contents = static_cast<const ZipReadView*>(opaque)->contents;
+    if (offset >= contents.size()) {
+        return 0U;
+    }
+    const auto start = static_cast<std::size_t>(offset);
+    const auto count = std::min(requested, contents.size() - start);
+    std::copy_n(contents.data() + start, count,
+                static_cast<std::uint8_t*>(output));
+    return count;
 }
 
 std::vector<std::uint8_t> bytes(std::string_view value) {
@@ -147,88 +151,56 @@ std::vector<std::uint8_t> signatureMessage(
     return message;
 }
 
-void writeStoredZip(const std::filesystem::path& path,
-                    const std::vector<ZipEntry>& entries) {
-    struct CentralRecord final {
-        const ZipEntry* entry{};
-        std::uint32_t crc{};
-        std::uint32_t localOffset{};
-    };
+void writeMinizZip(const std::filesystem::path& path,
+                   const std::vector<ZipEntry>& entries) {
+    mz_zip_archive archive{};
+    mz_zip_zero_struct(&archive);
+    const auto nativePath = path.string();
+    if (!mz_zip_writer_init_file_v2(&archive, nativePath.c_str(), 0U, 0U)) {
+        throw std::runtime_error{"miniz writer could not create test pack"};
+    }
 
-    std::vector<std::uint8_t> archive;
-    std::vector<CentralRecord> central;
-    for (const auto& entry : entries) {
-        if (entry.path.size() > UINT16_MAX ||
-            entry.contents.size() > UINT32_MAX ||
-            archive.size() > UINT32_MAX) {
-            throw std::runtime_error{"test ZIP input is too large"};
+    bool writerOpen = true;
+    try {
+        // miniz otherwise records the wall clock. A fixed modification time
+        // keeps same-seed/source acceptance archives byte-identical.
+        const MZ_TIME_T fixedModified =
+            static_cast<MZ_TIME_T>(1704067200);
+        for (const auto& entry : entries) {
+            ZipReadView view{entry.contents};
+            constexpr mz_uint kWriterFlags =
+                static_cast<mz_uint>(MZ_NO_COMPRESSION) |
+                static_cast<mz_uint>(MZ_ZIP_FLAG_WRITE_HEADER_SET_SIZE);
+            if (!mz_zip_writer_add_read_buf_callback(
+                    &archive, entry.path.c_str(), readZipEntry,
+                    &view, entry.contents.size(), &fixedModified, nullptr,
+                    0U, kWriterFlags, nullptr, 0U, nullptr, 0U)) {
+                throw std::runtime_error{
+                    "miniz writer could not add test pack entry: " +
+                    std::string{mz_zip_get_error_string(
+                        mz_zip_get_last_error(&archive))}};
+            }
         }
-        const auto crc = static_cast<std::uint32_t>(
-            mz_crc32(MZ_CRC32_INIT, entry.contents.data(),
-                     entry.contents.size()));
-        central.push_back(
-            {.entry = &entry,
-             .crc = crc,
-             .localOffset = static_cast<std::uint32_t>(archive.size())});
-        append32(archive, 0x04034b50U);
-        append16(archive, 20U);
-        append16(archive, 0x0800U);
-        append16(archive, 0U);
-        append16(archive, 0U);
-        append16(archive, 0U);
-        append32(archive, crc);
-        append32(archive,
-                 static_cast<std::uint32_t>(entry.contents.size()));
-        append32(archive,
-                 static_cast<std::uint32_t>(entry.contents.size()));
-        append16(archive, static_cast<std::uint16_t>(entry.path.size()));
-        append16(archive, 0U);
-        archive.insert(archive.end(), entry.path.begin(), entry.path.end());
-        archive.insert(archive.end(), entry.contents.begin(),
-                       entry.contents.end());
+        if (!mz_zip_writer_finalize_archive(&archive)) {
+            throw std::runtime_error{
+                "miniz writer could not finalize test pack: " +
+                std::string{mz_zip_get_error_string(
+                    mz_zip_get_last_error(&archive))}};
+        }
+        const auto ended = mz_zip_writer_end(&archive);
+        writerOpen = false;
+        if (!ended) {
+            throw std::runtime_error{
+                "miniz writer could not close test pack"};
+        }
+    } catch (...) {
+        if (writerOpen) {
+            mz_zip_writer_end(&archive);
+        }
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+        throw;
     }
-
-    const auto centralOffset = static_cast<std::uint32_t>(archive.size());
-    for (const auto& record : central) {
-        const auto& entry = *record.entry;
-        append32(archive, 0x02014b50U);
-        append16(archive, 0x0314U);
-        append16(archive, 20U);
-        append16(archive, 0x0800U);
-        append16(archive, 0U);
-        append16(archive, 0U);
-        append16(archive, 0U);
-        append32(archive, record.crc);
-        append32(archive,
-                 static_cast<std::uint32_t>(entry.contents.size()));
-        append32(archive,
-                 static_cast<std::uint32_t>(entry.contents.size()));
-        append16(archive, static_cast<std::uint16_t>(entry.path.size()));
-        append16(archive, 0U);
-        append16(archive, 0U);
-        append16(archive, 0U);
-        append16(archive, 0U);
-        append32(archive, 0100600U << 16U);
-        append32(archive, record.localOffset);
-        archive.insert(archive.end(), entry.path.begin(), entry.path.end());
-    }
-    const auto centralBytes =
-        static_cast<std::uint32_t>(archive.size()) - centralOffset;
-    append32(archive, 0x06054b50U);
-    append16(archive, 0U);
-    append16(archive, 0U);
-    append16(archive, static_cast<std::uint16_t>(central.size()));
-    append16(archive, static_cast<std::uint16_t>(central.size()));
-    append32(archive, centralBytes);
-    append32(archive, centralOffset);
-    append16(archive, 0U);
-
-    std::ofstream output{path, std::ios::binary | std::ios::trunc};
-    if (!output) throw std::runtime_error{"test ZIP could not be created"};
-    output.write(reinterpret_cast<const char*>(archive.data()),
-                 static_cast<std::streamsize>(archive.size()));
-    output.close();
-    if (!output) throw std::runtime_error{"test ZIP could not be written"};
 }
 
 void prepareFixtureWorkspace(const std::filesystem::path& workspace) {
@@ -307,7 +279,7 @@ std::filesystem::path SignedAvatarPackFixture::writePack(
     }
     const auto path =
         workspace_ / (core::generateUuidV4() + ".csavatarpack");
-    writeStoredZip(path, entries);
+    writeMinizZip(path, entries);
     return path;
 }
 

@@ -76,6 +76,29 @@ void writeBytes(const fs::path& path, std::string_view contents) {
     }
 }
 
+bool firstEntryUsesMinizStoredHeader(const fs::path& archive) {
+    constexpr std::array<std::uint8_t, 4> kLocalHeader{
+        0x50U, 0x4bU, 0x03U, 0x04U};
+    constexpr std::uint16_t kUtf8Flag = 0x0800U;
+    constexpr std::uint16_t kDataDescriptorFlag = 0x0008U;
+    const auto contents = readBytes(archive);
+    if (contents.size() < 10U ||
+        !std::equal(kLocalHeader.begin(), kLocalHeader.end(),
+                    contents.begin())) {
+        return false;
+    }
+    const auto versionNeeded =
+        static_cast<std::uint16_t>(contents[4]) |
+        static_cast<std::uint16_t>(contents[5]) << 8U;
+    const auto flags = static_cast<std::uint16_t>(contents[6]) |
+                       static_cast<std::uint16_t>(contents[7]) << 8U;
+    const auto method = static_cast<std::uint16_t>(contents[8]) |
+                        static_cast<std::uint16_t>(contents[9]) << 8U;
+    return versionNeeded == 0U && method == 0U &&
+           (flags & kUtf8Flag) != 0U &&
+           (flags & kDataDescriptorFlag) == 0U;
+}
+
 class TestSignedPackFactory final {
 public:
     explicit TestSignedPackFactory(const fs::path& workspace)
@@ -192,6 +215,9 @@ TEST_F(AvatarFoundationAcceptanceTest,
     ASSERT_FALSE(readBytes(pack).empty());
     ASSERT_FALSE(readBytes(duplicatePack).empty());
     ASSERT_FALSE(readBytes(factory.sourcePayload()).empty());
+    ASSERT_TRUE(firstEntryUsesMinizStoredHeader(pack))
+        << "the runtime acceptance archive must exercise the pinned miniz "
+           "writer path";
     ASSERT_EQ(readBytes(pack), readBytes(duplicatePack))
         << "same runtime source and deterministic test seed must reproduce "
            "the signed archive";

@@ -18,6 +18,8 @@ Copyright 2013-2014 RAD Game Tools and Valve Software
 
 Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC
 
+All Rights Reserved.
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
