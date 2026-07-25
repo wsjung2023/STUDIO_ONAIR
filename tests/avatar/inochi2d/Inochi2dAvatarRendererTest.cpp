@@ -105,6 +105,19 @@ TEST(Inochi2dAvatarRendererTest, RendersRealPuppetToVisiblePixels) {
                             laterBytes.end()))
         << "idle motion produced an identical frame 0.83 s later";
     dumpRgba(laterFrame.value(), readEnv("CS_INOCHI2D_RENDER_OUT2"));
+
+    // Parameter-driven expression: setting real rig parameters (eyes closed, jaw
+    // open) drives a rigged puppet -- this is the tracking path. A static puppet
+    // exposes none of these, so they are skipped and it simply holds its pose.
+    const std::vector<AvatarParameterValue> expression{
+        {"Eye:: Left:: Open", 0.0F},
+        {"Eye:: Right:: Open", 0.0F},
+        {"Mouth:: Jaw Open", 1.0F},
+    };
+    auto expressionFrame = renderer.value()->render(
+        TimestampNs{creator::core::DurationNs{1'000'000'000}}, expression);
+    ASSERT_TRUE(expressionFrame.hasValue()) << expressionFrame.error().message();
+    dumpRgba(expressionFrame.value(), readEnv("CS_INOCHI2D_RENDER_OUT3"));
 }
 
 #endif  // CS_INOCHI2D_ACTUAL_ROOT
