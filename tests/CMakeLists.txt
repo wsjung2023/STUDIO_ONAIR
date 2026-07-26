@@ -156,6 +156,7 @@ add_executable(cs_tests
     avatar/AvatarMotionPlaybackTest.cpp
     avatar/vrm/GlbContainerTest.cpp
     avatar/vrm/GltfDocumentTest.cpp
+    avatar/vrm/VrmRendererTest.cpp
     avatar/AvatarMotionPlaybackRendererTest.cpp
     avatar/inochi2d/Inochi2dRuntimeManifestTest.cpp
     avatar/inochi2d/Inochi2dModelRuntimeTest.cpp
