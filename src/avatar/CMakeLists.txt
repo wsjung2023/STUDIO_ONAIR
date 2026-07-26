@@ -79,6 +79,9 @@ cs_add_qtfree_library(cs_avatar
         inochi2d/Inochi2dAvatarRenderer.cpp
         vrm/GlbContainer.h
         vrm/GlbContainer.cpp
+        vrm/GltfMath.h
+        vrm/GltfDocument.h
+        vrm/GltfDocument.cpp
     DEPENDS
         cs_core
         cs_media
