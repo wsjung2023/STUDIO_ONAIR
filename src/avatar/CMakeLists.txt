@@ -84,6 +84,8 @@ cs_add_qtfree_library(cs_avatar
         vrm/GltfDocument.cpp
         vrm/VrmRenderer.h
         vrm/VrmRenderer.cpp
+        vrm/VrmAvatarRenderer.h
+        vrm/VrmAvatarRenderer.cpp
     DEPENDS
         cs_core
         cs_media

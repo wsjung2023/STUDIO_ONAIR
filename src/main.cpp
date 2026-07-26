@@ -13,6 +13,9 @@
 #include "avatar/SyntheticFaceTrackingProvider.h"
 #include "avatar/openseeface/OpenSeeFaceTrackingProvider.h"
 #include "avatar/inochi2d/Inochi2dAvatarRenderer.h"
+#include "avatar/vrm/GlbContainer.h"
+#include "avatar/vrm/GltfDocument.h"
+#include "avatar/vrm/VrmAvatarRenderer.h"
 #include "app/LiveRecordingController.h"
 #include "app/LiveRecordingEngineFactory.h"
 #include "app/ScreenCaptureController.h"
@@ -86,6 +89,8 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QImage>
+
+#include <fstream>
 #include <QQuickWindow>
 #include <QVector>
 #include <QTimer>
@@ -243,7 +248,66 @@ int main(int argc, char* argv[]) {
     // size/position controls can retune the live puppet. Null for the placeholder.
     creator::avatar::inochi2d::Inochi2dAvatarRenderer* avatarInochiControl = nullptr;
     bool avatarRealModel = false;
+    // 3D VRM avatar: if a .vrm (VRoid) model is staged, load it and decode its
+    // textures here -- Qt has the image codec, so the renderer stays Qt-free --
+    // then drive it with the same tracking chain as every other avatar.
     {
+        const std::filesystem::path appDir{
+            QGuiApplication::applicationDirPath().toStdWString()};
+        const auto vrmPath = appDir / L"resources" / L"avatar" / L"model.vrm";
+        std::error_code vrmErr;
+        if (std::filesystem::is_regular_file(vrmPath, vrmErr)) {
+            std::ifstream in(vrmPath, std::ios::binary | std::ios::ate);
+            if (in) {
+                const auto size = static_cast<std::streamsize>(in.tellg());
+                std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+                in.seekg(0);
+                in.read(reinterpret_cast<char*>(bytes.data()), size);
+                auto glb = creator::avatar::vrm::GlbContainer::read(bytes);
+                auto doc = glb.hasValue()
+                               ? creator::avatar::vrm::GltfDocument::parse(glb.value())
+                               : creator::core::Result<creator::avatar::vrm::GltfDocument>{
+                                     glb.error()};
+                if (doc.hasValue()) {
+                    std::vector<creator::avatar::vrm::DecodedTexture> textures;
+                    for (const auto& img : doc.value().images) {
+                        creator::avatar::vrm::DecodedTexture tex;
+                        if (!img.bytes.empty()) {
+                            QImage qi;
+                            qi.loadFromData(
+                                reinterpret_cast<const uchar*>(img.bytes.data()),
+                                static_cast<int>(img.bytes.size()));
+                            if (!qi.isNull()) {
+                                qi = qi.convertToFormat(QImage::Format_RGBA8888);
+                                tex.width = static_cast<std::uint32_t>(qi.width());
+                                tex.height = static_cast<std::uint32_t>(qi.height());
+                                tex.rgba.assign(
+                                    qi.constBits(),
+                                    qi.constBits() + qi.sizeInBytes());
+                            }
+                        }
+                        textures.push_back(std::move(tex));
+                    }
+                    auto vrm = creator::avatar::vrm::VrmAvatarRenderer::open(
+                        std::move(doc).value(), std::move(textures), kAvatarWidth,
+                        kAvatarHeight);
+                    if (vrm.hasValue()) {
+                        avatarRenderer = std::move(vrm).value();
+                        avatarRealModel = true;
+                    } else {
+                        qWarning().noquote()
+                            << "VRM avatar unavailable, using placeholder:"
+                            << QString::fromStdString(vrm.error().message());
+                    }
+                } else {
+                    qWarning().noquote()
+                        << "VRM model could not be parsed:"
+                        << QString::fromStdString(doc.error().message());
+                }
+            }
+        }
+    }
+    if (!avatarRealModel) {
         const std::filesystem::path appDir{
             QGuiApplication::applicationDirPath().toStdWString()};
         const auto avatarDir = appDir / L"resources" / L"avatar";
