@@ -90,6 +90,13 @@ core::Result<AvatarRenderFrame> VrmRenderer::render(
     core::TimestampNs timestamp, const VrmRenderParams& params) {
     const std::size_t nodeCount = doc_.nodes.size();
 
+    // Supersample: rasterise at kSS× the target resolution and box-downsample the
+    // result, so the silhouette and toon-shade steps get anti-aliased edges
+    // instead of the hard staircase a single-sample raster produces.
+    constexpr std::uint32_t kSS = 2U;
+    const std::uint32_t rw = width_ * kSS;
+    const std::uint32_t rh = height_ * kSS;
+
     // ---- Node world matrices (head bone gets the tracking rotation) ----------
     const Quat headRot =
         quatFromAxisAngle({0, 1, 0}, params.headYaw) *
@@ -261,23 +268,23 @@ core::Result<AvatarRenderFrame> VrmRenderer::render(
     const float bandW = std::max(hi.x - lo.x, 1.0e-4F);
     constexpr float kMargin = 1.12F;  // a little breathing room
     const float halfExtent =
-        0.5F * std::max(bandH, bandW / (static_cast<float>(width_) /
-                                        static_cast<float>(height_))) *
+        0.5F * std::max(bandH, bandW / (static_cast<float>(rw) /
+                                        static_cast<float>(rh))) *
         kMargin;
-    const float aspect = static_cast<float>(width_) / static_cast<float>(height_);
+    const float aspect = static_cast<float>(rw) / static_cast<float>(rh);
     const float halfH = halfExtent;
     const float halfW = halfExtent * aspect;
 
-    std::vector<std::uint8_t> px(static_cast<std::size_t>(width_) * height_ * 4U, 0U);
-    std::vector<float> depth(static_cast<std::size_t>(width_) * height_,
+    std::vector<std::uint8_t> px(static_cast<std::size_t>(rw) * rh * 4U, 0U);
+    std::vector<float> depth(static_cast<std::size_t>(rw) * rh,
                              std::numeric_limits<float>::lowest());
 
     const Vec3 light = normalize({0.35F, 0.55F, 1.0F});
     const auto project = [&](Vec3 w) {
-        const float sx = (w.x - centreX) / halfW * (static_cast<float>(width_) * 0.5F) +
-                         static_cast<float>(width_) * 0.5F;
-        const float sy = (centreY - w.y) / halfH * (static_cast<float>(height_) * 0.5F) +
-                         static_cast<float>(height_) * 0.5F;
+        const float sx = (w.x - centreX) / halfW * (static_cast<float>(rw) * 0.5F) +
+                         static_cast<float>(rw) * 0.5F;
+        const float sy = (centreY - w.y) / halfH * (static_cast<float>(rh) * 0.5F) +
+                         static_cast<float>(rh) * 0.5F;
         return Vec2{sx, sy};
     };
 
@@ -291,10 +298,10 @@ core::Result<AvatarRenderFrame> VrmRenderer::render(
         if (std::abs(area) < 1.0e-6F) continue;
         // The camera looks toward -Z (from +Z); front faces have world +Z normals.
         const int minX = std::max(0, static_cast<int>(std::floor(std::min({pa.x, pb.x, pc.x}))));
-        const int maxX = std::min(static_cast<int>(width_) - 1,
+        const int maxX = std::min(static_cast<int>(rw) - 1,
                                   static_cast<int>(std::ceil(std::max({pa.x, pb.x, pc.x}))));
         const int minY = std::max(0, static_cast<int>(std::floor(std::min({pa.y, pb.y, pc.y}))));
-        const int maxY = std::min(static_cast<int>(height_) - 1,
+        const int maxY = std::min(static_cast<int>(rh) - 1,
                                   static_cast<int>(std::ceil(std::max({pa.y, pb.y, pc.y}))));
         if (minX > maxX || minY > maxY) continue;
 
@@ -322,7 +329,7 @@ core::Result<AvatarRenderFrame> VrmRenderer::render(
                 if (w0 < 0.0F || w1 < 0.0F || w2 < 0.0F) continue;
                 const float z = w0 * a.world.z + w1 * b.world.z + w2 * c.world.z;
                 const std::size_t di =
-                    static_cast<std::size_t>(y) * width_ + static_cast<std::size_t>(x);
+                    static_cast<std::size_t>(y) * rw + static_cast<std::size_t>(x);
                 if (z <= depth[di]) continue;  // larger Z = nearer the +Z camera
 
                 float br = mat.baseColorFactor.x, bg = mat.baseColorFactor.y,
@@ -367,8 +374,38 @@ core::Result<AvatarRenderFrame> VrmRenderer::render(
         }
     }
 
+    // Box-downsample kSS×kSS supersample blocks into the target frame. Colours
+    // are alpha-weighted so translucent edge samples don't darken toward black;
+    // alpha is a straight average so edges fade smoothly (anti-aliasing).
+    std::vector<std::uint8_t> out(static_cast<std::size_t>(width_) * height_ * 4U, 0U);
+    for (std::uint32_t y = 0; y < height_; ++y) {
+        for (std::uint32_t x = 0; x < width_; ++x) {
+            std::uint32_t sumB = 0, sumG = 0, sumR = 0, sumA = 0;
+            for (std::uint32_t sy = 0; sy < kSS; ++sy) {
+                for (std::uint32_t sx = 0; sx < kSS; ++sx) {
+                    const std::size_t si =
+                        ((static_cast<std::size_t>(y) * kSS + sy) * rw +
+                         (static_cast<std::size_t>(x) * kSS + sx)) *
+                        4U;
+                    const std::uint32_t a = px[si + 3];
+                    sumB += px[si + 0] * a;
+                    sumG += px[si + 1] * a;
+                    sumR += px[si + 2] * a;
+                    sumA += a;
+                }
+            }
+            const std::size_t di = (static_cast<std::size_t>(y) * width_ + x) * 4U;
+            if (sumA > 0U) {
+                out[di + 0] = static_cast<std::uint8_t>(sumB / sumA);
+                out[di + 1] = static_cast<std::uint8_t>(sumG / sumA);
+                out[di + 2] = static_cast<std::uint8_t>(sumR / sumA);
+            }
+            out[di + 3] = static_cast<std::uint8_t>(sumA / (kSS * kSS));
+        }
+    }
+
     return AvatarRenderFrame::fromBgra(timestamp, width_, height_, width_ * 4U,
-                                       std::move(px));
+                                       std::move(out));
 }
 
 }  // namespace creator::avatar::vrm
