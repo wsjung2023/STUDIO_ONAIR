@@ -60,11 +60,22 @@ core::Result<std::unique_ptr<VrmRenderer>> VrmRenderer::open(
                 self->parent_[static_cast<std::size_t>(child)] = i;
         }
     }
-    // Head bone: prefer a node whose name looks like a head.
+    // Head + upper-arm bones (by name; VRoid uses J_Bip_C_Head / J_Bip_L_UpperArm).
     for (int i = 0; i < static_cast<int>(self->doc_.nodes.size()); ++i) {
-        if (nameLooksLikeHead(self->doc_.nodes[static_cast<std::size_t>(i)].name)) {
-            self->headNode_ = i;
-            break;
+        std::string nm;
+        for (char c : self->doc_.nodes[static_cast<std::size_t>(i)].name)
+            nm.push_back(static_cast<char>(std::tolower(c)));
+        if (self->headNode_ < 0 && nameLooksLikeHead(nm)) self->headNode_ = i;
+        const bool isUpperArm =
+            nm.find("upperarm") != std::string::npos ||
+            nm.find("upper_arm") != std::string::npos;
+        if (isUpperArm) {
+            const bool left = nm.find("_l_") != std::string::npos ||
+                              nm.find("left") != std::string::npos;
+            const bool right = nm.find("_r_") != std::string::npos ||
+                               nm.find("right") != std::string::npos;
+            if (left && self->leftUpperArm_ < 0) self->leftUpperArm_ = i;
+            else if (right && self->rightUpperArm_ < 0) self->rightUpperArm_ = i;
         }
     }
     return self;
@@ -84,6 +95,19 @@ core::Result<AvatarRenderFrame> VrmRenderer::render(
         local[i] = doc_.nodes[i].localMatrix();
         if (static_cast<int>(i) == headNode_)
             local[i] = local[i] * Mat4::rotation(headRot);
+    }
+    // Lower the arms from the T-pose to nearly straight down so only the head and
+    // upper body are the subject. Signs are mirrored for left vs right.
+    constexpr float kArmDown = 1.4F;
+    if (leftUpperArm_ >= 0) {
+        local[static_cast<std::size_t>(leftUpperArm_)] =
+            local[static_cast<std::size_t>(leftUpperArm_)] *
+            Mat4::rotation(quatFromAxisAngle({0, 0, 1}, kArmDown));
+    }
+    if (rightUpperArm_ >= 0) {
+        local[static_cast<std::size_t>(rightUpperArm_)] =
+            local[static_cast<std::size_t>(rightUpperArm_)] *
+            Mat4::rotation(quatFromAxisAngle({0, 0, 1}, -kArmDown));
     }
     std::vector<Mat4> world(nodeCount);
     std::vector<char> done(nodeCount, 0);

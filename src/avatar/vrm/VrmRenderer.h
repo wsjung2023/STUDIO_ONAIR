@@ -59,6 +59,10 @@ private:
     // resolved once at open() from the hierarchy / VRM humanoid extension.
     std::vector<int> parent_;
     int headNode_{-1};
+    // Upper-arm bones, lowered from the authored T-pose to a natural arms-down
+    // pose so the avatar reads as a head-and-upper-body VTuber (-1 = not found).
+    int leftUpperArm_{-1};
+    int rightUpperArm_{-1};
     // Framing computed from the rest-pose bounds so the head fills the frame.
     Vec3 boundsMin_{}, boundsMax_{};
 };
