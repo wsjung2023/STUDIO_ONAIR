@@ -352,12 +352,16 @@ int main(int argc, char* argv[]) {
         avatarCharacterControl = characterRenderer.get();
         avatarRenderer = std::move(characterRenderer);
     }
-    // Bind tracking to whichever renderer won: a real Inochi2D puppet follows the
-    // standard Inochi2D parameter names (e.g. Arch-chan); the first-party
-    // placeholder uses its own. Non-matching names are skipped by the runtime.
+    // Bind tracking to whichever renderer won. ONLY a real Inochi2D puppet uses
+    // the Inochi2D parameter names (e.g. Arch-chan's "Eye:: Left:: Open"); the
+    // VRM renderer, the drawn characters and the placeholder all read the
+    // canonical PlaceholderAvatarParameterNames, so they share the character
+    // (placeholder) bindings. Keying this on avatarRealModel was wrong: it fed a
+    // VRM avatar the Inochi2D names it never reads, leaving it frozen/neutral.
     auto avatarMapper = creator::avatar::AvatarParameterMapper::create(
-        avatarRealModel ? creator::avatar::inochi2d::inochi2dAvatarBindings()
-                        : creator::avatar::characterAvatarBindings());
+        avatarInochiControl != nullptr
+            ? creator::avatar::inochi2d::inochi2dAvatarBindings()
+            : creator::avatar::characterAvatarBindings());
     // Real face tracking: when CS_OPENSEEFACE_UDP is set, an external
     // OpenSeeFace process (facetracker.py) owns the webcam and streams tracking
     // over UDP; this app only receives it. OpenSeeFaceTrackingProvider adapts
