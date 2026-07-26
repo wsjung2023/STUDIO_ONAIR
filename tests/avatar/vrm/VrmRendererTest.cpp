@@ -103,6 +103,84 @@ TEST(VrmRendererTest, RasterisesAModelToVisiblePixels) {
     EXPECT_GT(opaque, 200U) << "VRM render produced a near-empty frame";
 }
 
+// A model shaped like a real VRM: a large "body" triangle that dominates the
+// bounds (so the auto-framing is stable) plus a small "face" triangle in front,
+// near the top. One morph target moves ONLY the face triangle down, bound to a
+// VRM 0.x "aa" expression preset. Because the body fixes the bounds, driving the
+// expression genuinely moves the face within the frame rather than being undone
+// by re-framing — exactly how a blink/mouth morph behaves on a VRoid model.
+GltfDocument morphDoc() {
+    std::vector<std::byte> bin;
+    // positions (offset 0): 3 body verts, then 3 face verts (face nearer camera).
+    appendF32(bin, -0.6F); appendF32(bin, -1.0F); appendF32(bin, 0);
+    appendF32(bin, 0.6F);  appendF32(bin, -1.0F); appendF32(bin, 0);
+    appendF32(bin, 0.0F);  appendF32(bin, 0.8F);  appendF32(bin, 0);
+    appendF32(bin, -0.30F); appendF32(bin, 0.30F); appendF32(bin, -0.1F);
+    appendF32(bin, 0.30F);  appendF32(bin, 0.30F); appendF32(bin, -0.1F);
+    appendF32(bin, 0.0F);   appendF32(bin, 0.75F); appendF32(bin, -0.1F);
+    // normals (offset 72): all +Z
+    for (int i = 0; i < 6; ++i) { appendF32(bin, 0); appendF32(bin, 0); appendF32(bin, 1); }
+    // morph POSITION deltas (offset 144): body unchanged, face moves down 0.25
+    appendF32(bin, 0); appendF32(bin, 0); appendF32(bin, 0);
+    appendF32(bin, 0); appendF32(bin, 0); appendF32(bin, 0);
+    appendF32(bin, 0); appendF32(bin, 0); appendF32(bin, 0);
+    appendF32(bin, 0); appendF32(bin, -0.25F); appendF32(bin, 0);
+    appendF32(bin, 0); appendF32(bin, -0.25F); appendF32(bin, 0);
+    appendF32(bin, 0); appendF32(bin, -0.25F); appendF32(bin, 0);
+    // indices (offset 216): body tri, face tri
+    appendU16(bin, 0); appendU16(bin, 1); appendU16(bin, 2);
+    appendU16(bin, 3); appendU16(bin, 4); appendU16(bin, 5);
+    const std::string json = R"({
+      "asset":{"version":"2.0"},
+      "bufferViews":[
+        {"buffer":0,"byteOffset":0,"byteLength":72},
+        {"buffer":0,"byteOffset":72,"byteLength":72},
+        {"buffer":0,"byteOffset":144,"byteLength":72},
+        {"buffer":0,"byteOffset":216,"byteLength":12}
+      ],
+      "accessors":[
+        {"bufferView":0,"componentType":5126,"count":6,"type":"VEC3"},
+        {"bufferView":1,"componentType":5126,"count":6,"type":"VEC3"},
+        {"bufferView":2,"componentType":5126,"count":6,"type":"VEC3"},
+        {"bufferView":3,"componentType":5123,"count":6,"type":"SCALAR"}
+      ],
+      "meshes":[{"primitives":[
+        {"attributes":{"POSITION":0,"NORMAL":1},"indices":3,"material":0,
+         "targets":[{"POSITION":2}]}]}],
+      "materials":[{"pbrMetallicRoughness":{"baseColorFactor":[0.9,0.2,0.2,1.0]}}],
+      "nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0,
+      "extensions":{"VRM":{"blendShapeMaster":{"blendShapeGroups":[
+        {"name":"aa","presetName":"aa","binds":[{"mesh":0,"index":0,"weight":100}]}
+      ]}}}
+    })";
+    return GltfDocument::parse(GlbContainer::read(makeGlb(json, bin)).value()).value();
+}
+
+TEST(VrmRendererTest, ExpressionMorphMovesGeometry) {
+    auto doc = morphDoc();
+    // The VRM extension parse produced the named expression bind.
+    ASSERT_TRUE(doc.expressions.count("aa") == 1U) << "aa expression not parsed";
+
+    auto renderer = VrmRenderer::open(std::move(doc), {}, 96, 96);
+    ASSERT_TRUE(renderer.hasValue()) << renderer.error().message();
+
+    const auto neutral = renderer.value()->render(TimestampNs{}, VrmRenderParams{});
+    VrmRenderParams open;
+    open.expressions.emplace_back("aa", 1.0F);
+    const auto morphed = renderer.value()->render(TimestampNs{}, open);
+    ASSERT_TRUE(neutral.hasValue());
+    ASSERT_TRUE(morphed.hasValue());
+
+    const auto a = neutral.value().bytes();
+    const auto b = morphed.value().bytes();
+    ASSERT_EQ(a.size(), b.size());
+    std::uint64_t differing = 0;
+    for (std::size_t i = 0; i + 3 < a.size(); i += 4)
+        if (a[i + 3] != b[i + 3]) ++differing;  // alpha coverage moved
+    EXPECT_GT(differing, 200U)
+        << "expression weight did not change the rendered geometry";
+}
+
 TEST(VrmRendererTest, HeadRotationChangesTheFrame) {
     auto renderer = VrmRenderer::open(triangleDoc(), {}, 96, 96);
     ASSERT_TRUE(renderer.hasValue());
