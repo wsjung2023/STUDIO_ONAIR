@@ -2,10 +2,19 @@
 
 #include "avatar/AvatarMotionSample.h"
 #include "avatar/AvatarRenderFrame.h"
+#include "avatar/vrm/GlbContainer.h"
+#include "avatar/vrm/GltfDocument.h"
 #include "core/AppError.h"
 
+#include <QCoreApplication>
+#include <QDir>
+#include <QProcess>
 #include <QSettings>
 #include <QVariantMap>
+
+#include <filesystem>
+#include <fstream>
+#include <vector>
 
 #if defined(CS_APP_ENABLE_FFMPEG)
 #include "ffmpeg_adapter/BgraFrameMappers.h"
@@ -317,6 +326,106 @@ void AvatarSceneController::setAvatarHairColor(int red, int green, int blue) {
     settings.setValue(QStringLiteral("avatar/hairColor"),
                       static_cast<int>(characterControl_->hairColor()));
     emit styleChanged();
+}
+
+bool AvatarSceneController::importAvatarModel(const QUrl& fileUrl) {
+    const QString localPath =
+        fileUrl.isLocalFile() ? fileUrl.toLocalFile() : fileUrl.toString();
+    const std::filesystem::path src{localPath.toStdWString()};
+
+    // Read + validate the whole file before touching the installed model, so a
+    // bad pick reports an error instead of bricking the avatar on next launch.
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(src, ec)) {
+        importStatus_ = QStringLiteral("파일을 찾을 수 없습니다.");
+        emit importChanged();
+        return false;
+    }
+    std::ifstream in(src, std::ios::binary | std::ios::ate);
+    if (!in) {
+        importStatus_ = QStringLiteral("파일을 열 수 없습니다.");
+        emit importChanged();
+        return false;
+    }
+    const auto size = static_cast<std::streamsize>(in.tellg());
+    std::vector<std::byte> bytes(static_cast<std::size_t>(std::max<std::streamsize>(size, 0)));
+    in.seekg(0);
+    in.read(reinterpret_cast<char*>(bytes.data()), size);
+    if (!in) {
+        importStatus_ = QStringLiteral("파일을 읽는 중 오류가 발생했습니다.");
+        emit importChanged();
+        return false;
+    }
+    auto glb = creator::avatar::vrm::GlbContainer::read(bytes);
+    auto doc = glb.hasValue()
+                   ? creator::avatar::vrm::GltfDocument::parse(glb.value())
+                   : creator::core::Result<creator::avatar::vrm::GltfDocument>{
+                         glb.error()};
+    if (!doc.hasValue() || doc.value().meshes.empty()) {
+        importStatus_ =
+            QStringLiteral("올바른 VRM/glb 아바타 파일이 아닙니다: ") +
+            (doc.hasValue() ? QStringLiteral("렌더링할 메시가 없습니다")
+                            : QString::fromStdString(doc.error().message()));
+        emit importChanged();
+        return false;
+    }
+
+    // Install atomically: write beside the target, then rename over it so a crash
+    // mid-copy never leaves a truncated model.vrm (CLAUDE.md 4: temp + rename).
+    const std::filesystem::path appDir{
+        QCoreApplication::applicationDirPath().toStdWString()};
+    const auto destDir = appDir / L"resources" / L"avatar";
+    std::filesystem::create_directories(destDir, ec);
+    const auto dest = destDir / L"model.vrm";
+    const auto tmp = destDir / L"model.vrm.importing";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            importStatus_ = QStringLiteral("아바타 폴더에 쓸 수 없습니다.");
+            emit importChanged();
+            return false;
+        }
+        out.write(reinterpret_cast<const char*>(bytes.data()),
+                  static_cast<std::streamsize>(bytes.size()));
+        out.flush();
+        if (!out) {
+            out.close();
+            std::filesystem::remove(tmp, ec);
+            importStatus_ = QStringLiteral("아바타 파일을 저장하지 못했습니다.");
+            emit importChanged();
+            return false;
+        }
+    }
+    std::filesystem::rename(tmp, dest, ec);
+    if (ec) {
+        // Some filesystems refuse rename-over-existing; fall back to replace.
+        std::filesystem::remove(dest, ec);
+        std::filesystem::rename(tmp, dest, ec);
+    }
+    if (ec) {
+        std::filesystem::remove(tmp, ec);
+        importStatus_ = QStringLiteral("아바타 파일 설치에 실패했습니다: ") +
+                        QString::fromStdString(ec.message());
+        emit importChanged();
+        return false;
+    }
+
+    importPending_ = true;
+    importStatus_ = QStringLiteral("아바타를 불러왔습니다. 다시 시작하면 적용됩니다.");
+    emit importChanged();
+    return true;
+}
+
+void AvatarSceneController::relaunchApplication() {
+    // Launch a fresh instance, then ask this one to quit. startDetached so the new
+    // process outlives the quit; if it fails to start, stay running and report it.
+    const QString exe = QCoreApplication::applicationFilePath();
+    if (QProcess::startDetached(exe, QCoreApplication::arguments().mid(1))) {
+        QCoreApplication::quit();
+    } else {
+        importStatus_ = QStringLiteral("다시 시작하지 못했습니다. 수동으로 앱을 다시 실행해 주세요.");
+        emit importChanged();
+    }
 }
 
 void AvatarSceneController::persistStyle() {

@@ -15,6 +15,7 @@
 #include <QImage>
 #include <QObject>
 #include <QString>
+#include <QUrl>
 #include <QVariantList>
 
 #include <atomic>
@@ -72,6 +73,12 @@ class AvatarSceneController final : public QObject {
     Q_PROPERTY(double avatarPosY READ avatarPosY NOTIFY transformChanged)
     Q_PROPERTY(double avatarMinScale READ avatarMinScale CONSTANT)
     Q_PROPERTY(double avatarMaxScale READ avatarMaxScale CONSTANT)
+    // Result of the most recent .vrm import attempt (empty until the user tries).
+    // Surfaced so the UI reports success/failure instead of hiding it (CLAUDE.md 9).
+    Q_PROPERTY(QString avatarImportStatus READ avatarImportStatus NOTIFY importChanged)
+    // True once a .vrm has been imported this session, so the UI can offer to
+    // relaunch (the model is adopted at startup, so import applies on next launch).
+    Q_PROPERTY(bool avatarImportPending READ avatarImportPending NOTIFY importChanged)
 
 public:
     /// `cameraLive` reports whether the webcam is currently capturing; the
@@ -129,6 +136,18 @@ public:
     /// drawn characters support this; a no-op for a real Inochi2D puppet.
     Q_INVOKABLE void setAvatarHairColor(int red, int green, int blue);
 
+    [[nodiscard]] QString avatarImportStatus() const { return importStatus_; }
+    [[nodiscard]] bool avatarImportPending() const noexcept { return importPending_; }
+    /// Validates a user-chosen .vrm/.glb file (parses it, rejecting a malformed or
+    /// mesh-less file with a visible error) and, on success, atomically installs it
+    /// as the app's avatar model so it is adopted on the next launch. Returns true
+    /// on success. The file is never adopted mid-session because the model and its
+    /// textures are wired into the capture chain at startup.
+    Q_INVOKABLE bool importAvatarModel(const QUrl& fileUrl);
+    /// Relaunches the application (used after a successful import) so the newly
+    /// installed model is loaded. Detaches a fresh process, then quits this one.
+    Q_INVOKABLE void relaunchApplication();
+
     /// Renders one avatar frame (at the current animation phase plus
     /// `extraSeconds`) straight to a QImage, using the exact tracking -> map ->
     /// render chain that feeds the preview and recording. Used to prove the
@@ -160,6 +179,9 @@ signals:
     /// repaint. stateChanged fires only on status transitions, which is too rare
     /// to drive a moving avatar, so this is the per-frame repaint trigger.
     void previewFrameReady();
+    /// Emitted when a .vrm import attempt finishes (success or failure) so the UI
+    /// can refresh avatarImportStatus / avatarImportPending.
+    void importChanged();
 
 private:
     // One rendered avatar frame (tracking poll -> map -> render -> fanout push).
@@ -219,8 +241,10 @@ private:
 
     bool enabled_{false};
     bool capturing_{false};
+    bool importPending_{false};
     QString status_;
     QString trackingLabel_;
+    QString importStatus_;
     creator::core::DurationNs animationPhase_{0};  // guarded by pipelineMutex_
     std::optional<creator::core::TimestampNs> lastTick_;  // guarded by pipelineMutex_
     std::atomic<quint64> producedFrames_{0};

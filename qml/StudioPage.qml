@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import CreatorStudio.Native 1.0
 
 // Layout follows PRODUCT_BLUEPRINT 6.2: scenes and sources left, canvas centre,
@@ -708,6 +709,49 @@ Item {
                         wrapMode: Text.WordWrap
                         color: theme.warning
                         font.pixelSize: 11
+                    }
+
+                    // VRM import: bring your own VRoid avatar. Available for any
+                    // current avatar; the chosen model is validated, installed, and
+                    // adopted on the next launch (the model wires into the capture
+                    // chain at startup, so it applies after a relaunch).
+                    Label {
+                        text: qsTr("내 아바타 (VRM / VRoid)")
+                        color: theme.textMuted; font.family: theme.fontFamily
+                        font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold
+                        font.capitalization: Font.AllUppercase; font.letterSpacing: 1
+                    }
+                    Button {
+                        objectName: "studioAvatarImportButton"
+                        Layout.fillWidth: true
+                        text: qsTr("VRM 아바타 불러오기 (.vrm)")
+                        Accessible.name: qsTr("Import a VRM avatar model")
+                        onClicked: avatarImportDialog.open()
+                    }
+                    FileDialog {
+                        id: avatarImportDialog
+                        objectName: "studioAvatarImportDialog"
+                        title: qsTr("VRM 아바타 파일 선택")
+                        nameFilters: [qsTr("VRM/glb 아바타 (*.vrm *.glb)"), qsTr("모든 파일 (*)")]
+                        onAccepted: avatarSceneController.importAvatarModel(selectedFile)
+                    }
+                    Label {
+                        objectName: "studioAvatarImportStatus"
+                        visible: avatarSceneController.avatarImportStatus.length > 0
+                        Layout.fillWidth: true
+                        text: avatarSceneController.avatarImportStatus
+                        wrapMode: Text.WordWrap
+                        color: avatarSceneController.avatarImportPending
+                               ? theme.textMuted : theme.warning
+                        font.pixelSize: 11
+                    }
+                    Button {
+                        objectName: "studioAvatarRelaunchButton"
+                        Layout.fillWidth: true
+                        visible: avatarSceneController.avatarImportPending
+                        text: qsTr("지금 다시 시작해서 적용")
+                        Accessible.name: qsTr("Relaunch to apply the imported avatar")
+                        onClicked: avatarSceneController.relaunchApplication()
                     }
 
                     // Character picker: choose the built-in VTuber character.

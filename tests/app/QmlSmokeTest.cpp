@@ -29,6 +29,7 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QThread>
 #include <QUrl>
 #include <QVariantList>
@@ -39,7 +40,11 @@
 
 #include <array>
 #include <cstddef>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -64,6 +69,87 @@ creator::app::AvatarSceneController* installAvatarController(QQmlEngine& engine)
     engine.rootContext()->setContextProperty(
         QStringLiteral("avatarSceneController"), controller);
     return controller;
+}
+
+// Builds a controller with no device/GPU dependencies (synthetic tracking +
+// placeholder renderer), owned by the caller, for exercising QML-invocable
+// methods directly.
+std::unique_ptr<creator::app::AvatarSceneController> makeBareAvatarController() {
+    auto mapper = creator::avatar::AvatarParameterMapper::create(
+                      creator::avatar::placeholderAvatarBindings())
+                      .value();
+    return std::make_unique<creator::app::AvatarSceneController>(
+        std::make_unique<creator::avatar::SyntheticFaceTrackingProvider>(),
+        std::move(mapper),
+        std::make_unique<creator::avatar::PlaceholderAvatarRenderer>(64, 48), 64,
+        48, [] { return false; }, /*usingRealModel=*/false,
+        /*usingRealTracking=*/false, /*characterControl=*/nullptr,
+        /*inochiControl=*/nullptr, /*parent=*/nullptr);
+}
+
+// A minimal but valid glb (single front-facing triangle) so import validation
+// accepts it and GltfDocument::parse yields a non-empty mesh set.
+std::vector<std::byte> minimalGlbBytes() {
+    const auto u32 = [](std::vector<std::byte>& o, std::uint32_t v) {
+        for (int i = 0; i < 4; ++i)
+            o.push_back(static_cast<std::byte>((v >> (i * 8)) & 0xFFU));
+    };
+    const auto f32 = [&](std::vector<std::byte>& o, float f) {
+        std::uint32_t v;
+        std::memcpy(&v, &f, 4);
+        u32(o, v);
+    };
+    const auto u16 = [](std::vector<std::byte>& o, std::uint16_t v) {
+        o.push_back(static_cast<std::byte>(v & 0xFFU));
+        o.push_back(static_cast<std::byte>((v >> 8) & 0xFFU));
+    };
+    std::vector<std::byte> bin;
+    f32(bin, -0.5F); f32(bin, -0.5F); f32(bin, 0);
+    f32(bin, 0.5F);  f32(bin, -0.5F); f32(bin, 0);
+    f32(bin, 0.0F);  f32(bin, 0.5F);  f32(bin, 0);
+    f32(bin, 0); f32(bin, 0); f32(bin, 1);
+    f32(bin, 0); f32(bin, 0); f32(bin, 1);
+    f32(bin, 0); f32(bin, 0); f32(bin, 1);
+    u16(bin, 0); u16(bin, 1); u16(bin, 2);
+    const std::string json = R"({
+      "asset":{"version":"2.0"},
+      "bufferViews":[
+        {"buffer":0,"byteOffset":0,"byteLength":36},
+        {"buffer":0,"byteOffset":36,"byteLength":36},
+        {"buffer":0,"byteOffset":72,"byteLength":6}],
+      "accessors":[
+        {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":2,"componentType":5123,"count":3,"type":"SCALAR"}],
+      "meshes":[{"primitives":[
+        {"attributes":{"POSITION":0,"NORMAL":1},"indices":2,"material":0}]}],
+      "materials":[{"pbrMetallicRoughness":{"baseColorFactor":[0.9,0.2,0.2,1.0]}}],
+      "nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0
+    })";
+    std::vector<std::byte> jc(json.size());
+    std::memcpy(jc.data(), json.data(), json.size());
+    while (jc.size() % 4U != 0U) jc.push_back(static_cast<std::byte>(0x20));
+    std::vector<std::byte> bc = bin;
+    while (bc.size() % 4U != 0U) bc.push_back(static_cast<std::byte>(0));
+    std::vector<std::byte> body;
+    u32(body, static_cast<std::uint32_t>(jc.size()));
+    u32(body, 0x4E4F534AU);
+    body.insert(body.end(), jc.begin(), jc.end());
+    u32(body, static_cast<std::uint32_t>(bc.size()));
+    u32(body, 0x004E4942U);
+    body.insert(body.end(), bc.begin(), bc.end());
+    std::vector<std::byte> glb;
+    u32(glb, 0x46546C67U);
+    u32(glb, 2U);
+    u32(glb, static_cast<std::uint32_t>(12U + body.size()));
+    glb.insert(glb.end(), body.begin(), body.end());
+    return glb;
+}
+
+void writeBytes(const std::filesystem::path& p, const std::vector<std::byte>& b) {
+    std::ofstream o(p, std::ios::binary | std::ios::trunc);
+    o.write(reinterpret_cast<const char*>(b.data()),
+            static_cast<std::streamsize>(b.size()));
 }
 
 QQuickItem* findVisualItem(QQuickItem* root, const QString& objectName) {
@@ -2078,6 +2164,55 @@ TEST(QmlSmokeTest, StudioPageProvidesModelDrivenAccessibleWorkflowAtAllSizes) {
                              .toBool());
         }
     }
+}
+
+TEST(AvatarImportTest, RejectsAFileThatIsNotAValidModel) {
+    auto controller = makeBareAvatarController();
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const std::filesystem::path bad{dir.filePath("bad.vrm").toStdWString()};
+    { std::ofstream o(bad, std::ios::binary); o << "this is not a glb file"; }
+
+    EXPECT_FALSE(
+        controller->importAvatarModel(QUrl::fromLocalFile(dir.filePath("bad.vrm"))));
+    // The failure is surfaced, not hidden, and nothing is staged for launch.
+    EXPECT_FALSE(controller->avatarImportPending());
+    EXPECT_FALSE(controller->avatarImportStatus().isEmpty());
+}
+
+TEST(AvatarImportTest, InstallsAValidModelForTheNextLaunch) {
+    namespace fs = std::filesystem;
+    auto controller = makeBareAvatarController();
+
+    // The install target is the app's staged avatar model; preserve any existing
+    // one (e.g. a developer-staged sample) and restore it after the test.
+    const fs::path appDir{QCoreApplication::applicationDirPath().toStdWString()};
+    const fs::path dest = appDir / L"resources" / L"avatar" / L"model.vrm";
+    std::error_code ec;
+    const bool had = fs::exists(dest, ec);
+    fs::path backup = dest;
+    backup += L".import-test-backup";
+    if (had) fs::rename(dest, backup, ec);
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const fs::path good{dir.filePath("good.glb").toStdWString()};
+    writeBytes(good, minimalGlbBytes());
+
+    const bool ok =
+        controller->importAvatarModel(QUrl::fromLocalFile(dir.filePath("good.glb")));
+
+    // Capture results before cleanup so a failed assertion still restores state.
+    const bool pending = controller->avatarImportPending();
+    const bool installed = fs::exists(dest, ec);
+
+    // Restore: remove the test-installed model and put back any original.
+    fs::remove(dest, ec);
+    if (had) fs::rename(backup, dest, ec);
+
+    EXPECT_TRUE(ok);
+    EXPECT_TRUE(pending);
+    EXPECT_TRUE(installed) << "the validated model was not staged for next launch";
 }
 
 }  // namespace
