@@ -163,6 +163,13 @@ core::Result<AvatarRenderFrame> VrmRenderer::render(
                     wpos = world[n].transformPoint(pos);
                     wnorm = normalize(world[n].transformDir(wnorm));
                 }
+                // VRM models face -Z; the camera looks from +Z. Rotate 180° about
+                // Y (x->-x, z->-z, a proper rotation so handedness is preserved
+                // and the face is not mirrored) so the front faces the camera.
+                wpos.x = -wpos.x;
+                wpos.z = -wpos.z;
+                wnorm.x = -wnorm.x;
+                wnorm.z = -wnorm.z;
                 verts.push_back({wpos, wnorm,
                                  v < prim.uvs.size() ? prim.uvs[v] : Vec2{0, 0}});
             }
