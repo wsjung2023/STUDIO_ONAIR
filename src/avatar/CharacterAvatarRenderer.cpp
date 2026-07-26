@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -263,6 +264,9 @@ struct Rig final {
     float yaw{0}, pitch{0}, roll{0};
     Pose pose;
     float gaze{0};  // horizontal pupil offset in R units
+    // Optional hair/fur colour override from the editor; empty = per-character
+    // default. Every character reads this so recolouring works on all of them.
+    std::optional<Rgba> hairColor;
 };
 
 // ---- Shared rig layers -----------------------------------------------------
@@ -338,8 +342,8 @@ void drawHuman(Canvas& cv, const Rig& r) {
     const Pose& p = r.pose;
     const Rgba skin = rgb(248, 214, 186);
     const Rgba skinShade = rgb(232, 190, 160);
-    const Rgba hair = rgb(97, 62, 71);
-    const Rgba hairHi = rgb(126, 84, 94);
+    const Rgba hair = r.hairColor.value_or(rgb(97, 62, 71));
+    const Rgba hairHi = r.hairColor ? mix(hair, rgb(255, 255, 255), 0.30F) : rgb(126, 84, 94);
 
     // Shoulders / bust (clothing) behind the head.
     cv.fillRoundedRect(p.cx - p.R * 1.35F, p.cy + p.R * 1.05F, p.cx + p.R * 1.35F,
@@ -407,7 +411,7 @@ void drawHuman(Canvas& cv, const Rig& r) {
 
 void drawCat(Canvas& cv, const Rig& r) {
     const Pose& p = r.pose;
-    const Rgba fur = rgb(247, 197, 130);
+    const Rgba fur = r.hairColor.value_or(rgb(247, 197, 130));
     const Rgba furDk = rgb(226, 168, 96);
     const Rgba innerEar = rgb(255, 190, 196);
     const Rgba white = rgb(255, 252, 246);
@@ -484,7 +488,7 @@ void drawCat(Canvas& cv, const Rig& r) {
 
 void drawFox(Canvas& cv, const Rig& r) {
     const Pose& p = r.pose;
-    const Rgba fur = rgb(236, 130, 54);
+    const Rgba fur = r.hairColor.value_or(rgb(236, 130, 54));
     const Rgba furDk = rgb(206, 100, 36);
     const Rgba white = rgb(255, 250, 244);
     const Rgba black = rgb(38, 32, 34);
@@ -568,8 +572,8 @@ void drawManMid(Canvas& cv, const Rig& r) {
     const Pose& p = r.pose;
     const Rgba skin = rgb(230, 190, 158);
     const Rgba skinShade = rgb(206, 164, 132);
-    const Rgba hair = rgb(70, 62, 58);
-    const Rgba hairHi = rgb(104, 94, 88);
+    const Rgba hair = r.hairColor.value_or(rgb(70, 62, 58));
+    const Rgba hairHi = r.hairColor ? mix(hair, rgb(255, 255, 255), 0.30F) : rgb(104, 94, 88);
     const Rgba stubble = rgb(96, 84, 84, 0.32F);
 
     // Collared shirt shoulders.
@@ -638,8 +642,8 @@ void drawWoman(Canvas& cv, const Rig& r) {
     const Pose& p = r.pose;
     const Rgba skin = rgb(250, 220, 198);
     const Rgba skinShade = rgb(232, 196, 170);
-    const Rgba hair = rgb(120, 78, 52);
-    const Rgba hairHi = rgb(160, 114, 80);
+    const Rgba hair = r.hairColor.value_or(rgb(120, 78, 52));
+    const Rgba hairHi = r.hairColor ? mix(hair, rgb(255, 255, 255), 0.30F) : rgb(160, 114, 80);
     const Rgba lip = rgb(214, 96, 108);
 
     // Long hair fanning out behind the head and shoulders.
@@ -704,8 +708,8 @@ void drawBoy(Canvas& cv, const Rig& r) {
     const Pose& p = r.pose;
     const Rgba skin = rgb(252, 216, 184);
     const Rgba skinShade = rgb(234, 190, 158);
-    const Rgba hair = rgb(74, 54, 42);
-    const Rgba hairHi = rgb(108, 82, 64);
+    const Rgba hair = r.hairColor.value_or(rgb(74, 54, 42));
+    const Rgba hairHi = r.hairColor ? mix(hair, rgb(255, 255, 255), 0.30F) : rgb(108, 82, 64);
 
     cv.fillRoundedRect(p.cx - p.R * 1.2F, p.cy + p.R * 1.0F, p.cx + p.R * 1.2F,
                        p.cy + p.R * 2.3F, p.R * 0.5F, rgb(84, 172, 118));
@@ -763,8 +767,8 @@ void drawGirl(Canvas& cv, const Rig& r) {
     const Pose& p = r.pose;
     const Rgba skin = rgb(253, 218, 196);
     const Rgba skinShade = rgb(236, 192, 166);
-    const Rgba hair = rgb(96, 62, 46);
-    const Rgba hairHi = rgb(132, 92, 66);
+    const Rgba hair = r.hairColor.value_or(rgb(96, 62, 46));
+    const Rgba hairHi = r.hairColor ? mix(hair, rgb(255, 255, 255), 0.30F) : rgb(132, 92, 66);
     const Rgba ribbon = rgb(244, 122, 150);
 
     // Pigtails (twin-tails): big soft puffs on each side, behind the head.
@@ -830,8 +834,8 @@ void drawTeen(Canvas& cv, const Rig& r) {
     const Pose& p = r.pose;
     const Rgba skin = rgb(251, 219, 197);
     const Rgba skinShade = rgb(234, 194, 168);
-    const Rgba hair = rgb(58, 52, 66);
-    const Rgba hairHi = rgb(92, 84, 104);
+    const Rgba hair = r.hairColor.value_or(rgb(58, 52, 66));
+    const Rgba hairHi = r.hairColor ? mix(hair, rgb(255, 255, 255), 0.30F) : rgb(92, 84, 104);
     const Rgba collar = rgb(48, 66, 110);
 
     // Neat bob: hair rounded to the jaw, behind the head.
@@ -898,7 +902,7 @@ void drawTeen(Canvas& cv, const Rig& r) {
 
 void drawDog(Canvas& cv, const Rig& r) {
     const Pose& p = r.pose;
-    const Rgba fur = rgb(198, 150, 104);
+    const Rgba fur = r.hairColor.value_or(rgb(198, 150, 104));
     const Rgba furDk = rgb(166, 120, 78);
     const Rgba cream = rgb(246, 228, 202);
     const Rgba black = rgb(40, 34, 32);
@@ -954,7 +958,7 @@ void drawDog(Canvas& cv, const Rig& r) {
 
 void drawBear(Canvas& cv, const Rig& r) {
     const Pose& p = r.pose;
-    const Rgba fur = rgb(152, 112, 82);
+    const Rgba fur = r.hairColor.value_or(rgb(152, 112, 82));
     const Rgba furDk = rgb(120, 86, 60);
     const Rgba muzzle = rgb(208, 178, 144);
     const Rgba black = rgb(38, 30, 28);
@@ -1246,6 +1250,15 @@ core::Result<AvatarRenderFrame> CharacterAvatarRenderer::render(
     const float scale = userScale_.load(std::memory_order_relaxed);
     const float nx = posX_.load(std::memory_order_relaxed);
     const float ny = posY_.load(std::memory_order_relaxed);
+
+    // Editor hair/fur colour override. Bit 24 marks "set" so pure black is
+    // distinct from "no override" (0), which keeps each character's default.
+    const std::uint32_t hc = hairColor_.load(std::memory_order_relaxed);
+    if ((hc & 0x01000000U) != 0U) {
+        r.hairColor = rgb(static_cast<int>((hc >> 16) & 0xFFU),
+                          static_cast<int>((hc >> 8) & 0xFFU),
+                          static_cast<int>(hc & 0xFFU));
+    }
 
     const float w = static_cast<float>(width_);
     const float h = static_cast<float>(height_);

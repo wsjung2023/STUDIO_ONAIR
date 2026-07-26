@@ -72,6 +72,16 @@ AvatarSceneController::AvatarSceneController(
             setAvatarPosition(
                 settings.value(QStringLiteral("avatar/posX"), posX_).toDouble(),
                 settings.value(QStringLiteral("avatar/posY"), posY_).toDouble());
+            if (settings.contains(QStringLiteral("avatar/hairColor"))) {
+                const auto packed = static_cast<std::uint32_t>(
+                    settings.value(QStringLiteral("avatar/hairColor")).toInt());
+                if ((packed & 0x01000000U) != 0U) {
+                    characterControl_->setHairColor(
+                        static_cast<int>((packed >> 16) & 0xFFU),
+                        static_cast<int>((packed >> 8) & 0xFFU),
+                        static_cast<int>(packed & 0xFFU));
+                }
+            }
         } else {
             // First run: snap to a small bottom-right corner overlay. The
             // renderer already starts in Corner MODE, so setAvatarPlacementMode
@@ -298,6 +308,15 @@ void AvatarSceneController::setAvatarPosition(double nx, double ny) {
     posY_ = ay;
     persistStyle();
     emit transformChanged();
+}
+
+void AvatarSceneController::setAvatarHairColor(int red, int green, int blue) {
+    if (characterControl_ == nullptr) return;
+    characterControl_->setHairColor(red, green, blue);
+    QSettings settings;
+    settings.setValue(QStringLiteral("avatar/hairColor"),
+                      static_cast<int>(characterControl_->hairColor()));
+    emit styleChanged();
 }
 
 void AvatarSceneController::persistStyle() {

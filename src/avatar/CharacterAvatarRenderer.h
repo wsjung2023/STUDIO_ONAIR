@@ -137,6 +137,26 @@ public:
         return posY_.load(std::memory_order_relaxed);
     }
 
+    // ---- Hair/fur colour customisation --------------------------------------
+    //
+    // Packed 0x01RRGGBB: bit 24 marks "override set" so pure black is distinct
+    // from "no override" (0 = each character's own default hair/fur colour).
+
+    void setHairColor(int red, int green, int blue) noexcept {
+        const auto clamp8 = [](int v) {
+            return static_cast<std::uint32_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
+        };
+        hairColor_.store(0x01000000U | (clamp8(red) << 16) | (clamp8(green) << 8) |
+                             clamp8(blue),
+                         std::memory_order_relaxed);
+    }
+    void clearHairColor() noexcept {
+        hairColor_.store(0U, std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint32_t hairColor() const noexcept {
+        return hairColor_.load(std::memory_order_relaxed);
+    }
+
     /// Snap to the centred, large, opaque-backdrop "정면" preset.
     void applyFrontPreset() noexcept;
     /// Snap to one of the four smaller, transparent-overlay corner presets.
@@ -162,6 +182,7 @@ private:
     std::atomic<float> userScale_{1.0F};
     std::atomic<float> posX_{0.5F};
     std::atomic<float> posY_{0.46F};
+    std::atomic<std::uint32_t> hairColor_{0};  // 0 = per-character default
 };
 
 }  // namespace creator::avatar

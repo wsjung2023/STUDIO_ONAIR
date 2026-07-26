@@ -739,6 +739,50 @@ Item {
                         }
                     }
 
+                    // Hair colour: recolour the drawn character's hair/fur so one
+                    // character gives many looks. Only the drawn characters support it.
+                    Label {
+                        visible: avatarSceneController.avatarStyleSelectable
+                        text: qsTr("머리색")
+                        color: theme.textMuted; font.family: theme.fontFamily
+                        font.pixelSize: theme.sizeCaption; font.weight: theme.weightSemiBold
+                        font.capitalization: Font.AllUppercase; font.letterSpacing: 1
+                    }
+                    Flow {
+                        objectName: "studioAvatarHairColorPicker"
+                        visible: avatarSceneController.avatarStyleSelectable
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Repeater {
+                            model: [
+                                { r: 97, g: 62, b: 71 },    // 기본 갈색
+                                { r: 34, g: 30, b: 34 },    // 검정
+                                { r: 120, g: 78, b: 52 },   // 밤색
+                                { r: 214, g: 176, b: 122 }, // 금발
+                                { r: 232, g: 120, b: 60 },  // 주황
+                                { r: 214, g: 74, b: 118 },  // 핑크
+                                { r: 92, g: 120, b: 206 },  // 파랑
+                                { r: 108, g: 186, b: 148 }, // 민트
+                                { r: 168, g: 140, b: 214 }, // 보라
+                                { r: 236, g: 228, b: 244 }  // 백발
+                            ]
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: 26; height: 26; radius: 13
+                                color: Qt.rgba(modelData.r / 255, modelData.g / 255,
+                                               modelData.b / 255, 1)
+                                border.color: "#66ffffff"; border.width: 1
+                                Accessible.name: qsTr("Hair colour")
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: avatarSceneController.setAvatarHairColor(
+                                                   modelData.r, modelData.g, modelData.b)
+                                }
+                            }
+                        }
+                    }
+
                     // Placement: front (full) vs corner (picture-in-picture).
                     Label {
                         visible: avatarSceneController.avatarStyleSelectable

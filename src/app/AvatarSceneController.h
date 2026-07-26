@@ -125,6 +125,9 @@ public:
     Q_INVOKABLE void setAvatarScale(double scale);
     /// Live free position (drag). nx, ny are normalised [0,1] frame coordinates.
     Q_INVOKABLE void setAvatarPosition(double nx, double ny);
+    /// Recolour the drawn character's hair/fur (0-255 each). Only the first-party
+    /// drawn characters support this; a no-op for a real Inochi2D puppet.
+    Q_INVOKABLE void setAvatarHairColor(int red, int green, int blue);
 
     /// Renders one avatar frame (at the current animation phase plus
     /// `extraSeconds`) straight to a QImage, using the exact tracking -> map ->
