@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cctype>
 #include <cstring>
 
 namespace creator::avatar::vrm {
@@ -349,6 +350,55 @@ core::Result<GltfDocument> GltfDocument::parse(const GlbContainer& glb) {
     if (out.sceneRoots.empty()) {
         for (int i = 0; i < static_cast<int>(out.nodes.size()); ++i)
             out.sceneRoots.push_back(i);
+    }
+
+    // ---- VRM expressions (0.x blendShapeMaster or 1.0 VRMC_vrm) ----
+    if (doc.contains("extensions")) {
+        const auto& ext = doc["extensions"];
+        const auto lower = [](std::string s) {
+            for (char& c : s) c = static_cast<char>(std::tolower(c));
+            return s;
+        };
+        if (ext.contains("VRM") && ext["VRM"].contains("blendShapeMaster")) {
+            for (const auto& g : ext["VRM"]["blendShapeMaster"].value(
+                     "blendShapeGroups", json::array())) {
+                std::string key = lower(g.value("presetName", std::string{}));
+                if (key.empty() || key == "unknown")
+                    key = lower(g.value("name", std::string{}));
+                if (key.empty()) continue;
+                std::vector<VrmMorphBind> binds;
+                for (const auto& b : g.value("binds", json::array())) {
+                    VrmMorphBind mb;
+                    mb.mesh = b.value("mesh", -1);
+                    mb.morphIndex = b.value("index", -1);
+                    mb.weight = b.value("weight", 100.0F) / 100.0F;  // 0.x: 0..100
+                    if (mb.mesh >= 0 && mb.morphIndex >= 0) binds.push_back(mb);
+                }
+                if (!binds.empty()) out.expressions[key] = std::move(binds);
+            }
+        }
+        if (ext.contains("VRMC_vrm") && ext["VRMC_vrm"].contains("expressions")) {
+            const auto& preset =
+                ext["VRMC_vrm"]["expressions"].value("preset", json::object());
+            for (auto it = preset.begin(); it != preset.end(); ++it) {
+                const std::string key = lower(it.key());
+                std::vector<VrmMorphBind> binds;
+                for (const auto& b :
+                     it.value().value("morphTargetBinds", json::array())) {
+                    VrmMorphBind mb;
+                    const int node = b.value("node", -1);
+                    mb.mesh = (node >= 0 &&
+                               static_cast<std::size_t>(node) < out.nodes.size())
+                                  ? out.nodes[static_cast<std::size_t>(node)].mesh
+                                  : -1;
+                    mb.morphIndex = b.value("index", -1);
+                    mb.weight = b.value("weight", 1.0F);  // 1.0: 0..1
+                    if (mb.mesh >= 0 && mb.morphIndex >= 0) binds.push_back(mb);
+                }
+                if (!binds.empty() && out.expressions.find(key) == out.expressions.end())
+                    out.expressions[key] = std::move(binds);
+            }
+        }
     }
 
     if (out.meshes.empty()) {

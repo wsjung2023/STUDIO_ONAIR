@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -65,6 +66,15 @@ struct GltfImage final {
     std::string mimeType;
 };
 
+/// One morph-target contribution of a named VRM expression (e.g. "blink", "a"):
+/// set morph target `morphIndex` of mesh `mesh` to `weight` (0..1) when the
+/// expression is fully active.
+struct VrmMorphBind final {
+    int mesh{-1};
+    int morphIndex{-1};
+    float weight{1.0F};
+};
+
 /// A decoded glTF/VRM document: geometry, node hierarchy, skins, materials and
 /// encoded texture bytes, ready for a renderer. Image *pixels* are not decoded
 /// here (that needs an image codec); `images` holds the encoded bytes.
@@ -77,6 +87,9 @@ struct GltfDocument final {
     // texture -> image index (samplers are ignored for now).
     std::vector<int> textureImage;
     std::vector<int> sceneRoots;
+    // VRM expression presets (lower-case name -> morph binds), from either the
+    // VRM 0.x blendShapeMaster or the VRM 1.0 VRMC_vrm expressions extension.
+    std::map<std::string, std::vector<VrmMorphBind>> expressions;
 
     /// Parses a glb container (JSON + BIN) into a document. Validates accessor
     /// bounds against the BIN buffer, so a malformed file is rejected rather than

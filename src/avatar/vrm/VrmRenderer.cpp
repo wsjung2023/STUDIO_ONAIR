@@ -15,6 +15,11 @@ namespace {
 using core::AppError;
 using core::ErrorCode;
 
+std::string toLower(std::string s) {
+    for (char& c : s) c = static_cast<char>(std::tolower(c));
+    return s;
+}
+
 // Case-insensitive substring test for locating a head bone by node name.
 bool nameLooksLikeHead(const std::string& name) {
     std::string lower;
@@ -122,6 +127,29 @@ core::Result<AvatarRenderFrame> VrmRenderer::render(
     };
     for (int i = 0; i < static_cast<int>(nodeCount); ++i) worldOf(i);
 
+    // ---- Effective per-mesh morph weights (defaults + active expressions) -----
+    std::vector<std::vector<float>> meshMorph(doc_.meshes.size());
+    for (std::size_t m = 0; m < doc_.meshes.size(); ++m) {
+        std::size_t maxT = doc_.meshes[m].weights.size();
+        for (const auto& p : doc_.meshes[m].primitives)
+            maxT = std::max(maxT, p.morphPositions.size());
+        meshMorph[m].assign(maxT, 0.0F);
+        for (std::size_t t = 0; t < doc_.meshes[m].weights.size(); ++t)
+            meshMorph[m][t] = doc_.meshes[m].weights[t];
+    }
+    for (const auto& [name, value] : params.expressions) {
+        if (value <= 0.0F) continue;
+        const auto it = doc_.expressions.find(toLower(name));
+        if (it == doc_.expressions.end()) continue;
+        for (const auto& b : it->second) {
+            if (b.mesh < 0 || static_cast<std::size_t>(b.mesh) >= meshMorph.size())
+                continue;
+            auto& mw = meshMorph[static_cast<std::size_t>(b.mesh)];
+            if (b.morphIndex >= 0 && static_cast<std::size_t>(b.morphIndex) < mw.size())
+                mw[static_cast<std::size_t>(b.morphIndex)] += value * b.weight;
+        }
+    }
+
     // ---- Gather world-space triangles ----------------------------------------
     std::vector<Vertex> verts;
     std::vector<std::array<std::uint32_t, 3>> tris;
@@ -155,12 +183,13 @@ core::Result<AvatarRenderFrame> VrmRenderer::render(
             const std::uint32_t base = static_cast<std::uint32_t>(verts.size());
             for (std::size_t v = 0; v < prim.positions.size(); ++v) {
                 Vec3 pos = prim.positions[v];
-                // Neutral morph (default mesh weights) so a model with a baked
-                // expression still shows; live expressions come later.
+                // Apply the effective morph weights (defaults + live expressions
+                // such as blink and mouth open) for this node's mesh.
+                const auto& mw = meshMorph[static_cast<std::size_t>(node.mesh)];
                 for (std::size_t t = 0;
-                     t < prim.morphPositions.size() && t < mesh.weights.size(); ++t) {
-                    if (v < prim.morphPositions[t].size())
-                        pos = pos + prim.morphPositions[t][v] * mesh.weights[t];
+                     t < prim.morphPositions.size() && t < mw.size(); ++t) {
+                    if (mw[t] != 0.0F && v < prim.morphPositions[t].size())
+                        pos = pos + prim.morphPositions[t][v] * mw[t];
                 }
                 Vec3 wpos;
                 Vec3 wnorm = v < prim.normals.size() ? prim.normals[v] : Vec3{0, 0, 1};

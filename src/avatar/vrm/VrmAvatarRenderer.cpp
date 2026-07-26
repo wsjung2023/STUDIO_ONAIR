@@ -47,7 +47,12 @@ core::Result<AvatarRenderFrame> VrmAvatarRenderer::render(
                       0.0F, 1.0F);
     const float mouth = clampf(valueOf(parameters, Names::kMouthOpen, 0.0F), 0.0F, 1.0F);
     if (blink > 0.01F) p.expressions.emplace_back("blink", blink);
-    if (mouth > 0.01F) p.expressions.emplace_back("aa", mouth);
+    // "a" is the VRM 0.x mouth-open preset; "aa" is the VRM 1.0 name. Sending
+    // both lets whichever the model actually declares drive the mouth.
+    if (mouth > 0.01F) {
+        p.expressions.emplace_back("a", mouth);
+        p.expressions.emplace_back("aa", mouth);
+    }
 
     return renderer_->render(timestamp, p);
 }
