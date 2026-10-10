@@ -118,7 +118,9 @@ public:
         }
         sockaddr_in address{};
         address.sin_family = AF_INET;
-        address.sin_addr.s_addr = htonl(INADDR_ANY);
+        // Loopback only: the tracker runs on this machine. Binding every
+        // interface would let any host on the LAN drive the avatar live.
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         address.sin_port = htons(requestedPort);
         if (bind(socket_, reinterpret_cast<const sockaddr*>(&address),
                  sizeof(address)) < 0) {

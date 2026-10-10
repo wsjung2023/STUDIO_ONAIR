@@ -18,6 +18,10 @@ option(CS_ENABLE_RNNOISE "Build the audited RNNoise denoise adapter" OFF)
 option(CS_ENABLE_WHISPER "Build the audited whisper.cpp transcription adapter" OFF)
 option(CS_ENABLE_AVATAR_PACKS "Build signed avatar package support" OFF)
 option(CS_ENABLE_INOCHI2D "Enable the audited pre-0.9 Inochi2D C-FFI runtime" OFF)
+# Headless verification drivers (CS_AUTODRIVE_DIR / CS_UXSHOT_DIR) auto-record
+# the desktop, mic and camera when an env var is set. Compile them only into
+# developer/test builds, never into a shipped binary.
+option(CS_ENABLE_AUTODRIVE "Compile the headless verification drivers into creator_studio" ${CS_BUILD_TESTS})
 set(CS_FFMPEG_ROOT "" CACHE PATH "Audited FFmpeg dynamic-library prefix")
 set(CS_MLT_ROOT "" CACHE PATH "Audited MLT dynamic-library prefix")
 set(CS_RNNOISE_ROOT "" CACHE PATH "Audited RNNoise static-library prefix")
@@ -535,6 +539,10 @@ if(APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${PROJECT_SOURCE_DIR}/cmake/CreatorStudio.entitlements"
     )
+endif()
+
+if(CS_ENABLE_AUTODRIVE)
+    target_compile_definitions(creator_studio PRIVATE CS_APP_ENABLE_AUTODRIVE=1)
 endif()
 
 cs_apply_warnings(creator_studio)

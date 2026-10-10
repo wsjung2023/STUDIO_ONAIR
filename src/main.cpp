@@ -730,6 +730,7 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
+#if defined(CS_APP_ENABLE_AUTODRIVE)
     // Optional non-interactive UX screenshot drive. When CS_UXSHOT_DIR is set the
     // app opens a project (so Studio/Editor/Export are reachable), then cycles the
     // window through desktop (1440x900) and phone (390x844) geometries, visiting
@@ -850,7 +851,9 @@ int main(int argc, char* argv[]) {
         });
         driver->start();
     }
+#endif  // CS_APP_ENABLE_AUTODRIVE
 
+#if defined(CS_APP_ENABLE_AUTODRIVE)
     // Optional non-interactive drive for verification. When CS_AUTODRIVE_DIR is
     // set the app creates a project, starts the primary-display screen preview
     // and system-audio capture, screenshots the live preview, records ~5s and
@@ -1149,6 +1152,7 @@ int main(int argc, char* argv[]) {
         });
         driver->start();
     }
+#endif  // CS_APP_ENABLE_AUTODRIVE
 
     return app.exec();
 }
