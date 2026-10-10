@@ -12,7 +12,9 @@ namespace creator::domain {
 ///
 /// Ready is only set after the file is closed, fsynced and atomically renamed
 /// out of .tmp (ARCHITECTURE.md 6.2). A crash therefore loses at most the
-/// segment still in Writing, which is what the "손실 최대 2초" target buys.
+/// segment still in Writing -- up to one segment duration (30 s per track,
+/// see FfmpegLiveRecordingEngine); the earlier 2 s target was traded for a
+/// bounded file count and a lighter editor graph.
 enum class SegmentStatus {
     Writing,
     Ready,

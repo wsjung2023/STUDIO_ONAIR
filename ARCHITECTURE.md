@@ -1,5 +1,14 @@
 # Creator Studio 기술 아키텍처 v0.1
 
+> **상태 메모(2026-10-10).** 이 문서는 2026-07-17 이후 갱신되지 않았다. 실제 `src/` 모듈:
+> `core, domain, media, capture(+windows/macos), recorder, sync, ffmpeg_adapter, mlt_adapter,
+> edit_engine, project_store, audio_dsp, rnnoise_adapter, transcription, whisper_adapter,
+> cursor, cursor_emphasis, autozoom, cut_suggest, avatar(+vrm, openseeface, inochi2d),
+> avatar_pack_adapter, fakes, app`. §4.5의 `compositor` 모듈은 존재하지 않으며(합성은 QML 장면과
+> MLT 그래프가 맡는다), 아바타 렌더링은 §1.2/§7의 계획과 달리 CPU 소프트웨어 VRM 렌더러다.
+> 의존 방향 규칙(qml → application → domain, adapters → ports)은 `cmake/CreatorStudioTargets.cmake`의
+> `cs_assert_qt_free`가 Qt에 대해서만 기계적으로 강제한다.
+
 ## 1. 최종 기술 결정
 
 ### 1.1 UI와 애플리케이션

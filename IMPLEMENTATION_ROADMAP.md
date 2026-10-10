@@ -1,5 +1,12 @@
 # Creator Studio 구현 로드맵 v0.1
 
+> **상태 메모(2026-10-10).** 아래 체크 상태는 2026-07 기준으로 갱신이 멈춰 있다. 실제 코드 기준:
+> R0 전부, R1 녹화·편집·내보내기, R2 모듈(cursor/autozoom/cut_suggest/audio_dsp/captions)은
+> 구현되어 테스트가 있다(단 R2의 cursor/autozoom/cut_suggest는 아직 앱 실행 파일에 연결되지 않은
+> 라이브러리 상태). R3 아바타는 "MediaPipe + Inochi2D" 계획과 달리 자체 소프트웨어 VRM 렌더러 +
+> OpenSeeFace UDP(선택) + 합성 트래커(기본)로 구현되어 있고, 기술 방향을 재검토 중이다.
+> 2026-10-10 안정성 수정 목록은 README "현재 코드 골격"을 본다.
+
 이 로드맵은 버릴 MVP를 만드는 방식이 아니다. 각 릴리스는 동일한 아키텍처 위에서 기능과 안정성을 축적한다.
 
 ## R0 — Engineering Baseline

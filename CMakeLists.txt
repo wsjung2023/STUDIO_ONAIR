@@ -537,6 +537,40 @@ if(CS_ENABLE_MLT)
     )
 endif()
 
+# Legal notices ship with the binary (LGPL/Apache/OFL/MIT obligations). The
+# dependency license texts are copied from the exact builds we link against.
+install(FILES
+    legal/THIRD_PARTY_NOTICES.md
+    legal/OSS_BOM.csv
+    legal/LICENSE_POLICY.md
+    DESTINATION legal
+)
+install(DIRECTORY legal/licenses/ DESTINATION legal/licenses)
+install(FILES "${nlohmann_json_SOURCE_DIR}/LICENSE.MIT"
+    DESTINATION legal/third_party/nlohmann_json OPTIONAL)
+install(FILES "${nlohmann_json_schema_validator_SOURCE_DIR}/LICENSE"
+    DESTINATION legal/third_party/json-schema-validator OPTIONAL)
+if(CS_ENABLE_FFMPEG)
+    install(FILES "${CS_FFMPEG_ROOT}/share/ffmpeg/copyright"
+        DESTINATION legal/third_party/ffmpeg OPTIONAL)
+    install(FILES "${CS_FFMPEG_ROOT}/share/zlib/copyright"
+        DESTINATION legal/third_party/zlib OPTIONAL)
+endif()
+if(CS_ENABLE_MLT)
+    # The MLT prefix sits next to its vcpkg tree (scripts/bootstrap_mlt.ps1).
+    get_filename_component(_cs_mlt_vcpkg "${CS_MLT_ROOT}/../vcpkg_installed/x64-windows/share" ABSOLUTE)
+    install(FILES "${CS_MLT_ROOT}/../source/COPYING"
+        DESTINATION legal/third_party/mlt OPTIONAL)
+    foreach(_cs_port libiconv pthreads dlfcn-win32)
+        install(FILES "${_cs_mlt_vcpkg}/${_cs_port}/copyright"
+            DESTINATION "legal/third_party/${_cs_port}" OPTIONAL)
+    endforeach()
+endif()
+if(CS_ENABLE_WHISPER)
+    install(FILES "${CS_WHISPER_ROOT}/LICENSE"
+        DESTINATION legal/third_party/whisper OPTIONAL)
+endif()
+
 if(CS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

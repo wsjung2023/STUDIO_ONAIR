@@ -68,10 +68,12 @@ recorded in `legal/THIRD_PARTY_NOTICES.md`.
 - 녹화·코덱: LGPL 구성의 FFmpeg 라이브러리
 - 편집 백엔드: MLT Framework를 Adapter 뒤에 격리
 - 프로젝트 저장: 소스 분리 녹화 + SQLite/JSON/NDJSON 기반 프로젝트 패키지
-- 얼굴 추적: MediaPipe 기본, OpenSeeFace 선택
-- 2D 아바타: Inochi2D
-- 음성 인식: whisper.cpp
-- 노이즈 제거: RNNoise 기본, DeepFilterNet 고품질 옵션
+- 얼굴 추적: 현재는 OpenSeeFace(외부 Python 프로세스, UDP) 선택 사용, 기본은 합성 트래커.
+  MediaPipe는 아직 연결되지 않았습니다(2026-10 진단: 아바타 기술 방향 재검토 중)
+- 아바타: 자체 소프트웨어 VRM 렌더러(.vrm/.glb 가져오기) + 그려진 2D 캐릭터. Inochi2D 런타임
+  경로는 남아 있으나 기본 번들 모델은 없습니다
+- 음성 인식: whisper.cpp (`CS_ENABLE_WHISPER`)
+- 노이즈 제거: RNNoise (`CS_ENABLE_RNNOISE`, 기본 OFF)
 
 ## 먼저 읽을 문서
 
@@ -95,7 +97,7 @@ R0-05 소스 분리 녹화 코드는 현재 브랜치에 구현되어,
 - 비정상 종료로 남은 세션을 시작 시 스캔하고 Recovery 화면에서 복구 또는 나중에 처리
 - 카메라·마이크 장치 열거, 독립 권한 요청, hotplug 격리, 시스템 오디오, 입력 레벨 표시
 - 화면·카메라·마이크·시스템 오디오를 독립 트랙으로 기록하는 실제 Record/Stop 경로
-- 감사된 동적 LGPL FFmpeg의 2초 Matroska 세그먼트와 SQLite 실시간 인덱스
+- 감사된 동적 LGPL FFmpeg의 30초 Matroska 세그먼트(테이크별 디렉터리)와 SQLite 실시간 인덱스
 - 인코더, 디스크 여유, 트랙 큐, 녹화 드롭, 세그먼트 개수와 duration 진단
 
 프로젝트 URL은 반드시 **로컬 파일시스템 경로**여야 합니다. 원격 URL이나 네트워크 API는 지원하지 않습니다. 저장 계층은 SQLite **3.53.3**과 pboettch JSON Schema Validator **2.4.0**을 고정 버전으로 사용합니다.
@@ -112,7 +114,15 @@ ScreenCaptureKit 시스템 오디오 경로는 구현했지만, 이 저장소를
 Apple 전용 코드를 컴파일하거나 실기 측정할 수 없어 R0-03/R0-04 제품 완료 증거로 간주하지
 않습니다. 실제 미디어 기록·인코딩은 production 경로에 연결되었지만, macOS VideoToolbox와
 CVPixelBuffer 실기 녹화, 30분 실시간 발열·처리량 soak는 별도 Apple 인수 증거가 필요합니다.
-비선형 편집은 아직 구현되지 않았습니다.
+
+편집·내보내기(R1~R2)는 MLT 어댑터 뒤에 구현되어 있습니다: 녹화 가져오기, 분할·트림·구간 삭제,
+변환/오디오 엔벌로프, 제목·자막 오버레이, Command 기반 undo/redo, 재생 미리보기, MP4 내보내기
+(가로/세로 프리셋, 선택적 라우드니스 정규화). `windows-full-*` 프리셋으로 빌드해야 동작합니다.
+
+2026-10-10 안정성 수정(브랜치 `fix/stability-2026-10`): 녹화 실패 이유를 화면·로그에 표시,
+한 소스의 오류가 전체 테이크를 끝내지 않음(소스 드롭아웃/트랙별 실패), 같은 프로젝트에서
+두 번째 테이크 가능, 편집 이력 한도 통일, 44.1 kHz 마이크 무음 패딩 제거, 미리보기 큐 넘침이
+녹음 장치를 끄지 않음, VRM 가져오기 검증 강화, 마이크 자동 켜짐 정책, Rec.709 태깅.
 
 모듈은 CMake static library로 분리되어 있고, application 계층 아래(`cs_core`, `cs_domain`, `cs_media`, `cs_capture`, `cs_recorder`, `cs_project_store`, `cs_fakes`)는 Qt를 링크하지 않습니다. `cmake/CreatorStudioTargets.cmake`의 `cs_add_qtfree_library()`가 configure 단계에서 이를 강제합니다.
 
@@ -179,7 +189,7 @@ ctest --preset windows-debug
 겪어보지 않으면 놓치기 쉬운 것이 두 가지 있습니다.
 
 - `vcvars64.bat`는 반드시 `call`로 실행합니다. 이 블록을 `.bat` 스크립트 파일로 저장해 실행할 경우, `call` 없이 부르면 vcvars64.bat 실행 후 나머지 줄이 조용히 실행되지 않고 스크립트가 끝나버립니다(대화형 프롬프트에 한 줄씩 입력할 때는 `call` 유무가 문제되지 않지만, 스크립트로 저장하는 사람이 있으므로 항상 붙입니다).
-- `ctest` 전에 Qt의 `bin`을 PATH에 추가해야 합니다. `cs_app_tests`와 `cs_qml_tests`가 Qt를 링크하기 때문입니다. 빠뜨리면 Qt 기반 테스트가 `Exit code 0xc0000135`(DLL을 찾을 수 없음)로 실패합니다 — 빌드는 성공하고 ctest만 실패하므로 원인을 오해하기 쉽습니다.
+- `ctest` 전에 Qt의 `bin`을 PATH에 추가해야 합니다. `cs_app_tests`(QML 스모크 테스트 포함)가 Qt를 링크하기 때문입니다. 빠뜨리면 Qt 기반 테스트가 `Exit code 0xc0000135`(DLL을 찾을 수 없음)로 실패합니다 — 빌드는 성공하고 ctest만 실패하므로 원인을 오해하기 쉽습니다.
 
 **PowerShell을 쓴다면**: 위 블록은 `cmd.exe` 문법(`set VAR=값`)이라 PowerShell에 그대로 붙여 넣으면 안 됩니다(`set`이 `Set-Variable`로 해석되어 환경 변수가 설정되지 않습니다). 그리고 `vcvars64.bat`를 PowerShell에서 직접 실행하면(`& $vcvars`) 배치 파일이 자식 `cmd.exe` 프로세스에서 실행되므로, 그 프로세스가 끝나는 순간 환경 변수 변경도 함께 사라져 PowerShell 세션에는 반영되지 않습니다. 두 가지 중 하나를 씁니다.
 
@@ -208,14 +218,38 @@ cmake --build --preset macos-debug
 ctest --preset macos-debug
 ```
 
-프리셋은 `windows-debug`, `windows-release`, `macos-debug`, `macos-release` 네 가지입니다. 모두 경고를 오류로 취급합니다.
+프리셋은 `CMakePresets.json`에 있습니다. 모두 경고를 오류로 취급합니다.
 
-앱을 실행하려면 Qt의 `bin`이 PATH에 있어야 합니다(동작 확인함: Studio/Editor 화면 전환, Record/Stop 모두 정상).
+| 프리셋 | 내용 |
+|---|---|
+| `windows-debug`, `windows-release` | 어댑터 OFF. 녹화·편집이 동작하지 않는 뼈대 빌드(CI 기본) |
+| `windows-ffmpeg-*` | 감사된 FFmpeg 녹화 ON, 편집/내보내기 OFF |
+| **`windows-full-debug`, `windows-full-release`** | **실제 제품 빌드**: FFmpeg 녹화 + MLT 편집/내보내기 |
+| `windows-whisper-*`, `windows-rnnoise-*`, `windows-avatar-packs-*`, `windows-inochi2d-*` | 선택 기능 단위 빌드 |
+| `macos-debug`, `macos-release` | 어댑터 OFF (CI에서만 실행, 로컬 검증 없음) |
 
-```bat
-set PATH=C:\Qt\6.8.3\msvc2022_64\bin;%PATH%
-build\windows-debug\creator_studio.exe
-```
+### 실제 제품 빌드 (녹화 + 편집 + 내보내기)
+
+1. 감사된 의존성을 한 번 준비합니다(시간이 오래 걸립니다).
+   ```powershell
+   .\scripts\bootstrap_ffmpeg.ps1   # build/ffmpeg/vcpkg_installed
+   .\scripts\bootstrap_mlt.ps1      # build/mlt/prefix
+   ```
+2. 전체 프리셋으로 빌드·테스트합니다(위의 vcvars/CMAKE_PREFIX_PATH 준비는 동일).
+   ```bat
+   cmake --preset windows-full-release
+   cmake --build --preset windows-full-release
+   ctest --preset windows-full-release
+   ```
+3. 실행합니다. Qt의 `bin`과 FFmpeg DLL 경로가 PATH에 있어야 합니다.
+   ```bat
+   set PATH=C:\Qt\6.8.3\msvc2022_64\bin;%CD%\build\ffmpeg\vcpkg_installed\x64-windows\bin;%PATH%
+   build\windows-full-release\creator_studio.exe
+   ```
+   `cmake --install build\windows-full-release --prefix <폴더>`로 설치하면 `legal/`에 제3자 고지와
+   라이선스 전문이 함께 복사됩니다.
+
+`scripts/studio-build-verify.ps1`은 vcvars 환경 설정부터 ctest까지 한 번에 실행합니다.
 
 ## 중요한 법적 주의
 
