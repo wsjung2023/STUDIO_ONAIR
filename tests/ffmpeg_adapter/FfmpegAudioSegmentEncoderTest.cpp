@@ -211,6 +211,40 @@ TEST_F(FfmpegAudioSegmentEncoderTest, PreservesAProjectTimestampDiscontinuity) {
     EXPECT_GT(largestGap, std::chrono::milliseconds{50}.count() * 1'000'000LL);
 }
 
+// A 44.1 kHz microphone delivers contiguous 10 ms blocks of 441 frames. The
+// encoder keeps 48 kHz output ticks, so the expected position of the next
+// block must be derived in 48 kHz ticks too; counting input frames as ticks
+// made every block look like a ~39-tick gap and padded silence into each one.
+TEST_F(FfmpegAudioSegmentEncoderTest, ContiguousNon48kBlocksEncodeWithoutGapPadding) {
+    FfmpegAudioSegmentEncoder encoder;
+    ASSERT_TRUE(encoder.start(config(path_)).hasValue());
+    constexpr std::uint32_t kInputRate = 44'100;
+    constexpr std::uint32_t kBlockFrames = 441;
+    constexpr std::uint32_t kBlocks = 100;  // one second
+    for (std::uint32_t index = 0; index < kBlocks; ++index) {
+        ASSERT_TRUE(encoder.accept(blockAt(static_cast<std::uint64_t>(index) * kBlockFrames,
+                                           kBlockFrames, 2, kInputRate))
+                        .hasValue());
+    }
+    ASSERT_TRUE(encoder.finish(creator::core::TimestampNs{std::chrono::milliseconds{1000}})
+                    .hasValue());
+
+    const auto decoded = decodeAudio(path_);
+    ASSERT_TRUE(decoded.hasValue()) << decoded.error().message();
+    EXPECT_EQ(decoded.value().sampleRate, 48'000);
+    // One second of input resamples to ~48000 samples. AAC priming/flush adds
+    // at most a frame or two; silence padding on every block would double it.
+    EXPECT_GE(decoded.value().decodedSamples, 48'000 - 2'048);
+    EXPECT_LE(decoded.value().decodedSamples, 48'000 + 3'072);
+    std::int64_t largestGap = 0;
+    for (std::size_t index = 1; index < decoded.value().packetPtsNanoseconds.size(); ++index) {
+        largestGap = std::max(largestGap,
+                              decoded.value().packetPtsNanoseconds[index] -
+                                  decoded.value().packetPtsNanoseconds[index - 1]);
+    }
+    EXPECT_LE(largestGap, std::chrono::milliseconds{25}.count() * 1'000'000LL);
+}
+
 TEST_F(FfmpegAudioSegmentEncoderTest, RejectsFormatChangeAndOverlappingTimestamp) {
     FfmpegAudioSegmentEncoder encoder;
     ASSERT_TRUE(encoder.start(config(path_)).hasValue());

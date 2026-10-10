@@ -115,9 +115,15 @@ public:
                     }
                 }
                 fifoStartPts_ = inputPts;
+                // A real discontinuity starts a new contiguous run.
+                runAnchorPts_.reset();
             }
         }
         if (!fifoStartPts_) fifoStartPts_ = inputPts;
+        if (!runAnchorPts_) {
+            runAnchorPts_ = inputPts;
+            runInputFrames_ = 0;
+        }
 
         AVFrame* converted = av_frame_alloc();
         if (converted == nullptr) {
@@ -169,7 +175,17 @@ public:
         }
         av_frame_free(&converted);
 
-        expectedInputPts_ = inputPts + block.frameCount;
+        // Where the next block should start, in 48 kHz output ticks. The input
+        // runs at the device rate (44.1 kHz microphones are common), so frames
+        // must be rescaled -- adding raw input frames to 48 kHz ticks made every
+        // 44.1 kHz block look like a gap and padded silence into each one.
+        // Rescale the cumulative count from the run's anchor so per-block
+        // rounding never accumulates into a spurious gap.
+        runInputFrames_ += block.frameCount;
+        expectedInputPts_ =
+            *runAnchorPts_ + av_rescale(static_cast<std::int64_t>(runInputFrames_),
+                                        codecContext_->sample_rate,
+                                        static_cast<std::int64_t>(sampleRate_));
         while (av_audio_fifo_size(fifo_) >= codecContext_->frame_size) {
             if (auto encoded = encodeFromFifo(codecContext_->frame_size, false);
                 !encoded.hasValue()) {
@@ -411,6 +427,8 @@ private:
         channels_ = 0;
         fifoStartPts_.reset();
         expectedInputPts_.reset();
+        runAnchorPts_.reset();
+        runInputFrames_ = 0;
         compensationActive_ = false;
     }
 
@@ -421,6 +439,10 @@ private:
     std::uint32_t channels_{0};
     std::optional<std::int64_t> fifoStartPts_;
     std::optional<std::int64_t> expectedInputPts_;
+    // First input pts of the current contiguous run and the input frames
+    // accepted since; together they define expectedInputPts_.
+    std::optional<std::int64_t> runAnchorPts_;
+    std::uint64_t runInputFrames_{0};
     synchronization::AudioRateCompensator rateCompensator_;
     bool compensationActive_{false};
     AVFormatContext* formatContext_{nullptr};
