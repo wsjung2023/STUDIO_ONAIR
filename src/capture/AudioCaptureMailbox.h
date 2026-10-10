@@ -16,7 +16,9 @@ struct AudioCaptureMailboxStats final {
     std::uint64_t overruns{0};
 };
 
-/// Bounded native-callback handoff for one audio source.
+/// Bounded native-callback handoff for one audio source's PREVIEW consumer
+/// (level meter). Overflow drops and counts; only native capture errors are
+/// surfaced, because the source behind it is shared with the recorder.
 class AudioCaptureMailbox final : public IAudioBlockSink {
 public:
     explicit AudioCaptureMailbox(std::size_t capacity);
@@ -32,19 +34,13 @@ public:
     void clear() noexcept;
 
 private:
-    enum class ErrorKind { Overflow, Native };
-    struct PendingError final {
-        ErrorKind kind;
-        std::optional<creator::core::AppError> native;
-    };
-
-    void publishFirstError(PendingError error) noexcept;
+    void publishFirstError(creator::core::AppError error) noexcept;
 
     BoundedAudioBlockQueue queue_;
     std::atomic<bool> started_{false};
     std::atomic<std::uint64_t> receivedBlocks_{0};
     mutable std::mutex errorMutex_;
-    std::optional<PendingError> error_;
+    std::optional<creator::core::AppError> error_;
 };
 
 }  // namespace creator::capture

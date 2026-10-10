@@ -510,6 +510,35 @@ TEST(DeviceCaptureControllerTest, MicrophoneErrorIsIsolatedFromCameraAndSystemAu
     EXPECT_TRUE(fixture.controller->systemAudioCapturing());
 }
 
+// A stalled UI thread (large import, modal dialog) lets the preview meter
+// queue overflow. That must never stop the shared capture source -- the
+// recorder is fed by the same source, so stopping it silently killed the
+// microphone / system-audio track of a live take.
+TEST(DeviceCaptureControllerTest, PreviewQueueOverflowKeepsAudioSourcesCapturing) {
+    Fixture fixture;
+    fixture.controller->initialize();
+    fixture.controller->setMicrophoneEnabled(true);
+    fixture.controller->setSystemAudioEnabled(true);
+    fixture.controller->pollCapture();
+    ASSERT_TRUE(fixture.controller->microphoneCapturing());
+    ASSERT_TRUE(fixture.controller->systemAudioCapturing());
+
+    // Far more blocks than the preview queue holds, with no poll in between.
+    for (int i = 0; i < 400; ++i) {
+        fixture.backendRaw->microphoneSource->pushAudio(audio(0.1F, -0.1F));
+        fixture.backendRaw->systemAudioSource->pushAudio(audio(0.2F, -0.2F));
+    }
+    fixture.controller->pollCapture();
+
+    EXPECT_TRUE(fixture.controller->microphoneCapturing());
+    EXPECT_TRUE(fixture.controller->systemAudioCapturing());
+    EXPECT_FALSE(fixture.backendRaw->microphoneSource->stopped);
+    EXPECT_FALSE(fixture.backendRaw->systemAudioSource->stopped);
+    EXPECT_GT(fixture.controller->microphoneOverruns(), 0u);
+    EXPECT_GT(fixture.controller->systemAudioOverruns(), 0u);
+    EXPECT_EQ(fixture.controller->microphoneState(), DeviceCaptureState::Capturing);
+}
+
 TEST(DeviceCaptureControllerTest, DestructionClearsHotplugHandlerAndStopsSources) {
     Fixture fixture;
     fixture.controller->initialize();

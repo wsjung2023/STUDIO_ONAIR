@@ -192,19 +192,27 @@ TEST(AudioCaptureMailboxTest, TransfersStartBlocksAndTerminalError) {
     EXPECT_EQ(mailbox.stats().receivedBlocks, 1u);
 }
 
-TEST(AudioCaptureMailboxTest, TurnsQueueOverflowIntoVisibleFirstError) {
+// The mailbox only feeds the preview level meter. A slow UI thread must cost
+// a few meter readings, never the capture source it shares with the recorder:
+// overflow is counted and dropped, and only a native error is still an error.
+TEST(AudioCaptureMailboxTest, CountsPreviewOverflowWithoutRaisingAnError) {
     AudioCaptureMailbox mailbox{1};
     mailbox.onAudioBlock(blockAt(1, {0.1F}));
     mailbox.onAudioBlock(blockAt(2, {0.2F}));
-    mailbox.onCaptureError({creator::core::ErrorCode::NotFound,
-                            "later native error"});
 
     const auto stats = mailbox.stats();
-    auto error = mailbox.takeError();
     EXPECT_EQ(stats.receivedBlocks, 1u);
     EXPECT_EQ(stats.overruns, 1u);
+    EXPECT_FALSE(mailbox.takeError().has_value());
+    auto block = mailbox.tryPop();
+    ASSERT_TRUE(block.has_value());
+    EXPECT_EQ(block->timestamp.time_since_epoch().count(), 1);
+    EXPECT_FALSE(mailbox.tryPop().has_value());
+
+    mailbox.onCaptureError({creator::core::ErrorCode::NotFound, "later native error"});
+    auto error = mailbox.takeError();
     ASSERT_TRUE(error.has_value());
-    EXPECT_EQ(error->message(), "audio capture queue capacity exceeded");
+    EXPECT_EQ(error->message(), "later native error");
 }
 
 }  // namespace

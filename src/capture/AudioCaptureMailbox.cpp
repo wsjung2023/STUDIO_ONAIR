@@ -13,15 +13,17 @@ void AudioCaptureMailbox::onCaptureStarted() noexcept {
 }
 
 void AudioCaptureMailbox::onAudioBlock(creator::media::AudioBlock block) noexcept {
-    if (queue_.tryPush(std::move(block)) == AudioQueuePushResult::Full) {
-        publishFirstError(PendingError{ErrorKind::Overflow, std::nullopt});
-        return;
-    }
+    // This queue feeds the preview level meter only. When the UI thread stalls
+    // and the queue fills, the block is dropped and counted (queue overruns)
+    // -- it is NOT an error: the capture source behind this mailbox is shared
+    // with the recorder, and raising an error here used to stop that source
+    // and silently end the live take's audio track.
+    if (queue_.tryPush(std::move(block)) == AudioQueuePushResult::Full) return;
     receivedBlocks_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void AudioCaptureMailbox::onCaptureError(creator::core::AppError error) noexcept {
-    publishFirstError(PendingError{ErrorKind::Native, std::move(error)});
+    publishFirstError(std::move(error));
 }
 
 bool AudioCaptureMailbox::takeStarted() noexcept {
@@ -33,20 +35,10 @@ std::optional<creator::media::AudioBlock> AudioCaptureMailbox::tryPop() noexcept
 }
 
 std::optional<creator::core::AppError> AudioCaptureMailbox::takeError() {
-    std::optional<PendingError> pending;
-    {
-        std::scoped_lock lock{errorMutex_};
-        pending = std::move(error_);
-        error_.reset();
-    }
-    if (!pending) {
-        return std::nullopt;
-    }
-    if (pending->kind == ErrorKind::Native) {
-        return std::move(pending->native);
-    }
-    return creator::core::AppError{creator::core::ErrorCode::InvalidState,
-                                   "audio capture queue capacity exceeded"};
+    std::scoped_lock lock{errorMutex_};
+    auto pending = std::move(error_);
+    error_.reset();
+    return pending;
 }
 
 AudioCaptureMailboxStats AudioCaptureMailbox::stats() const noexcept {
@@ -60,14 +52,14 @@ void AudioCaptureMailbox::clear() noexcept {
     error_.reset();
 }
 
-void AudioCaptureMailbox::publishFirstError(PendingError error) noexcept {
+void AudioCaptureMailbox::publishFirstError(creator::core::AppError error) noexcept {
     try {
         std::scoped_lock lock{errorMutex_};
         if (!error_) {
             error_.emplace(std::move(error));
         }
     } catch (...) {
-        // PendingError moves existing storage only; this guard prevents any
+        // AppError moves existing storage only; this guard prevents any
         // implementation-specific mutex failure from crossing a native callback.
     }
 }
