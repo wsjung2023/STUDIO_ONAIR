@@ -958,7 +958,12 @@ TEST(ProjectEditorIntegrationTest,
                !editor.sessionBusy() && !editor.busy() &&
                editor.timelineRevision() == 0;
     }));
-    EXPECT_EQ(projects.projectUrl(), package.url());
+    // The store reports the CANONICAL package path (8.3 short names such as
+    // C:\Users\RUNNER~1 on CI runners resolve to their long form), so compare
+    // canonical paths rather than the raw URL the test built.
+    EXPECT_EQ(fs::weakly_canonical(
+                  fs::path{projects.projectUrl().toLocalFile().toStdWString()}),
+              fs::weakly_canonical(fs::path{package.url().toLocalFile().toStdWString()}));
     EXPECT_EQ(editor.timelineTrackModel()->rowCount(), 1);
 }
 

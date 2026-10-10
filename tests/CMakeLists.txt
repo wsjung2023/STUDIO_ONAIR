@@ -583,10 +583,14 @@ set_property(TARGET cs_app_tests PROPERTY TEST_LAUNCHER
     "${CMAKE_COMMAND};-E;env;QT_QUICK_CONTROLS_STYLE=Basic;--modify;PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;--"
 )
 
+# CS_DISABLE_PREVIEW_AUDIO: editor playback tests must not open the host's real
+# audio output. On a machine WITH a device the preview audio pull interleaves
+# engine calls and starves the fake engine's video frame, so call-sequence and
+# playback-advance assertions flake; headless CI has no device and never saw it.
 gtest_discover_tests(cs_app_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;CS_DISABLE_PREVIEW_AUDIO=1"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
 )
