@@ -120,6 +120,13 @@ std::string utf8Path(const std::filesystem::path& path) {
     return std::string{encoded.begin(), encoded.end()};
 }
 
+// MLT's core "rescale" filter refuses any request narrower or shorter than
+// 6 px (filter_rescale.c: "There can be problems with small images - avoid
+// them") and returns an error WITHOUT calling the producer; mlt_frame then
+// substitutes an all-white test card. Attaching it to a tiny preview profile
+// therefore silently blanks every plain image/video branch.
+constexpr std::uint32_t kMltRescaleMinimumDimension = 6;
+
 bool requiresPackedAlphaExtraction(const MltVisualBranch& branch) {
     if (branch.sourceKind == MltVisualSourceKind::Generated) return true;
     if (branch.mediaKind != domain::MediaKind::Image) return false;
@@ -1176,7 +1183,13 @@ class MltEditEngine::Impl final {
                 // frames themselves in the creator filter, and stacking rescale
                 // under that chain corrupts the image and can crash the export
                 // consumer.
-                if (!transformed && !extractsPackedAlpha) {
+                // Below MLT's minimum the normaliser cannot be used at all; fall
+                // back to native-size frames (the composite crops them) rather
+                // than letting MLT hand back a white test card.
+                const bool rescalable =
+                    config_.previewWidth >= kMltRescaleMinimumDimension &&
+                    config_.previewHeight >= kMltRescaleMinimumDimension;
+                if (!transformed && !extractsPackedAlpha && rescalable) {
                     auto rescale = std::make_unique<Mlt::Filter>(
                         *graph->profile, "rescale");
                     if (rescale->is_valid() &&
