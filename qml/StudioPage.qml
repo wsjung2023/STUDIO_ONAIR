@@ -159,6 +159,21 @@ Item {
         if (visible) armLiveCapture()
     }
 
+    Dialog {
+        id: sceneRemoveConfirm
+        objectName: "studioSceneRemoveConfirm"
+        title: qsTr("장면 삭제")
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        anchors.centerIn: parent
+        Label {
+            text: qsTr("선택한 장면을 삭제할까요? 이 작업은 되돌릴 수 없습니다.")
+            wrapMode: Text.WordWrap
+        }
+        onAccepted: studioWorkflowController.removeScene(
+                        studioWorkflowController.selectedSceneId)
+    }
+
     function setMicrophoneByUser(on) {
         root.microphoneWantedByUser = on
         deviceCaptureController.setMicrophoneEnabled(on)
@@ -586,8 +601,9 @@ Item {
                             enabled: root.workflowEditable
                                      && studioWorkflowController.selectedSceneId.length > 0
                             Accessible.name: qsTr("Remove selected scene")
-                            onClicked: studioWorkflowController.removeScene(
-                                           studioWorkflowController.selectedSceneId)
+                            // Scene edits are not undoable Commands yet, so a
+                            // single misclick must not delete a layout.
+                            onClicked: sceneRemoveConfirm.open()
                         }
                         ToolButton {
                             objectName: "studioSceneUpButton"

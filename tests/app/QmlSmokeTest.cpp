@@ -623,7 +623,11 @@ public:
     Q_INVOKABLE void renameScene(const QString&, const QString&) {
         ++sceneEditCalls_;
     }
-    Q_INVOKABLE void removeScene(const QString&) { ++sceneEditCalls_; }
+    Q_INVOKABLE void removeScene(const QString&) {
+        ++sceneEditCalls_;
+        ++removeSceneCalls_;
+    }
+    [[nodiscard]] int removeSceneCalls() const noexcept { return removeSceneCalls_; }
     Q_INVOKABLE void moveScene(const QString&, int) { ++sceneEditCalls_; }
     Q_INVOKABLE void selectScene(const QString&) {}
     Q_INVOKABLE void selectSource(const QString&) {}
@@ -682,6 +686,7 @@ private:
     QString lastSceneId_;
     qlonglong lastPositionNs_{0};
     int sceneEditCalls_{0};
+    int removeSceneCalls_{0};
     int sourceEditCalls_{0};
     int transformCalls_{0};
 };
@@ -1811,6 +1816,60 @@ TEST(QmlSmokeTest, StudioPageRespectsTheCreatorsMicrophoneChoiceAndStopsAudioOnL
         << " sysCalls=" << deviceCaptureController.systemAudioEnableCalls;
     EXPECT_FALSE(pumpUntil([&] { return deviceCaptureController.microphoneOn; }, 1200));
     EXPECT_EQ(deviceCaptureController.microphoneEnableCalls, 1);
+}
+
+// Removing a scene cannot be undone (scene edits are not Commands yet), so a
+// single misclick must not delete a layout: Remove asks first, and only the
+// dialog's accept performs the removal.
+TEST(QmlSmokeTest, StudioSceneRemoveAsksForConfirmationFirst) {
+    QQmlEngine engine;
+    FakeStudioController studioController;
+    FakeScreenCaptureController screenCaptureController;
+    FakeDeviceCaptureController deviceCaptureController;
+    FakeStudioWorkflowController studioWorkflowController;
+    FakeShortcutSettingsController shortcutSettingsController;
+    engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
+                                             &studioController);
+    engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),
+                                             &screenCaptureController);
+    engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
+                                             &deviceCaptureController);
+    installAvatarController(engine);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("studioWorkflowController"), &studioWorkflowController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
+    FakeProjectController projectController;
+    engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
+                                             &projectController);
+    QQmlComponent component{
+        &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/StudioPage.qml"))};
+    QQuickWindow window;
+    window.setGeometry(0, 0, 1200, 800);
+    std::unique_ptr<QObject> object{component.createWithInitialProperties(
+        {{QStringLiteral("width"), 1200}, {QStringLiteral("height"), 800}})};
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    auto* rootItem = qobject_cast<QQuickItem*>(object.get());
+    ASSERT_NE(rootItem, nullptr);
+    rootItem->setParentItem(window.contentItem());
+    window.show();
+    QCoreApplication::processEvents();
+
+    auto* removeButton =
+        object->findChild<QObject*>(QStringLiteral("studioSceneRemoveButton"));
+    auto* confirm = object->findChild<QObject*>(QStringLiteral("studioSceneRemoveConfirm"));
+    ASSERT_NE(removeButton, nullptr);
+    ASSERT_NE(confirm, nullptr);
+    EXPECT_FALSE(confirm->property("visible").toBool());
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(removeButton, "clicked"));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(studioWorkflowController.removeSceneCalls(), 0);
+    EXPECT_TRUE(confirm->property("visible").toBool());
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(confirm, "accept"));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(studioWorkflowController.removeSceneCalls(), 1);
 }
 
 TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
