@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <thread>
 
 namespace {
 
@@ -170,7 +171,9 @@ TEST(MultiTrackRecordingServiceTest, RoutesSourcesAndAggregatesAConcurrentStop) 
     ASSERT_EQ(firstResult.value().tracks.size(), 2u);
 }
 
-TEST(MultiTrackRecordingServiceTest, OneWorkerFailureStopsEveryTrackAndIsObservable) {
+// A track whose own encoder/disk fails ends THAT track; the other sources keep
+// recording and the take completes normally, carrying the failure per track.
+TEST(MultiTrackRecordingServiceTest, OneTrackFailureStopsOnlyThatTrack) {
     const auto screen = SourceId::create("screen-1").value();
     const auto microphone = SourceId::create("microphone-1").value();
     auto screenTrack = buildTrack(screen, TrackRole::Screen);
@@ -190,14 +193,97 @@ TEST(MultiTrackRecordingServiceTest, OneWorkerFailureStopsEveryTrackAndIsObserva
     ASSERT_TRUE(service.accept(microphone, audioAt(std::chrono::milliseconds{0})).hasValue());
     ASSERT_TRUE(service.accept(screen, videoAt(std::chrono::milliseconds{0})).hasValue());
 
-    const auto result = future.get();
-
-    ASSERT_FALSE(result.hasValue());
-    EXPECT_EQ(result.error().message(), "screen encoder failed");
+    // The screen worker fails asynchronously; wait for its recorder to settle.
+    for (int i = 0; i < 500 && screenRecorder->snapshot().state !=
+                                   creator::recorder::TrackRecorderState::Stopped;
+         ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
     EXPECT_EQ(screenRecorder->snapshot().state,
               creator::recorder::TrackRecorderState::Stopped);
-    EXPECT_EQ(microphoneRecorder->snapshot().state,
+    EXPECT_EQ(service.snapshot().state, creator::app::MultiTrackRecordingState::Running);
+    EXPECT_NE(microphoneRecorder->snapshot().state,
               creator::recorder::TrackRecorderState::Stopped);
+    // The surviving track still records.
+    ASSERT_TRUE(service.accept(microphone, audioAt(std::chrono::milliseconds{10})).hasValue());
+    // The dead track refuses further data with its own failure, not a take-wide one.
+    const auto rejected = service.accept(screen, videoAt(std::chrono::milliseconds{33}));
+    EXPECT_FALSE(rejected.hasValue());
+    const auto live = service.snapshot();
+    ASSERT_EQ(live.tracks.size(), 2u);
+    ASSERT_TRUE(live.tracks[0].failure.has_value());
+    EXPECT_EQ(live.tracks[0].failure->message(), "screen encoder failed");
+    EXPECT_FALSE(live.tracks[1].failure.has_value());
+    EXPECT_FALSE(live.terminalError.has_value());
+
+    service.stopAsync(creator::core::TimestampNs{std::chrono::milliseconds{40}});
+    const auto result = future.get();
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    ASSERT_EQ(result.value().tracks.size(), 2u);
+    ASSERT_TRUE(result.value().tracks[0].failure.has_value());
+    EXPECT_EQ(result.value().tracks[0].failure->message(), "screen encoder failed");
+    EXPECT_FALSE(result.value().tracks[1].failure.has_value());
+}
+
+// When every track has died there is nothing left to record: the take ends
+// with the first failure as its terminal error.
+TEST(MultiTrackRecordingServiceTest, LastSurvivingTrackFailureEndsTheTake) {
+    const auto screen = SourceId::create("screen-1").value();
+    auto screenTrack = buildTrack(screen, TrackRole::Screen);
+    screenTrack.encoder->acceptError =
+        AppError{creator::core::ErrorCode::IoFailure, "screen encoder failed"};
+    MultiTrackRecordingService service;
+    ASSERT_TRUE(service.addTrack(std::move(screenTrack.recorder)).hasValue());
+    auto promise = std::make_shared<std::promise<Result<MultiTrackRecordingSummary>>>();
+    auto future = promise->get_future();
+    service.observeCompletion(
+        [promise](const auto& result) { promise->set_value(result); });
+    ASSERT_TRUE(service.start().hasValue());
+    ASSERT_TRUE(service.accept(screen, videoAt(std::chrono::milliseconds{0})).hasValue());
+
+    const auto result = future.get();
+    ASSERT_FALSE(result.hasValue());
+    EXPECT_EQ(result.error().message(), "screen encoder failed");
+    EXPECT_EQ(service.snapshot().state, creator::app::MultiTrackRecordingState::Stopped);
+}
+
+// A source that stops delivering (camera unplugged, audio endpoint changed)
+// is a dropout: nothing is stopped, the track stays open for the source to
+// resume, and the dropout is visible so the UI and log can report it.
+TEST(MultiTrackRecordingServiceTest, SourceDropoutKeepsEveryTrackRecordingAndIsVisible) {
+    const auto screen = SourceId::create("screen-1").value();
+    const auto microphone = SourceId::create("microphone-1").value();
+    auto screenTrack = buildTrack(screen, TrackRole::Screen);
+    auto microphoneTrack = buildTrack(microphone, TrackRole::Microphone);
+    MultiTrackRecordingService service;
+    ASSERT_TRUE(service.addTrack(std::move(screenTrack.recorder)).hasValue());
+    ASSERT_TRUE(service.addTrack(std::move(microphoneTrack.recorder)).hasValue());
+    ASSERT_TRUE(service.start().hasValue());
+    ASSERT_TRUE(service.accept(microphone, audioAt(std::chrono::milliseconds{0})).hasValue());
+
+    service.noteSourceDropout(microphone,
+                              {creator::core::ErrorCode::IoFailure, "endpoint invalidated"},
+                              creator::core::TimestampNs{std::chrono::milliseconds{10}});
+
+    auto snapshot = service.snapshot();
+    EXPECT_EQ(snapshot.state, creator::app::MultiTrackRecordingState::Running);
+    EXPECT_FALSE(snapshot.terminalError.has_value());
+    ASSERT_EQ(snapshot.dropouts.size(), 1u);
+    EXPECT_EQ(snapshot.dropouts[0].sourceId, microphone);
+    EXPECT_EQ(snapshot.dropouts[0].error.message(), "endpoint invalidated");
+    EXPECT_EQ(snapshot.dropouts[0].at, creator::core::TimestampNs{std::chrono::milliseconds{10}});
+    // The source came back: its track still accepts.
+    ASSERT_TRUE(service.accept(microphone, audioAt(std::chrono::milliseconds{500})).hasValue());
+    ASSERT_TRUE(service.accept(screen, videoAt(std::chrono::milliseconds{500})).hasValue());
+
+    auto promise = std::make_shared<std::promise<Result<MultiTrackRecordingSummary>>>();
+    auto future = promise->get_future();
+    service.stopAsync(creator::core::TimestampNs{std::chrono::milliseconds{600}},
+                      [promise](const auto& result) { promise->set_value(result); });
+    const auto result = future.get();
+    ASSERT_TRUE(result.hasValue()) << result.error().message();
+    ASSERT_EQ(result.value().dropouts.size(), 1u);
+    EXPECT_EQ(result.value().dropouts[0].error.message(), "endpoint invalidated");
 }
 
 TEST(MultiTrackRecordingServiceTest, RejectsDuplicateSourceTrack) {
@@ -231,7 +317,9 @@ TEST(MultiTrackRecordingServiceTest, StartFailureCompletesObserverAndStopsServic
     EXPECT_EQ(service.snapshot().state, creator::app::MultiTrackRecordingState::Stopped);
 }
 
-TEST(MultiTrackRecordingServiceTest, CaptureFailureStopsEveryTrackAndCompletesOnce) {
+// fail() is reserved for take-wide faults (clock/sync/planning). It still
+// ends every track and completes exactly once.
+TEST(MultiTrackRecordingServiceTest, TakeWideFailureStopsEveryTrackAndCompletesOnce) {
     const auto screen = SourceId::create("screen-1").value();
     const auto microphone = SourceId::create("microphone-1").value();
     auto screenTrack = buildTrack(screen, TrackRole::Screen);

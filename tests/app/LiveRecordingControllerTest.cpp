@@ -425,6 +425,43 @@ TEST(LiveRecordingControllerTest, StartingANewTakeClearsLastError) {
     EXPECT_EQ(cleared.count(), 1);
 }
 
+// A source that drops out (camera unplugged, audio endpoint changed) or a
+// track that dies must be announced while the take keeps running -- as a
+// warning the creator can see, and in the log -- and cleared by the next take.
+TEST(LiveRecordingControllerTest, TrackIssuesAreShownAsWarningAndLogged) {
+    ScopedWarningCapture warnings;
+    Fixture fixture;
+    fixture.engineRaw->sources.push_back(
+        {.sourceId = creator::domain::SourceId::create("camera-source").value(),
+         .role = creator::recorder::TrackRole::Camera});
+    fixture.controller->startRecording();
+    fixture.persistence.finishBegin();
+    ASSERT_TRUE(fixture.controller->isRecording());
+    EXPECT_TRUE(fixture.controller->trackWarning().isEmpty());
+
+    fixture.engineRaw->liveSnapshot.issues.push_back(
+        {.sourceId = creator::domain::SourceId::create("camera-source").value(),
+         .message = "camera unplugged",
+         .trackEnded = false});
+    fixture.controller->pollDiagnostics();
+
+    EXPECT_TRUE(fixture.controller->isRecording());
+    EXPECT_TRUE(fixture.controller->trackWarning().contains(QStringLiteral("camera unplugged")));
+    EXPECT_TRUE(fixture.controller->trackWarning().contains(QStringLiteral("Camera")));
+    EXPECT_TRUE(warnings.containsWarning(QStringLiteral("camera unplugged")));
+    EXPECT_TRUE(fixture.controller->lastError().isEmpty());
+
+    // The warning survives the end of the take so the creator still sees it.
+    fixture.controller->stopRecording();
+    fixture.engineRaw->finish(TimestampNs{std::chrono::seconds{12}});
+    fixture.persistence.finishComplete();
+    EXPECT_TRUE(fixture.controller->trackWarning().contains(QStringLiteral("camera unplugged")));
+
+    fixture.engineRaw->liveSnapshot.issues.clear();
+    fixture.controller->startRecording();
+    EXPECT_TRUE(fixture.controller->trackWarning().isEmpty());
+}
+
 TEST(LiveRecordingControllerTest, CleanStopLeavesNoLastError) {
     Fixture fixture;
     fixture.controller->startRecording();

@@ -4,6 +4,7 @@
 
 #include <QLoggingCategory>
 #include <QPointer>
+#include <QStringList>
 #include <QThread>
 
 #include <algorithm>
@@ -120,6 +121,11 @@ void LiveRecordingController::setRecordingPreparation(
 void LiveRecordingController::startRecording() {
     if (operationState_ != LiveRecordingOperationState::Idle) return;
     clearLastError();
+    loggedIssues_ = 0;
+    if (!trackWarning_.isEmpty()) {
+        trackWarning_.clear();
+        emit trackWarningChanged();
+    }
     if (!engine_ || !engine_->available()) {
         reportFailure(core::AppError{
             core::ErrorCode::InvalidState,
@@ -356,6 +362,7 @@ void LiveRecordingController::handleEngineFinished(
     segmentCount_ = boundedInt(pendingCompletion_->segmentsPublished);
     trackCount_ = boundedInt(pendingCompletion_->trackCount);
     droppedFrames_ = pendingCompletion_->videoFramesDropped;
+    updateTrackIssues(pendingCompletion_->issues);
     if (const auto duration = pendingCompletion_->session.duration()) {
         takeDuration_ = formatDuration(*duration);
     }
@@ -439,6 +446,7 @@ void LiveRecordingController::pollDiagnostics() {
                           operationState_ == LiveRecordingOperationState::Finalizing)) {
         duration = formatDuration(clock_() - pendingStart_->startedAt);
     }
+    updateTrackIssues(snapshot.issues);
     if (trackCount_ == tracks && segmentCount_ == segments && queuedItems_ == queued &&
         droppedFrames_ == dropped && diskAvailableBytes_ == disk &&
         syncDroppedFrames_ == syncDropped && duplicatedFrames_ == duplicated &&
@@ -482,6 +490,46 @@ void LiveRecordingController::reportFailure(const core::AppError& error) {
     if (lastError_ == message) return;
     lastError_ = message;
     emit lastErrorChanged();
+}
+
+QString LiveRecordingController::describeSource(const domain::SourceId& sourceId) const {
+    if (pendingStart_) {
+        for (const auto& source : pendingStart_->sources) {
+            if (source.sourceId != sourceId) continue;
+            switch (source.role) {
+                case recorder::TrackRole::Screen: return tr("Screen");
+                case recorder::TrackRole::Camera: return tr("Camera");
+                case recorder::TrackRole::Avatar: return tr("Avatar");
+                case recorder::TrackRole::Microphone: return tr("Microphone");
+                case recorder::TrackRole::SystemAudio: return tr("System audio");
+                case recorder::TrackRole::CompositePreview: return tr("Preview");
+            }
+        }
+    }
+    return fromUtf8(sourceId.value());
+}
+
+void LiveRecordingController::updateTrackIssues(const std::vector<LiveTrackIssue>& issues) {
+    QStringList lines;
+    for (std::size_t index = 0; index < issues.size(); ++index) {
+        const auto& issue = issues[index];
+        const auto line = issue.trackEnded
+                              ? tr("%1 track stopped: %2")
+                                    .arg(describeSource(issue.sourceId),
+                                         fromUtf8(issue.message))
+                              : tr("%1 signal lost: %2")
+                                    .arg(describeSource(issue.sourceId),
+                                         fromUtf8(issue.message));
+        if (index >= loggedIssues_) {
+            qCWarning(csRecording).noquote() << "Recording track issue:" << line;
+        }
+        lines.push_back(line);
+    }
+    loggedIssues_ = std::max(loggedIssues_, issues.size());
+    const auto text = lines.join(QLatin1Char('\n'));
+    if (text.isEmpty() || trackWarning_ == text) return;
+    trackWarning_ = text;
+    emit trackWarningChanged();
 }
 
 void LiveRecordingController::clearLastError() {

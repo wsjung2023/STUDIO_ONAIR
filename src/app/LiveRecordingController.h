@@ -41,6 +41,10 @@ class LiveRecordingController final : public QObject {
     /// failed). Empty while nothing has gone wrong and cleared when a new take
     /// starts, so the UI can keep the reason on screen until the creator acts.
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
+    /// Per-track trouble during a take that is still running (a source
+    /// dropped out, a track ended on its own fault): one line per issue.
+    /// Survives the end of the take; cleared when the next take starts.
+    Q_PROPERTY(QString trackWarning READ trackWarning NOTIFY trackWarningChanged)
 
 public:
     using PackagePathProvider =
@@ -92,6 +96,7 @@ public:
     [[nodiscard]] qlonglong recordingPositionNs() const noexcept;
     [[nodiscard]] QString statusMessage() const { return statusMessage_; }
     [[nodiscard]] QString lastError() const { return lastError_; }
+    [[nodiscard]] QString trackWarning() const { return trackWarning_; }
 
     void setRecordingPreparation(RecordingPreparation preparation);
 
@@ -110,6 +115,7 @@ signals:
     void recordingAborted(QString sessionId);
     void statusMessageChanged();
     void lastErrorChanged();
+    void trackWarningChanged();
 
 private:
     void handleBeginFinished(quint64 generation, domain::SessionId sessionId,
@@ -130,6 +136,9 @@ private:
     /// log, so a dead recording is never silent (CLAUDE.md rule 9).
     void reportFailure(const core::AppError& error);
     void clearLastError();
+    /// Publishes (and logs, once each) the engine's per-track issues.
+    void updateTrackIssues(const std::vector<LiveTrackIssue>& issues);
+    [[nodiscard]] QString describeSource(const domain::SourceId& sourceId) const;
     void resetDiagnostics();
 
     std::unique_ptr<ILiveRecordingEngine> engine_;
@@ -156,6 +165,8 @@ private:
     QString takeDuration_{QStringLiteral("00:00:00")};
     QString statusMessage_;
     QString lastError_;
+    QString trackWarning_;
+    std::size_t loggedIssues_{0};
 };
 
 }  // namespace creator::app

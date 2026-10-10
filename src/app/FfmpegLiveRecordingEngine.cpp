@@ -194,6 +194,14 @@ struct FfmpegLiveRecordingEngine::Run final {
         }
         service->fail(std::move(error), at);
     }
+
+    /// One source stopped delivering. The take goes on; the track stays open
+    /// so a restarted device re-attaches and resumes into the same take.
+    void noteDropout(const domain::SourceId& sourceId, core::AppError error,
+                     core::TimestampNs at) noexcept {
+        if (!accepting.load(std::memory_order_acquire)) return;
+        service->noteSourceDropout(sourceId, std::move(error), at);
+    }
 };
 
 namespace {
@@ -235,7 +243,7 @@ synchronization::VideoSyncSnapshot VideoRouter::syncSnapshot() const noexcept {
 
 void VideoRouter::onCaptureError(core::AppError error) noexcept {
     if (const auto run = run_.lock()) {
-        run->fail(std::move(error), core::ProjectClock::now());
+        run->noteDropout(sourceId_, std::move(error), core::ProjectClock::now());
     }
 }
 
@@ -271,7 +279,7 @@ void AudioRouter::onAudioBlock(media::AudioBlock block) noexcept {
 
 void AudioRouter::onCaptureError(core::AppError error) noexcept {
     if (const auto run = run_.lock()) {
-        run->fail(std::move(error), core::ProjectClock::now());
+        run->noteDropout(sourceId_, std::move(error), core::ProjectClock::now());
     }
 }
 
@@ -282,8 +290,14 @@ LiveRecordingEngineSnapshot snapshotOf(
     LiveRecordingEngineSnapshot result;
     result.trackCount = serviceSnapshot.tracks.size();
     result.terminalError = serviceSnapshot.terminalError;
+    for (const auto& dropout : serviceSnapshot.dropouts) {
+        result.issues.push_back({dropout.sourceId, dropout.error.message(), false});
+    }
     std::set<std::string> encoders;
     for (const auto& observed : serviceSnapshot.tracks) {
+        if (observed.failure) {
+            result.issues.push_back({observed.sourceId, observed.failure->message(), true});
+        }
         const auto& track = observed.snapshot;
         result.queuedItems += static_cast<std::uint64_t>(track.queuedVideoFrames) +
                               track.queuedAudioFrames;
@@ -344,6 +358,7 @@ void finishRun(const std::shared_ptr<FfmpegLiveRecordingEngine::Run>& run,
             .trackCount = snapshot.trackCount,
             .segmentsPublished = snapshot.segmentsPublished,
             .videoFramesDropped = snapshot.videoFramesDropped,
+            .issues = snapshot.issues,
             .terminalError = result.hasValue()
                                  ? std::optional<core::AppError>{}
                                  : std::optional<core::AppError>{result.error()},

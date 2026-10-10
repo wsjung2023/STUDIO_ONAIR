@@ -298,6 +298,7 @@ class FakeStudioController final : public QObject {
     Q_PROPERTY(QString takeDuration READ takeDuration CONSTANT)
     Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
+    Q_PROPERTY(QString trackWarning READ trackWarning NOTIFY trackWarningChanged)
     Q_PROPERTY(qlonglong recordingPositionNs READ recordingPositionNs CONSTANT)
 
 public:
@@ -307,6 +308,11 @@ public:
     void setLastError(QString error) {
         lastError_ = std::move(error);
         emit lastErrorChanged();
+    }
+    [[nodiscard]] QString trackWarning() const { return trackWarning_; }
+    void setTrackWarning(QString warning) {
+        trackWarning_ = std::move(warning);
+        emit trackWarningChanged();
     }
     [[nodiscard]] bool recording() const noexcept { return recording_; }
     [[nodiscard]] bool recordingAvailable() const noexcept { return true; }
@@ -349,6 +355,7 @@ public:
 signals:
     void stateChanged();
     void lastErrorChanged();
+    void trackWarningChanged();
 
 private:
     bool busy_{false};
@@ -356,6 +363,7 @@ private:
     int startCalls_{0};
     int stopCalls_{0};
     QString lastError_;
+    QString trackWarning_;
 };
 
 class FakeShortcutSettingsController final : public QObject {
@@ -1772,6 +1780,18 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     studioController.setLastError(QString{});
     QCoreApplication::processEvents();
     EXPECT_FALSE(recordingError->property("visible").toBool());
+
+    // A source dropout / dead track during a take is a warning, shown while
+    // the take keeps recording.
+    auto* recordingWarning =
+        object->findChild<QObject*>(QStringLiteral("recordingWarningBanner"));
+    ASSERT_NE(recordingWarning, nullptr);
+    EXPECT_FALSE(recordingWarning->property("visible").toBool());
+    studioController.setTrackWarning(QStringLiteral("Camera: camera unplugged"));
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(recordingWarning->property("visible").toBool());
+    EXPECT_TRUE(recordingWarning->property("text").toString().contains(
+        QStringLiteral("camera unplugged")));
 }
 
 TEST(QmlSmokeTest, StudioShortcutsShareVisibleActionsAndStateGuards) {

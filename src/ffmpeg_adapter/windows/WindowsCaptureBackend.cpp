@@ -1192,11 +1192,13 @@ private:
         if (isDeviceDisconnected(result)) {
             // The default render endpoint can disappear while a recording is
             // running (for example when an HDMI/Bluetooth device changes).
-            // System audio is an optional source; let the other sources keep
-            // recording and finish this worker without escalating a session-
-            // wide capture error.
-            stopRequested_.store(true, std::memory_order_release);
-            return true;
+            // Report it like any other capture error: the device controller
+            // auto-restarts system audio on the new endpoint, and the recorder
+            // records a dropout for this source instead of ending the take.
+            // Exiting silently here left the status at "capturing", so neither
+            // the restart nor any diagnostic ever happened.
+            failHresult("WASAPI loopback endpoint invalidated", result);
+            return false;
         }
         failHresult("WASAPI loopback packet query", result);
         return false;

@@ -109,6 +109,68 @@ creator::core::Utc utc(std::string_view value) {
     return creator::core::Utc::parseRfc3339(value).value();
 }
 
+// One source failing (camera unplugged) must not end the take: the other
+// tracks keep recording, the dropout is visible in the snapshot, and the
+// completion carries it as an issue rather than a terminal error.
+TEST(FfmpegLiveRecordingEngineTest, OneSourceCaptureErrorDoesNotEndTheTake) {
+    const auto root = fs::temp_directory_path() / "cs_ffmpeg_live_engine_dropout";
+    const auto packagePath = root / "live.cstudio";
+    std::error_code ignored;
+    fs::remove_all(root, ignored);
+    fs::create_directories(root);
+    auto store = std::make_shared<ProjectPackageStore>();
+    ASSERT_TRUE(store->create(packagePath, "Live engine").hasValue());
+    const auto sessionId = SessionId::create("dropout-session").value();
+    ASSERT_TRUE(store->beginRecording(packagePath, sessionId, {},
+                                      utc("2026-07-16T11:00:00Z"))
+                    .hasValue());
+    auto bindings = std::make_shared<CaptureBindingsFake>();
+    const auto camera = SourceId::create("camera-1").value();
+    const auto microphone = SourceId::create("microphone-1").value();
+    bindings->sources = {{camera, TrackRole::Camera},
+                         {microphone, TrackRole::Microphone}};
+    FfmpegLiveRecordingEngine engine{bindings, store};
+    ASSERT_TRUE(engine.available()) << engine.unavailableReason();
+    auto promise = std::make_shared<std::promise<Result<LiveRecordingCompletion>>>();
+    auto future = promise->get_future();
+    ASSERT_TRUE(engine.start(LiveRecordingStart{.sessionId = sessionId,
+                                                .packagePath = packagePath,
+                                                .startedAt = creator::core::TimestampNs{
+                                                    std::chrono::seconds{1}},
+                                                .sources = bindings->sources},
+                             [promise](auto result) { promise->set_value(std::move(result)); })
+                    .hasValue());
+    ASSERT_TRUE(bindings->video);
+    ASSERT_TRUE(bindings->audio);
+    bindings->audio->onAudioBlock(audioBlock(0));
+    for (std::uint32_t frame = 0; frame < 10; ++frame) {
+        bindings->video->onVideoFrame(videoFrame(frame));
+    }
+
+    bindings->video->onCaptureError(
+        {creator::core::ErrorCode::IoFailure, "camera unplugged"});
+
+    // Still recording: audio keeps flowing and is accepted.
+    for (std::uint32_t block = 1; block < 60; ++block) {
+        bindings->audio->onAudioBlock(audioBlock(block));
+    }
+    const auto live = engine.snapshot();
+    EXPECT_FALSE(live.terminalError.has_value());
+    ASSERT_EQ(live.issues.size(), 1u);
+    EXPECT_EQ(live.issues[0].sourceId, camera);
+    EXPECT_EQ(live.issues[0].message, "camera unplugged");
+    EXPECT_FALSE(live.issues[0].trackEnded);
+
+    engine.stopAsync(creator::core::TimestampNs{std::chrono::milliseconds{1600}});
+    const auto completed = future.get();
+    ASSERT_TRUE(completed.hasValue()) << completed.error().message();
+    EXPECT_FALSE(completed.value().terminalError.has_value());
+    EXPECT_EQ(completed.value().trackCount, 2u);
+    ASSERT_EQ(completed.value().issues.size(), 1u);
+    EXPECT_EQ(completed.value().issues[0].message, "camera unplugged");
+    fs::remove_all(root, ignored);
+}
+
 TEST(FfmpegLiveRecordingEngineTest,
      ClampsPreviewEraFramesAndRecordsAttachedSourcesToReadyFiles) {
     const auto root = fs::temp_directory_path() / "cs_ffmpeg_live_engine";

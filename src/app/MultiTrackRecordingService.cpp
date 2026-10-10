@@ -98,6 +98,7 @@ core::Result<void> MultiTrackRecordingService::start() {
 core::Result<void> MultiTrackRecordingService::accept(
     const domain::SourceId& sourceId, media::VideoFrame frame) {
     recorder::AsyncTrackRecorder* target = nullptr;
+    std::size_t index = 0;
     {
         std::lock_guard lock{mutex_};
         if (state_ != MultiTrackRecordingState::Running) {
@@ -112,17 +113,20 @@ core::Result<void> MultiTrackRecordingService::accept(
             return core::AppError{core::ErrorCode::NotFound,
                                   "Video source has no recording track"};
         }
+        if (found->failure) return *found->failure;
         target = found->recorder.get();
+        index = static_cast<std::size_t>(found - entries_.begin());
     }
     const auto endTime = frame.timestamp;
     auto accepted = target->accept(std::move(frame));
-    if (!accepted.hasValue()) latchFailure(accepted.error(), endTime);
+    if (!accepted.hasValue()) failTrack(index, accepted.error(), endTime);
     return accepted;
 }
 
 core::Result<void> MultiTrackRecordingService::accept(
     const domain::SourceId& sourceId, media::AudioBlock block) {
     recorder::AsyncTrackRecorder* target = nullptr;
+    std::size_t index = 0;
     {
         std::lock_guard lock{mutex_};
         if (state_ != MultiTrackRecordingState::Running) {
@@ -137,17 +141,55 @@ core::Result<void> MultiTrackRecordingService::accept(
             return core::AppError{core::ErrorCode::NotFound,
                                   "Audio source has no recording track"};
         }
+        if (found->failure) return *found->failure;
         target = found->recorder.get();
+        index = static_cast<std::size_t>(found - entries_.begin());
     }
     const auto endTime = block.timestamp;
     auto accepted = target->accept(std::move(block));
-    if (!accepted.hasValue()) latchFailure(accepted.error(), endTime);
+    if (!accepted.hasValue()) failTrack(index, accepted.error(), endTime);
     return accepted;
 }
 
 void MultiTrackRecordingService::fail(core::AppError error,
                                       core::TimestampNs endTime) {
     latchFailure(error, endTime);
+}
+
+void MultiTrackRecordingService::noteSourceDropout(const domain::SourceId& sourceId,
+                                                   core::AppError error,
+                                                   core::TimestampNs at) {
+    // Bounded: a flapping device must not grow this without limit. The first
+    // entries are the ones that explain the take; later repeats are dropped.
+    constexpr std::size_t kMaxDropouts = 64;
+    std::lock_guard lock{mutex_};
+    if (dropouts_.size() >= kMaxDropouts) return;
+    dropouts_.push_back(SourceDropout{sourceId, std::move(error), at});
+}
+
+bool MultiTrackRecordingService::anyLiveTrackLocked() const noexcept {
+    return std::any_of(entries_.begin(), entries_.end(), [](const Entry& entry) {
+        return entry.started && !entry.completed && !entry.failure;
+    });
+}
+
+void MultiTrackRecordingService::failTrack(std::size_t index,
+                                           const core::AppError& error,
+                                           core::TimestampNs endTime) {
+    recorder::AsyncTrackRecorder* toStop = nullptr;
+    bool takeIsOver = false;
+    {
+        std::lock_guard lock{mutex_};
+        if (index >= entries_.size()) return;
+        auto& entry = entries_[index];
+        if (!entry.failure) entry.failure = error;
+        if (state_ == MultiTrackRecordingState::Running) {
+            if (entry.started && !entry.completed) toStop = entry.recorder.get();
+            takeIsOver = !anyLiveTrackLocked();
+        }
+    }
+    if (toStop) toStop->stopAsync(endTime);
+    if (takeIsOver) latchFailure(error, endTime);
 }
 
 void MultiTrackRecordingService::stopAsync(core::TimestampNs endTime,
@@ -190,11 +232,12 @@ void MultiTrackRecordingService::observeCompletion(StopCompletion observer) {
 MultiTrackRecordingSnapshot MultiTrackRecordingService::snapshot() const {
     std::lock_guard lock{mutex_};
     MultiTrackRecordingSnapshot result{.state = state_,
+                                       .dropouts = dropouts_,
                                        .terminalError = terminalError_};
     result.tracks.reserve(entries_.size());
     for (const auto& entry : entries_) {
         result.tracks.push_back({entry.recorder->track().sourceId(),
-                                 entry.recorder->snapshot()});
+                                 entry.recorder->snapshot(), entry.failure});
     }
     return result;
 }
@@ -210,8 +253,11 @@ void MultiTrackRecordingService::onTrackCompleted(
         entries_[index].completed = true;
         if (result.hasValue()) entries_[index].summary = result.value();
         else {
-            if (!terminalError_) terminalError_ = result.error();
-            if (state_ == MultiTrackRecordingState::Running) {
+            // One track's own fault ends that track only. The take goes on
+            // with the others and only becomes terminal when none is left.
+            if (!entries_[index].failure) entries_[index].failure = result.error();
+            if (state_ == MultiTrackRecordingState::Running && !anyLiveTrackLocked()) {
+                if (!terminalError_) terminalError_ = result.error();
                 state_ = MultiTrackRecordingState::Stopping;
                 for (auto& entry : entries_) {
                     if (entry.started && !entry.completed) {
@@ -257,11 +303,14 @@ MultiTrackRecordingService::finishIfReadyLocked() {
         MultiTrackRecordingSummary summary;
         summary.tracks.reserve(entries_.size());
         for (const auto& entry : entries_) {
-            if (entry.summary) {
+            if (entry.summary || entry.failure) {
                 summary.tracks.push_back(
-                    {entry.recorder->track().sourceId(), *entry.summary});
+                    {entry.recorder->track().sourceId(),
+                     entry.summary.value_or(recorder::TrackRecordingSummary{}),
+                     entry.failure});
             }
         }
+        summary.dropouts = dropouts_;
         return summary;
     }();
     state_ = MultiTrackRecordingState::Stopped;

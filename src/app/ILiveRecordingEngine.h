@@ -23,6 +23,15 @@ struct LiveRecordingStart final {
     std::vector<LiveCaptureSource> sources;
 };
 
+/// Something went wrong with ONE source/track while the take kept running:
+/// a source dropout (device unplugged, endpoint invalidated; the track stays
+/// open for the source to resume) or a track that ended on its own fault.
+struct LiveTrackIssue final {
+    domain::SourceId sourceId;
+    std::string message;
+    bool trackEnded{false};
+};
+
 struct LiveRecordingEngineSnapshot final {
     std::size_t trackCount{0};
     std::uint64_t queuedItems{0};
@@ -34,6 +43,7 @@ struct LiveRecordingEngineSnapshot final {
     std::uint64_t segmentsPublished{0};
     std::optional<std::uint64_t> availableDiskBytes;
     std::string encoderName;
+    std::vector<LiveTrackIssue> issues;
     std::optional<core::AppError> terminalError;
 };
 
@@ -45,6 +55,7 @@ struct LiveRecordingCompletion final {
     std::size_t trackCount{0};
     std::uint64_t segmentsPublished{0};
     std::uint64_t videoFramesDropped{0};
+    std::vector<LiveTrackIssue> issues;
     std::optional<core::AppError> terminalError;
 };
 

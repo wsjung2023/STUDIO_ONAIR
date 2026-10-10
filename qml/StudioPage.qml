@@ -1495,6 +1495,29 @@ Item {
                         opacity: 0.12
                     }
                 }
+
+                // One source dropped out or one track died while the take
+                // goes on. A warning, not a failure: the other tracks are
+                // still recording. Stays until the next take starts.
+                Label {
+                    id: recordingWarningBanner
+                    objectName: "recordingWarningBanner"
+                    Layout.fillWidth: true
+                    visible: studioController.trackWarning !== undefined
+                             && studioController.trackWarning.length > 0
+                    text: qsTr("녹화 경고: %1").arg(studioController.trackWarning)
+                    color: theme.warning
+                    wrapMode: Text.WordWrap
+                    font.family: theme.fontFamily
+                    font.pixelSize: theme.sizeLabel
+                    font.weight: theme.weightSemiBold
+                    padding: theme.spaceSm
+                    background: Rectangle {
+                        radius: theme.radiusSm
+                        color: theme.warning
+                        opacity: 0.12
+                    }
+                }
             }
 
             Pane {
