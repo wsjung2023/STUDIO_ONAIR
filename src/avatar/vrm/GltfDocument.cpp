@@ -116,6 +116,10 @@ public:
         const std::size_t accByteOffset = a.value("byteOffset", 0U);
         const std::size_t elemSize = static_cast<std::size_t>(comps) * csz;
         const std::size_t stride = bvStride != 0 ? bvStride : elemSize;
+        // A stride shorter than one element is not interleaving, it is a
+        // crafted file: elements would overlap and count*comps floats would
+        // be allocated from a buffer a fraction of that size.
+        if (stride < elemSize) return false;
         const std::size_t start = bvOffset + accByteOffset;
         // Last element's last byte must be within the buffer.
         const std::size_t lastElem = start + stride * (count - 1U) + elemSize;
@@ -162,7 +166,106 @@ std::vector<Vec3> asVec3(const std::vector<float>& f, int comps) {
 
 }  // namespace
 
+namespace {
+
+core::Result<void> validateReferences(const GltfDocument& out) {
+    // Every index a node or primitive stores must point inside the document,
+    // and the node graph must be a forest: the renderer walks parents
+    // recursively and indexes vertices by these values without re-checking.
+    const auto nodeCount = out.nodes.size();
+    for (std::size_t i = 0; i < nodeCount; ++i) {
+        const auto& node = out.nodes[i];
+        if (node.mesh >= 0 && static_cast<std::size_t>(node.mesh) >= out.meshes.size()) {
+            return AppError{ErrorCode::ParseFailure, "glTF node references a missing mesh"};
+        }
+        if (node.skin >= 0 && static_cast<std::size_t>(node.skin) >= out.skins.size()) {
+            return AppError{ErrorCode::ParseFailure, "glTF node references a missing skin"};
+        }
+        for (const int child : node.children) {
+            if (child < 0 || static_cast<std::size_t>(child) >= nodeCount) {
+                return AppError{ErrorCode::ParseFailure,
+                                "glTF node references a missing child node"};
+            }
+        }
+    }
+    // Cycle / multiple-parent detection: each node may be a child at most once
+    // and following parents from any node must terminate.
+    std::vector<int> parent(nodeCount, -1);
+    for (std::size_t i = 0; i < nodeCount; ++i) {
+        for (const int child : out.nodes[i].children) {
+            if (parent[static_cast<std::size_t>(child)] != -1) {
+                return AppError{ErrorCode::ParseFailure, "glTF node has two parents"};
+            }
+            parent[static_cast<std::size_t>(child)] = static_cast<int>(i);
+        }
+    }
+    for (std::size_t i = 0; i < nodeCount; ++i) {
+        std::size_t steps = 0;
+        for (int p = parent[i]; p >= 0; p = parent[static_cast<std::size_t>(p)]) {
+            if (++steps > nodeCount) {
+                return AppError{ErrorCode::ParseFailure, "glTF node hierarchy contains a cycle"};
+            }
+        }
+    }
+    for (const int root : out.sceneRoots) {
+        if (root < 0 || static_cast<std::size_t>(root) >= nodeCount) {
+            return AppError{ErrorCode::ParseFailure, "glTF scene references a missing node"};
+        }
+    }
+    for (const auto& mesh : out.meshes) {
+        for (const auto& prim : mesh.primitives) {
+            const auto vertexCount = prim.positions.size();
+            for (const auto index : prim.indices) {
+                if (index >= vertexCount) {
+                    return AppError{ErrorCode::ParseFailure,
+                                    "glTF primitive index is past its vertex count"};
+                }
+            }
+            for (const auto& target : prim.morphPositions) {
+                if (!target.empty() && target.size() != vertexCount) {
+                    return AppError{ErrorCode::ParseFailure,
+                                    "glTF morph target size differs from its primitive"};
+                }
+            }
+        }
+    }
+    for (const auto& skin : out.skins) {
+        for (const int joint : skin.joints) {
+            if (joint < 0 || static_cast<std::size_t>(joint) >= nodeCount) {
+                return AppError{ErrorCode::ParseFailure, "glTF skin references a missing joint"};
+            }
+        }
+    }
+    return core::ok();
+}
+
+core::Result<GltfDocument> parseChecked(const GlbContainer& glb);
+
+}  // namespace
+
 core::Result<GltfDocument> GltfDocument::parse(const GlbContainer& glb) {
+    // nlohmann::json throws on every wrongly typed field ("count":"x"). This
+    // is the one place a user-supplied file is decoded, so every exception
+    // becomes a parse error here instead of escaping into a Q_INVOKABLE and
+    // terminating the app.
+    try {
+        auto parsed = parseChecked(glb);
+        if (!parsed.hasValue()) return parsed.error();
+        if (auto valid = validateReferences(parsed.value()); !valid.hasValue()) {
+            return valid.error();
+        }
+        return parsed;
+    } catch (const std::exception& error) {
+        return AppError{ErrorCode::ParseFailure,
+                        std::string{"glTF JSON has an invalid field: "} + error.what()};
+    } catch (...) {
+        return AppError{ErrorCode::ParseFailure, "glTF JSON could not be decoded"};
+    }
+}
+
+namespace {
+
+core::Result<GltfDocument> parseChecked(const GlbContainer& glb) {
     json doc;
     try {
         doc = json::parse(glb.json);
@@ -406,5 +509,7 @@ core::Result<GltfDocument> GltfDocument::parse(const GlbContainer& glb) {
     }
     return out;
 }
+
+}  // namespace
 
 }  // namespace creator::avatar::vrm

@@ -4,6 +4,7 @@
 #include "avatar/AvatarRenderFrame.h"
 #include "avatar/vrm/GlbContainer.h"
 #include "avatar/vrm/GltfDocument.h"
+#include "avatar/vrm/VrmRenderer.h"
 #include "core/AppError.h"
 
 #include <QCoreApplication>
@@ -341,6 +342,13 @@ bool AvatarSceneController::importAvatarModel(const QUrl& fileUrl) {
         emit importChanged();
         return false;
     }
+    const auto fileSize = std::filesystem::file_size(src, ec);
+    if (ec || fileSize > kMaxAvatarModelBytes) {
+        importStatus_ = QStringLiteral("아바타 파일이 너무 큽니다 (최대 %1 MB).")
+                            .arg(kMaxAvatarModelBytes / (1024ULL * 1024ULL));
+        emit importChanged();
+        return false;
+    }
     std::ifstream in(src, std::ios::binary | std::ios::ate);
     if (!in) {
         importStatus_ = QStringLiteral("파일을 열 수 없습니다.");
@@ -361,11 +369,19 @@ bool AvatarSceneController::importAvatarModel(const QUrl& fileUrl) {
                    ? creator::avatar::vrm::GltfDocument::parse(glb.value())
                    : creator::core::Result<creator::avatar::vrm::GltfDocument>{
                          glb.error()};
-    if (!doc.hasValue() || doc.value().meshes.empty()) {
-        importStatus_ =
-            QStringLiteral("올바른 VRM/glb 아바타 파일이 아닙니다: ") +
-            (doc.hasValue() ? QStringLiteral("렌더링할 메시가 없습니다")
-                            : QString::fromStdString(doc.error().message()));
+    if (!doc.hasValue()) {
+        importStatus_ = QStringLiteral("올바른 VRM/glb 아바타 파일이 아닙니다: ") +
+                        QString::fromStdString(doc.error().message());
+        emit importChanged();
+        return false;
+    }
+    // The real gate: the exact open() the app runs at launch. A file that
+    // parses but cannot be opened would otherwise install and then fail on
+    // every start.
+    if (auto opened = creator::avatar::vrm::VrmRenderer::open(doc.value(), {}, 16, 16);
+        !opened.hasValue()) {
+        importStatus_ = QStringLiteral("이 아바타를 열 수 없습니다: ") +
+                        QString::fromStdString(opened.error().message());
         emit importChanged();
         return false;
     }

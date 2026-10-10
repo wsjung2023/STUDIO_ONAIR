@@ -89,7 +89,7 @@ std::unique_ptr<creator::app::AvatarSceneController> makeBareAvatarController() 
 
 // A minimal but valid glb (single front-facing triangle) so import validation
 // accepts it and GltfDocument::parse yields a non-empty mesh set.
-std::vector<std::byte> minimalGlbBytes() {
+std::vector<std::byte> glbWithJson(const std::string& json) {
     const auto u32 = [](std::vector<std::byte>& o, std::uint32_t v) {
         for (int i = 0; i < 4; ++i)
             o.push_back(static_cast<std::byte>((v >> (i * 8)) & 0xFFU));
@@ -111,21 +111,6 @@ std::vector<std::byte> minimalGlbBytes() {
     f32(bin, 0); f32(bin, 0); f32(bin, 1);
     f32(bin, 0); f32(bin, 0); f32(bin, 1);
     u16(bin, 0); u16(bin, 1); u16(bin, 2);
-    const std::string json = R"({
-      "asset":{"version":"2.0"},
-      "bufferViews":[
-        {"buffer":0,"byteOffset":0,"byteLength":36},
-        {"buffer":0,"byteOffset":36,"byteLength":36},
-        {"buffer":0,"byteOffset":72,"byteLength":6}],
-      "accessors":[
-        {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
-        {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
-        {"bufferView":2,"componentType":5123,"count":3,"type":"SCALAR"}],
-      "meshes":[{"primitives":[
-        {"attributes":{"POSITION":0,"NORMAL":1},"indices":2,"material":0}]}],
-      "materials":[{"pbrMetallicRoughness":{"baseColorFactor":[0.9,0.2,0.2,1.0]}}],
-      "nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0
-    })";
     std::vector<std::byte> jc(json.size());
     std::memcpy(jc.data(), json.data(), json.size());
     while (jc.size() % 4U != 0U) jc.push_back(static_cast<std::byte>(0x20));
@@ -144,6 +129,25 @@ std::vector<std::byte> minimalGlbBytes() {
     u32(glb, static_cast<std::uint32_t>(12U + body.size()));
     glb.insert(glb.end(), body.begin(), body.end());
     return glb;
+}
+
+std::vector<std::byte> minimalGlbBytes() {
+    const std::string json = R"({
+      "asset":{"version":"2.0"},
+      "bufferViews":[
+        {"buffer":0,"byteOffset":0,"byteLength":36},
+        {"buffer":0,"byteOffset":36,"byteLength":36},
+        {"buffer":0,"byteOffset":72,"byteLength":6}],
+      "accessors":[
+        {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":2,"componentType":5123,"count":3,"type":"SCALAR"}],
+      "meshes":[{"primitives":[
+        {"attributes":{"POSITION":0,"NORMAL":1},"indices":2,"material":0}]}],
+      "materials":[{"pbrMetallicRoughness":{"baseColorFactor":[0.9,0.2,0.2,1.0]}}],
+      "nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0
+    })";
+    return glbWithJson(json);
 }
 
 void writeBytes(const std::filesystem::path& p, const std::vector<std::byte>& b) {
@@ -2259,6 +2263,56 @@ TEST(AvatarImportTest, InstallsAValidModelForTheNextLaunch) {
     EXPECT_TRUE(ok);
     EXPECT_TRUE(pending);
     EXPECT_TRUE(installed) << "the validated model was not staged for next launch";
+}
+
+// Parsing alone is not enough: a file the renderer cannot open would install
+// fine and then fail (or crash) on every launch. Import must run the same
+// open() the app runs at startup.
+TEST(AvatarImportTest, RejectsAModelTheRendererCannotOpen) {
+    auto controller = makeBareAvatarController();
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const std::filesystem::path noNodes{dir.filePath("no-nodes.glb").toStdWString()};
+    writeBytes(noNodes, glbWithJson(R"({
+      "asset":{"version":"2.0"},
+      "bufferViews":[
+        {"buffer":0,"byteOffset":0,"byteLength":36},
+        {"buffer":0,"byteOffset":36,"byteLength":36},
+        {"buffer":0,"byteOffset":72,"byteLength":6}],
+      "accessors":[
+        {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":2,"componentType":5123,"count":3,"type":"SCALAR"}],
+      "meshes":[{"primitives":[
+        {"attributes":{"POSITION":0,"NORMAL":1},"indices":2}]}],
+      "nodes":[],"scenes":[{"nodes":[]}],"scene":0
+    })"));
+
+    EXPECT_FALSE(controller->importAvatarModel(
+        QUrl::fromLocalFile(dir.filePath("no-nodes.glb"))));
+    EXPECT_FALSE(controller->avatarImportPending());
+    EXPECT_FALSE(controller->avatarImportStatus().isEmpty());
+}
+
+// A multi-gigabyte pick must be refused by size before it is read into memory
+// on the UI thread (an uncaught bad_alloc used to end the process).
+TEST(AvatarImportTest, RejectsAnOversizedFileWithoutReadingIt) {
+    auto controller = makeBareAvatarController();
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const std::filesystem::path huge{dir.filePath("huge.vrm").toStdWString()};
+    { std::ofstream o(huge, std::ios::binary); o << "glTF"; }
+    std::error_code ec;
+    std::filesystem::resize_file(
+        huge, creator::app::AvatarSceneController::kMaxAvatarModelBytes + 1, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    EXPECT_FALSE(controller->importAvatarModel(QUrl::fromLocalFile(dir.filePath("huge.vrm"))));
+    EXPECT_FALSE(controller->avatarImportPending());
+    // The message names the limit in MB (compare a digit string: this test
+    // binary is not compiled with /utf-8, so Korean literals would not match).
+    EXPECT_TRUE(controller->avatarImportStatus().contains(QStringLiteral("256")))
+        << controller->avatarImportStatus().toStdString();
 }
 
 }  // namespace

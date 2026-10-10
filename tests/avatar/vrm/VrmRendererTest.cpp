@@ -85,6 +85,44 @@ GltfDocument triangleDoc() {
     return GltfDocument::parse(GlbContainer::read(makeGlb(json, bin)).value()).value();
 }
 
+// Defence in depth: even a document that did not come through the parser
+// (or a future parser bug) must be refused at open(), never crash render().
+TEST(VrmRendererTest, OpenRefusesANodeCycleAndIndicesPastTheVertexCount) {
+    using creator::avatar::vrm::GltfDocument;
+    using creator::avatar::vrm::GltfMesh;
+    using creator::avatar::vrm::GltfNode;
+    using creator::avatar::vrm::GltfPrimitive;
+    using creator::avatar::vrm::VrmRenderer;
+
+    GltfPrimitive prim;
+    prim.positions = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
+    prim.indices = {0, 1, 2};
+    GltfMesh mesh;
+    mesh.primitives.push_back(prim);
+
+    GltfDocument cyclic;
+    cyclic.meshes.push_back(mesh);
+    GltfNode a;
+    a.mesh = 0;
+    a.children = {1};
+    GltfNode b;
+    b.children = {0};
+    cyclic.nodes = {a, b};
+    cyclic.sceneRoots = {0};
+    EXPECT_FALSE(VrmRenderer::open(cyclic, {}, 16, 16).hasValue());
+
+    GltfDocument outOfRange;
+    prim.indices = {0, 1, 7};
+    GltfMesh badMesh;
+    badMesh.primitives.push_back(prim);
+    outOfRange.meshes.push_back(badMesh);
+    GltfNode only;
+    only.mesh = 0;
+    outOfRange.nodes = {only};
+    outOfRange.sceneRoots = {0};
+    EXPECT_FALSE(VrmRenderer::open(outOfRange, {}, 16, 16).hasValue());
+}
+
 TEST(VrmRendererTest, RasterisesAModelToVisiblePixels) {
     auto renderer = VrmRenderer::open(triangleDoc(), {}, 128, 128);
     ASSERT_TRUE(renderer.hasValue()) << renderer.error().message();

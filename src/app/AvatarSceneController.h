@@ -143,6 +143,8 @@ public:
     /// as the app's avatar model so it is adopted on the next launch. Returns true
     /// on success. The file is never adopted mid-session because the model and its
     /// textures are wired into the capture chain at startup.
+    /// Largest .vrm/.glb the importer will read (it is read whole into memory).
+    static constexpr std::uintmax_t kMaxAvatarModelBytes = 256ULL * 1024ULL * 1024ULL;
     Q_INVOKABLE bool importAvatarModel(const QUrl& fileUrl);
     /// Relaunches the application (used after a successful import) so the newly
     /// installed model is loaded. Detaches a fresh process, then quits this one.

@@ -57,12 +57,33 @@ core::Result<std::unique_ptr<VrmRenderer>> VrmRenderer::open(
     std::unique_ptr<VrmRenderer> self{
         new VrmRenderer{std::move(document), std::move(textures), width, height}};
 
-    // Parent index per node.
+    // Parent index per node. render() walks parents recursively and indexes
+    // vertices straight from the index buffer, so a cyclic graph or an index
+    // past the vertex count must be refused here, whatever produced the
+    // document.
     self->parent_.assign(self->doc_.nodes.size(), -1);
     for (int i = 0; i < static_cast<int>(self->doc_.nodes.size()); ++i) {
         for (int child : self->doc_.nodes[static_cast<std::size_t>(i)].children) {
             if (child >= 0 && static_cast<std::size_t>(child) < self->parent_.size())
                 self->parent_[static_cast<std::size_t>(child)] = i;
+        }
+    }
+    for (std::size_t i = 0; i < self->parent_.size(); ++i) {
+        std::size_t steps = 0;
+        for (int p = self->parent_[i]; p >= 0; p = self->parent_[static_cast<std::size_t>(p)]) {
+            if (++steps > self->parent_.size()) {
+                return AppError{ErrorCode::ParseFailure, "VRM node hierarchy contains a cycle"};
+            }
+        }
+    }
+    for (const auto& mesh : self->doc_.meshes) {
+        for (const auto& prim : mesh.primitives) {
+            for (const auto index : prim.indices) {
+                if (index >= prim.positions.size()) {
+                    return AppError{ErrorCode::ParseFailure,
+                                    "VRM primitive index is past its vertex count"};
+                }
+            }
         }
     }
     // Head + upper-arm bones (by name; VRoid uses J_Bip_C_Head / J_Bip_L_UpperArm).

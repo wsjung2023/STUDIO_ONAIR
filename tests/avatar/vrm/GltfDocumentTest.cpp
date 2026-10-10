@@ -100,6 +100,95 @@ TEST(GltfDocumentTest, ExtractsTriangleGeometryAndMaterial) {
     ASSERT_EQ(doc.value().sceneRoots.size(), 1U);
 }
 
+// A triangle (3 positions + 3 USHORT indices) whose JSON the test can vary.
+std::vector<std::byte> triangleBin(std::uint16_t lastIndex = 2) {
+    std::vector<std::byte> bin;
+    appendF32(bin, 0);  appendF32(bin, 0);  appendF32(bin, 0);
+    appendF32(bin, 1);  appendF32(bin, 0);  appendF32(bin, 0);
+    appendF32(bin, 0);  appendF32(bin, 1);  appendF32(bin, 0);
+    appendU16(bin, 0);  appendU16(bin, 1);  appendU16(bin, lastIndex);
+    return bin;
+}
+
+std::string triangleJson(const std::string& nodes, const std::string& extraAccessorFields = "") {
+    return R"({
+      "asset":{"version":"2.0"},
+      "buffers":[{"byteLength":42}],
+      "bufferViews":[
+        {"buffer":0,"byteOffset":0,"byteLength":36},
+        {"buffer":0,"byteOffset":36,"byteLength":6}
+      ],
+      "accessors":[
+        {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3")" + extraAccessorFields + R"(},
+        {"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}
+      ],
+      "meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}],
+      "nodes":)" + nodes + R"(,
+      "scenes":[{"nodes":[0]}],"scene":0
+    })";
+}
+
+creator::core::Result<GltfDocument> parseGlb(const std::string& json,
+                                             const std::vector<std::byte>& bin) {
+    const auto glb = GlbContainer::read(makeGlb(json, bin));
+    if (!glb.hasValue()) return glb.error();
+    return GltfDocument::parse(glb.value());
+}
+
+// Everything below is a file the user could import from the internet. Each
+// must come back as a parse error -- never as a crash on the next launch.
+TEST(GltfDocumentTest, RejectsIndicesPastTheVertexCount) {
+    const auto doc = parseGlb(triangleJson(R"([{"mesh":0}])"), triangleBin(7));
+    ASSERT_FALSE(doc.hasValue());
+    EXPECT_EQ(doc.error().code(), creator::core::ErrorCode::ParseFailure);
+}
+
+TEST(GltfDocumentTest, RejectsANodeCycle) {
+    const auto doc = parseGlb(
+        triangleJson(R"([{"mesh":0,"children":[1]},{"children":[0]}])"), triangleBin());
+    ASSERT_FALSE(doc.hasValue());
+    EXPECT_EQ(doc.error().code(), creator::core::ErrorCode::ParseFailure);
+    const auto self = parseGlb(triangleJson(R"([{"mesh":0,"children":[0]}])"), triangleBin());
+    EXPECT_FALSE(self.hasValue());
+}
+
+TEST(GltfDocumentTest, RejectsOutOfRangeNodeReferences) {
+    EXPECT_FALSE(parseGlb(triangleJson(R"([{"mesh":5}])"), triangleBin()).hasValue());
+    EXPECT_FALSE(parseGlb(triangleJson(R"([{"mesh":0,"children":[9]}])"), triangleBin())
+                     .hasValue());
+    EXPECT_FALSE(parseGlb(triangleJson(R"([{"mesh":0,"skin":3}])"), triangleBin()).hasValue());
+}
+
+TEST(GltfDocumentTest, ReportsAWronglyTypedFieldAsAParseFailureNotAnException) {
+    const auto doc = parseGlb(triangleJson(R"([{"mesh":"zero"}])"), triangleBin());
+    ASSERT_FALSE(doc.hasValue());
+    EXPECT_EQ(doc.error().code(), creator::core::ErrorCode::ParseFailure);
+    const auto badCount = parseGlb(
+        triangleJson(R"([{"mesh":0}])", R"(,"byteOffset":"x")"), triangleBin());
+    EXPECT_FALSE(badCount.hasValue());
+}
+
+TEST(GltfDocumentTest, RejectsAByteStrideSmallerThanTheElement) {
+    // byteStride 1 on a 12-byte VEC3 element: the reader would otherwise walk
+    // overlapping bytes and allocate count*comps floats from a tiny buffer.
+    const std::string json = R"({
+      "asset":{"version":"2.0"},
+      "buffers":[{"byteLength":42}],
+      "bufferViews":[
+        {"buffer":0,"byteOffset":0,"byteLength":36,"byteStride":1},
+        {"buffer":0,"byteOffset":36,"byteLength":6}
+      ],
+      "accessors":[
+        {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}
+      ],
+      "meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}],
+      "nodes":[{"mesh":0}],
+      "scenes":[{"nodes":[0]}],"scene":0
+    })";
+    EXPECT_FALSE(parseGlb(json, triangleBin()).hasValue());
+}
+
 TEST(GltfDocumentTest, RejectsAccessorPastBuffer) {
     std::vector<std::byte> bin;
     appendF32(bin, 0);  appendF32(bin, 0);  appendF32(bin, 0);  // only one vec3
