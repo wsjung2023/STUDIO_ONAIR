@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace creator::recorder {
 
@@ -43,9 +44,17 @@ private:
 
 [[nodiscard]] core::Result<std::string> safeSourcePathComponent(
     const domain::SourceId& sourceId);
+/// Percent-encodes a recording session id into one portable path component.
+/// Every take owns its own segment directory beneath the source directory, so
+/// a second take of the same source in the same project never collides with
+/// (or overwrites) the first take's files.
+[[nodiscard]] core::Result<std::string> safeTakePathComponent(
+    const domain::SessionId& sessionId);
 [[nodiscard]] std::filesystem::path relativeSegmentPath(const RecordingTrack& track,
+                                                        std::string_view takeComponent,
                                                         std::uint64_t index);
 [[nodiscard]] std::filesystem::path temporarySegmentPath(const RecordingTrack& track,
+                                                         std::string_view takeComponent,
                                                          std::uint64_t index);
 
 }  // namespace creator::recorder

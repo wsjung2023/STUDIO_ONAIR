@@ -114,8 +114,11 @@ core::Result<std::unique_ptr<AsyncTrackRecorder>> makeTrackRecorder(
         encoder =
             std::make_unique<ffmpeg_adapter::FfmpegAudioSegmentEncoder>();
     }
+    auto takeComponent = recorder::safeTakePathComponent(start.sessionId);
+    if (!takeComponent.hasValue()) return takeComponent.error();
     auto publisher = std::make_unique<DurableSegmentPublisher>(
-        start.packagePath, recorder::makeSegmentFileOperations(start.packagePath),
+        start.packagePath, std::move(takeComponent).value(),
+        recorder::makeSegmentFileOperations(start.packagePath),
         std::make_unique<ProjectSegmentLifecycleSink>(std::move(context)));
     AsyncTrackRecorderConfig config{
         .track = std::move(track),

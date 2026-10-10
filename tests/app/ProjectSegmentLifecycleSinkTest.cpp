@@ -84,7 +84,7 @@ TEST_F(ProjectSegmentLifecycleSinkTest, PublishedFileAndReadyDatabaseRowStayInAg
     const auto source = SourceId::create("screen-1").value();
     const auto track = RecordingTrack::create(source, TrackRole::Screen).value();
     DurableSegmentPublisher publisher{
-        packagePath_, creator::recorder::makeSegmentFileOperations(packagePath_),
+        packagePath_, "take-1", creator::recorder::makeSegmentFileOperations(packagePath_),
         std::make_unique<ProjectSegmentLifecycleSink>(context_)};
 
     auto paths = publisher.begin(track, 0, TimestampNs{});

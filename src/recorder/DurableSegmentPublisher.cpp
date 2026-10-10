@@ -171,10 +171,11 @@ std::unique_ptr<ISegmentFileOperations> makeSegmentFileOperations(
 }
 
 DurableSegmentPublisher::DurableSegmentPublisher(
-    std::filesystem::path packageRoot,
+    std::filesystem::path packageRoot, std::string takePathComponent,
     std::unique_ptr<ISegmentFileOperations> fileOperations,
     std::unique_ptr<ISegmentLifecycleSink> lifecycleSink)
     : packageRoot_(std::move(packageRoot)),
+      takePathComponent_(std::move(takePathComponent)),
       fileOperations_(std::move(fileOperations)),
       lifecycleSink_(std::move(lifecycleSink)) {}
 
@@ -189,9 +190,9 @@ core::Result<SegmentOutputPaths> DurableSegmentPublisher::begin(
                               "Segment publisher is not fully configured"};
     }
 
-    const auto relativeFinal = relativeSegmentPath(track, index);
+    const auto relativeFinal = relativeSegmentPath(track, takePathComponent_, index);
     SegmentOutputPaths paths{
-        .partPath = packageRoot_ / temporarySegmentPath(track, index),
+        .partPath = packageRoot_ / temporarySegmentPath(track, takePathComponent_, index),
         .finalPath = packageRoot_ / relativeFinal,
         .relativeFinalPath = relativeFinal,
     };

@@ -174,7 +174,7 @@ struct RecorderFixture final {
         encoderState = std::make_shared<EncoderState>();
         lifecycleState = std::make_shared<LifecycleState>();
         auto publisher = std::make_unique<DurableSegmentPublisher>(
-            "project.cstudio", std::make_unique<FileOperations>(),
+            "project.cstudio", "take-1", std::make_unique<FileOperations>(),
             std::make_unique<LifecycleSink>(lifecycleState));
         AsyncTrackRecorderConfig config{
             .track = track(role),

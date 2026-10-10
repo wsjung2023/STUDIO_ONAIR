@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace creator::recorder {
 
@@ -43,7 +44,10 @@ protected:
 
 class DurableSegmentPublisher final {
 public:
+    /// `takePathComponent` is safeTakePathComponent() of the recording session:
+    /// every take publishes into its own directory.
     DurableSegmentPublisher(std::filesystem::path packageRoot,
+                            std::string takePathComponent,
                             std::unique_ptr<ISegmentFileOperations> fileOperations,
                             std::unique_ptr<ISegmentLifecycleSink> lifecycleSink);
 
@@ -63,6 +67,7 @@ private:
     };
 
     std::filesystem::path packageRoot_;
+    std::string takePathComponent_;
     std::unique_ptr<ISegmentFileOperations> fileOperations_;
     std::unique_ptr<ISegmentLifecycleSink> lifecycleSink_;
     std::optional<PendingSegment> pending_;

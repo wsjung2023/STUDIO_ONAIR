@@ -71,7 +71,7 @@ std::unique_ptr<AsyncTrackRecorder> makeTimelineRecorder(
     const RecordingTrack& track, const fs::path& packagePath,
     std::shared_ptr<ProjectSegmentLifecycleContext> context) {
     auto publisher = std::make_unique<DurableSegmentPublisher>(
-        packagePath, creator::recorder::makeSegmentFileOperations(packagePath),
+        packagePath, "take-1", creator::recorder::makeSegmentFileOperations(packagePath),
         std::make_unique<ProjectSegmentLifecycleSink>(std::move(context)));
     AsyncTrackRecorderConfig config{
         .track = track,

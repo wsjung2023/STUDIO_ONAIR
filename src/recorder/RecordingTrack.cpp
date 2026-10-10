@@ -68,10 +68,13 @@ core::Result<RecordingTrack> RecordingTrack::create(domain::SourceId sourceId,
                           std::move(component).value()};
 }
 
-core::Result<std::string> safeSourcePathComponent(const domain::SourceId& sourceId) {
+namespace {
+
+core::Result<std::string> encodePortableComponent(std::string_view raw,
+                                                  std::string_view what) {
     constexpr char hex[] = "0123456789ABCDEF";
     std::string encoded;
-    for (const unsigned char value : sourceId.value()) {
+    for (const unsigned char value : raw) {
         if (portableUnescaped(value)) {
             encoded.push_back(static_cast<char>(value));
         } else {
@@ -81,20 +84,36 @@ core::Result<std::string> safeSourcePathComponent(const domain::SourceId& source
         }
         if (encoded.size() > kMaxPathComponentBytes) {
             return core::AppError{core::ErrorCode::InvalidArgument,
-                                  "Encoded source identifier is too long for a media path"};
+                                  "Encoded " + std::string{what} +
+                                      " identifier is too long for a media path"};
         }
     }
     return encoded;
 }
 
-std::filesystem::path relativeSegmentPath(const RecordingTrack& track, std::uint64_t index) {
-    const auto extension = track.mediaKind() == TrackMediaKind::Video ? "mkv" : "mka";
-    return std::filesystem::path{roleDirectory(track.role())} / track.pathComponent() /
-           segmentFilename(index, extension);
+}  // namespace
+
+core::Result<std::string> safeSourcePathComponent(const domain::SourceId& sourceId) {
+    return encodePortableComponent(sourceId.value(), "source");
 }
 
-std::filesystem::path temporarySegmentPath(const RecordingTrack& track, std::uint64_t index) {
-    auto path = std::filesystem::path{".tmp"} / relativeSegmentPath(track, index);
+core::Result<std::string> safeTakePathComponent(const domain::SessionId& sessionId) {
+    return encodePortableComponent(sessionId.value(), "session");
+}
+
+std::filesystem::path relativeSegmentPath(const RecordingTrack& track,
+                                          std::string_view takeComponent,
+                                          std::uint64_t index) {
+    const auto extension = track.mediaKind() == TrackMediaKind::Video ? "mkv" : "mka";
+    return std::filesystem::path{roleDirectory(track.role())} / track.pathComponent() /
+           takeComponent / segmentFilename(index, extension);
+}
+
+std::filesystem::path temporarySegmentPath(const RecordingTrack& track,
+                                           std::string_view takeComponent,
+                                           std::uint64_t index) {
+    auto path = std::filesystem::path{".tmp"} /
+                relativeSegmentPath(track, takeComponent, index);
     path += ".part";
     return path;
 }

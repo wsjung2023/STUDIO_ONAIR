@@ -105,7 +105,7 @@ BuiltTrack buildTrack(const SourceId& sourceId, TrackRole role,
                       std::size_t videoQueueCapacity = 2) {
     auto state = std::make_shared<EncoderState>();
     auto publisher = std::make_unique<DurableSegmentPublisher>(
-        "project.cstudio", std::make_unique<FileOperations>(),
+        "project.cstudio", "take-1", std::make_unique<FileOperations>(),
         std::make_unique<LifecycleSink>());
     AsyncTrackRecorderConfig config{
         .track = RecordingTrack::create(sourceId, role).value(),

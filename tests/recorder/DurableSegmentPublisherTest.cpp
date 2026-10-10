@@ -110,7 +110,7 @@ struct Fixture final {
         sinkRaw = sink.get();
         sinkRaw->events = events;
         publisher = std::make_unique<DurableSegmentPublisher>(
-            "project.cstudio", std::move(files), std::move(sink));
+            "project.cstudio", "take-1", std::move(files), std::move(sink));
     }
 
     std::shared_ptr<std::vector<std::string>> events;
@@ -199,7 +199,8 @@ TEST(DurableSegmentPublisherTest, NativeOperationsPublishWithoutOverwriting) {
 
     auto sink = std::make_unique<LifecycleSinkFake>();
     sink->events = std::make_shared<std::vector<std::string>>();
-    DurableSegmentPublisher publisher{root, creator::recorder::makeSegmentFileOperations(root),
+    DurableSegmentPublisher publisher{root, "take-1",
+                                      creator::recorder::makeSegmentFileOperations(root),
                                       std::move(sink)};
     auto paths = publisher.begin(screenTrack(), 0, {});
     ASSERT_TRUE(paths.hasValue()) << paths.error().message();
@@ -217,9 +218,32 @@ TEST(DurableSegmentPublisherTest, NativeOperationsPublishWithoutOverwriting) {
 
     auto secondSink = std::make_unique<LifecycleSinkFake>();
     secondSink->events = std::make_shared<std::vector<std::string>>();
-    DurableSegmentPublisher second{root, creator::recorder::makeSegmentFileOperations(root),
+    DurableSegmentPublisher second{root, "take-1",
+                                   creator::recorder::makeSegmentFileOperations(root),
                                    std::move(secondSink)};
     EXPECT_FALSE(second.begin(screenTrack(), 0, {}).hasValue());
+
+    // A second TAKE of the same source starts its own segment numbering in its
+    // own directory and must publish cleanly next to the first take's files.
+    auto thirdSink = std::make_unique<LifecycleSinkFake>();
+    thirdSink->events = std::make_shared<std::vector<std::string>>();
+    DurableSegmentPublisher secondTake{root, "take-2",
+                                       creator::recorder::makeSegmentFileOperations(root),
+                                       std::move(thirdSink)};
+    auto takeTwoPaths = secondTake.begin(screenTrack(), 0, {});
+    ASSERT_TRUE(takeTwoPaths.hasValue()) << takeTwoPaths.error().message();
+    EXPECT_NE(takeTwoPaths.value().finalPath, paths.value().finalPath);
+    {
+        std::ofstream output{takeTwoPaths.value().partPath, std::ios::binary};
+        output << "encoded-fixture-2";
+    }
+    ASSERT_TRUE(secondTake.publish({.endTime = creator::core::TimestampNs{
+                                       std::chrono::seconds{2}},
+                                   .bytesWritten = 17,
+                                   .codecName = "fixture"})
+                    .hasValue());
+    EXPECT_TRUE(std::filesystem::exists(takeTwoPaths.value().finalPath));
+    EXPECT_TRUE(std::filesystem::exists(paths.value().finalPath));
     std::filesystem::remove_all(root, ignored);
 }
 
