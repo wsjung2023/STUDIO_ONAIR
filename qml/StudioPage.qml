@@ -1472,6 +1472,29 @@ Item {
                     font.family: theme.fontFamily
                     font.pixelSize: theme.sizeLabel
                 }
+
+                // A take that died must say why, here, where the creator is
+                // looking -- not in a property nobody binds (rule 9: never hide
+                // a recording failure). Stays until the next take starts.
+                Label {
+                    id: recordingErrorBanner
+                    objectName: "recordingErrorBanner"
+                    Layout.fillWidth: true
+                    visible: studioController.lastError !== undefined
+                             && studioController.lastError.length > 0
+                    text: qsTr("녹화 실패: %1").arg(studioController.lastError)
+                    color: theme.danger
+                    wrapMode: Text.WordWrap
+                    font.family: theme.fontFamily
+                    font.pixelSize: theme.sizeLabel
+                    font.weight: theme.weightSemiBold
+                    padding: theme.spaceSm
+                    background: Rectangle {
+                        radius: theme.radiusSm
+                        color: theme.danger
+                        opacity: 0.12
+                    }
+                }
             }
 
             Pane {

@@ -297,11 +297,17 @@ class FakeStudioController final : public QObject {
     Q_PROPERTY(QString encoderName READ encoderName CONSTANT)
     Q_PROPERTY(QString takeDuration READ takeDuration CONSTANT)
     Q_PROPERTY(QString statusMessage READ statusMessage CONSTANT)
+    Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
     Q_PROPERTY(qlonglong recordingPositionNs READ recordingPositionNs CONSTANT)
 
 public:
     using QObject::QObject;
     [[nodiscard]] bool busy() const noexcept { return busy_; }
+    [[nodiscard]] QString lastError() const { return lastError_; }
+    void setLastError(QString error) {
+        lastError_ = std::move(error);
+        emit lastErrorChanged();
+    }
     [[nodiscard]] bool recording() const noexcept { return recording_; }
     [[nodiscard]] bool recordingAvailable() const noexcept { return true; }
     [[nodiscard]] int segmentCount() const noexcept { return 1; }
@@ -342,12 +348,14 @@ public:
 
 signals:
     void stateChanged();
+    void lastErrorChanged();
 
 private:
     bool busy_{false};
     bool recording_{false};
     int startCalls_{0};
     int stopCalls_{0};
+    QString lastError_;
 };
 
 class FakeShortcutSettingsController final : public QObject {
@@ -1710,7 +1718,10 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     QQmlComponent component{
         &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/StudioPage.qml"))};
 
-    std::unique_ptr<QObject> object{component.create()};
+    // Desktop width: the page hides its whole desktop tree below 600px, so a
+    // zero-size instance would make every visibility assertion vacuous.
+    std::unique_ptr<QObject> object{component.createWithInitialProperties(
+        {{QStringLiteral("width"), 1200}, {QStringLiteral("height"), 800}})};
 
     ASSERT_NE(object, nullptr) << component.errorString().toStdString();
     auto* selector = object->findChild<QObject*>(QStringLiteral("captureTargetSelector"));
@@ -1746,6 +1757,21 @@ TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
     EXPECT_EQ(cameraSelector->property("count").toInt(), 1);
     EXPECT_EQ(microphoneSelector->property("count").toInt(), 1);
     EXPECT_GT(microphoneMeter->property("value").toDouble(), 0.0);
+
+    // A recording that died must say why, right on the Studio page: hidden
+    // while there is no error, visible with the reason once the take fails.
+    auto* recordingError =
+        object->findChild<QObject*>(QStringLiteral("recordingErrorBanner"));
+    ASSERT_NE(recordingError, nullptr);
+    EXPECT_FALSE(recordingError->property("visible").toBool());
+    studioController.setLastError(QStringLiteral("camera disconnected: EIO"));
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(recordingError->property("visible").toBool());
+    EXPECT_TRUE(recordingError->property("text").toString().contains(
+        QStringLiteral("camera disconnected: EIO")));
+    studioController.setLastError(QString{});
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(recordingError->property("visible").toBool());
 }
 
 TEST(QmlSmokeTest, StudioShortcutsShareVisibleActionsAndStateGuards) {

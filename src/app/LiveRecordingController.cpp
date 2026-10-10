@@ -2,6 +2,7 @@
 
 #include "core/Uuid.h"
 
+#include <QLoggingCategory>
 #include <QPointer>
 #include <QThread>
 
@@ -12,6 +13,8 @@
 
 namespace creator::app {
 namespace {
+
+Q_LOGGING_CATEGORY(csRecording, "cs.recording")
 
 QString fromUtf8(const std::string& value) {
     return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
@@ -116,13 +119,18 @@ void LiveRecordingController::setRecordingPreparation(
 
 void LiveRecordingController::startRecording() {
     if (operationState_ != LiveRecordingOperationState::Idle) return;
+    clearLastError();
     if (!engine_ || !engine_->available()) {
-        setStatusMessage(engine_ ? fromUtf8(engine_->unavailableReason())
-                                 : tr("Live recording engine is unavailable"));
+        reportFailure(core::AppError{
+            core::ErrorCode::InvalidState,
+            engine_ ? engine_->unavailableReason()
+                    : tr("Live recording engine is unavailable").toStdString()});
         return;
     }
     if (!persistence_ || !packagePathProvider_) {
-        setStatusMessage(tr("Recording persistence is unavailable"));
+        reportFailure(core::AppError{
+            core::ErrorCode::InvalidState,
+            tr("Recording persistence is unavailable").toStdString()});
         return;
     }
     auto packagePath = packagePathProvider_();
@@ -132,12 +140,12 @@ void LiveRecordingController::startRecording() {
     }
     auto sources = engine_->sourceSnapshot();
     if (!sources.hasValue()) {
-        setStatusMessage(fromUtf8(sources.error().message()));
+        reportFailure(sources.error());
         return;
     }
     auto sessionId = domain::SessionId::create(core::generateUuidV4());
     if (!sessionId.hasValue()) {
-        setStatusMessage(fromUtf8(sessionId.error().message()));
+        reportFailure(sessionId.error());
         return;
     }
 
@@ -184,7 +192,7 @@ void LiveRecordingController::handleBeginFinished(
         pendingStart_.reset();
         emit activeRecordingChanged();
         setOperationState(LiveRecordingOperationState::Idle);
-        setStatusMessage(fromUtf8(result.error().message()));
+        reportFailure(result.error());
         return;
     }
 
@@ -276,7 +284,7 @@ void LiveRecordingController::abortStartedSession(core::AppError error) {
     if (!pendingStart_ || !persistence_) {
         pendingStart_.reset();
         setOperationState(LiveRecordingOperationState::Idle);
-        setStatusMessage(fromUtf8(error.message()));
+        reportFailure(error);
         return;
     }
     const auto sessionId = pendingStart_->sessionId;
@@ -299,9 +307,7 @@ void LiveRecordingController::abortStartedSession(core::AppError error) {
                 self->pendingStart_.reset();
                 emit self->activeRecordingChanged();
                 self->setOperationState(LiveRecordingOperationState::Idle);
-                self->setStatusMessage(fromUtf8(
-                    aborted.hasValue() ? error.message()
-                                       : aborted.error().message()));
+                self->reportFailure(aborted.hasValue() ? error : aborted.error());
                 if (aborted.hasValue()) {
                     emit self->recordingAborted(fromUtf8(sessionId.value()));
                 }
@@ -391,12 +397,19 @@ void LiveRecordingController::handlePersistenceComplete(
                                         ? fromUtf8(pendingTerminalError_->message())
                                         : tr("Stopped");
     const auto committedSessionId = pendingCompletion_->session.id();
+    const auto terminalError = pendingTerminalError_;
     pendingCompletion_.reset();
     pendingTerminalError_.reset();
     pendingStart_.reset();
     emit activeRecordingChanged();
     setOperationState(LiveRecordingOperationState::Idle);
-    setStatusMessage(finalMessage);
+    if (!result.hasValue()) {
+        reportFailure(result.error());
+    } else if (terminalError) {
+        reportFailure(*terminalError);
+    } else {
+        setStatusMessage(finalMessage);
+    }
     if (result.hasValue()) {
         emit recordingCommitted(fromUtf8(committedSessionId.value()));
     }
@@ -460,6 +473,21 @@ void LiveRecordingController::setStatusMessage(QString message) {
     if (statusMessage_ == message) return;
     statusMessage_ = std::move(message);
     emit statusMessageChanged();
+}
+
+void LiveRecordingController::reportFailure(const core::AppError& error) {
+    const auto message = fromUtf8(error.message());
+    qCWarning(csRecording).noquote() << "Recording failed:" << message;
+    setStatusMessage(message);
+    if (lastError_ == message) return;
+    lastError_ = message;
+    emit lastErrorChanged();
+}
+
+void LiveRecordingController::clearLastError() {
+    if (lastError_.isEmpty()) return;
+    lastError_.clear();
+    emit lastErrorChanged();
 }
 
 void LiveRecordingController::resetDiagnostics() {

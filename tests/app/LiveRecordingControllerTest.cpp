@@ -10,6 +10,7 @@
 #include <QSignalSpy>
 #include <QCoreApplication>
 #include <QEventLoop>
+#include <QtGlobal>
 
 #include <chrono>
 #include <filesystem>
@@ -19,6 +20,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -348,6 +350,89 @@ TEST(LiveRecordingControllerTest, CompletesSafeSegmentsThenShowsTerminalCaptureE
     EXPECT_EQ(fixture.controller->operationState(), LiveRecordingOperationState::Idle);
     EXPECT_EQ(fixture.controller->statusMessage(),
               QStringLiteral("microphone disconnected"));
+}
+
+// Captures every Qt warning emitted while alive so a test can prove a failure
+// was logged, not just stored in a property nobody reads.
+class ScopedWarningCapture final {
+public:
+    ScopedWarningCapture() {
+        messages().clear();
+        previous_ = qInstallMessageHandler(&ScopedWarningCapture::handle);
+    }
+    ~ScopedWarningCapture() { qInstallMessageHandler(previous_); }
+    ScopedWarningCapture(const ScopedWarningCapture&) = delete;
+    ScopedWarningCapture& operator=(const ScopedWarningCapture&) = delete;
+
+    [[nodiscard]] static std::vector<QString>& messages() {
+        static std::vector<QString> captured;
+        return captured;
+    }
+    [[nodiscard]] bool containsWarning(const QString& fragment) const {
+        for (const auto& message : messages()) {
+            if (message.contains(fragment)) return true;
+        }
+        return false;
+    }
+
+private:
+    static void handle(QtMsgType type, const QMessageLogContext&, const QString& message) {
+        if (type == QtWarningMsg || type == QtCriticalMsg) messages().push_back(message);
+    }
+    QtMessageHandler previous_{};
+};
+
+TEST(LiveRecordingControllerTest, TerminalCaptureErrorIsExposedAsLastErrorAndLogged) {
+    ScopedWarningCapture warnings;
+    Fixture fixture;
+    EXPECT_TRUE(fixture.controller->lastError().isEmpty());
+    fixture.controller->startRecording();
+    fixture.persistence.finishBegin();
+
+    fixture.engineRaw->finish(TimestampNs{std::chrono::seconds{12}},
+                              AppError{ErrorCode::NotFound, "microphone disconnected"});
+    fixture.persistence.finishComplete();
+
+    EXPECT_EQ(fixture.controller->lastError(), QStringLiteral("microphone disconnected"));
+    EXPECT_TRUE(warnings.containsWarning(QStringLiteral("microphone disconnected")));
+}
+
+TEST(LiveRecordingControllerTest, EngineStartFailureIsExposedAsLastErrorAndLogged) {
+    ScopedWarningCapture warnings;
+    Fixture fixture;
+    fixture.engineRaw->startError = AppError{ErrorCode::IoFailure, "encoder refused"};
+    fixture.controller->startRecording();
+    fixture.persistence.finishBegin();
+    fixture.persistence.finishAbort();
+
+    EXPECT_EQ(fixture.controller->operationState(), LiveRecordingOperationState::Idle);
+    EXPECT_EQ(fixture.controller->lastError(), QStringLiteral("encoder refused"));
+    EXPECT_TRUE(warnings.containsWarning(QStringLiteral("encoder refused")));
+}
+
+TEST(LiveRecordingControllerTest, StartingANewTakeClearsLastError) {
+    Fixture fixture;
+    fixture.controller->startRecording();
+    fixture.persistence.finishBegin();
+    fixture.engineRaw->finish(TimestampNs{std::chrono::seconds{12}},
+                              AppError{ErrorCode::NotFound, "microphone disconnected"});
+    fixture.persistence.finishComplete();
+    ASSERT_FALSE(fixture.controller->lastError().isEmpty());
+
+    QSignalSpy cleared{fixture.controller.get(), &LiveRecordingController::lastErrorChanged};
+    fixture.controller->startRecording();
+    EXPECT_TRUE(fixture.controller->lastError().isEmpty());
+    EXPECT_EQ(cleared.count(), 1);
+}
+
+TEST(LiveRecordingControllerTest, CleanStopLeavesNoLastError) {
+    Fixture fixture;
+    fixture.controller->startRecording();
+    fixture.persistence.finishBegin();
+    fixture.controller->stopRecording();
+    fixture.engineRaw->finish(TimestampNs{std::chrono::seconds{12}});
+    fixture.persistence.finishComplete();
+    EXPECT_TRUE(fixture.controller->lastError().isEmpty());
 }
 
 }  // namespace

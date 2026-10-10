@@ -37,6 +37,10 @@ class LiveRecordingController final : public QObject {
     Q_PROPERTY(qlonglong recordingStartedAtNs READ recordingStartedAtNs NOTIFY activeRecordingChanged)
     Q_PROPERTY(qlonglong recordingPositionNs READ recordingPositionNs NOTIFY diagnosticsChanged)
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
+    /// Why the last take failed (start refused, capture died, persistence
+    /// failed). Empty while nothing has gone wrong and cleared when a new take
+    /// starts, so the UI can keep the reason on screen until the creator acts.
+    Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
 
 public:
     using PackagePathProvider =
@@ -87,6 +91,7 @@ public:
     [[nodiscard]] qlonglong recordingStartedAtNs() const noexcept;
     [[nodiscard]] qlonglong recordingPositionNs() const noexcept;
     [[nodiscard]] QString statusMessage() const { return statusMessage_; }
+    [[nodiscard]] QString lastError() const { return lastError_; }
 
     void setRecordingPreparation(RecordingPreparation preparation);
 
@@ -104,6 +109,7 @@ signals:
     void recordingCommitted(QString sessionId);
     void recordingAborted(QString sessionId);
     void statusMessageChanged();
+    void lastErrorChanged();
 
 private:
     void handleBeginFinished(quint64 generation, domain::SessionId sessionId,
@@ -120,6 +126,10 @@ private:
     void abortStartedSession(core::AppError error);
     void setOperationState(LiveRecordingOperationState state);
     void setStatusMessage(QString message);
+    /// Records a take failure: shown via lastError AND written to the warning
+    /// log, so a dead recording is never silent (CLAUDE.md rule 9).
+    void reportFailure(const core::AppError& error);
+    void clearLastError();
     void resetDiagnostics();
 
     std::unique_ptr<ILiveRecordingEngine> engine_;
@@ -145,6 +155,7 @@ private:
     QString encoderName_{QStringLiteral("Not active")};
     QString takeDuration_{QStringLiteral("00:00:00")};
     QString statusMessage_;
+    QString lastError_;
 };
 
 }  // namespace creator::app
