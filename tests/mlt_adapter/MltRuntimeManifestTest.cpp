@@ -101,12 +101,15 @@ public:
                << "\",\"source_commit\":"
                   "\"bef9d89c0c279e558d9625dac3399c2aa3d961bc\","
                   "\"linking\":\"dynamic\","
+                  // The verifier requires the audited PThreads4W mutex patch id
+                  // (CS_MLT_EXPECTED_MUTEX_PATCH) since the 07-25 staging rework.
+                  "\"windows_mutex_patch\":\"" CS_MLT_EXPECTED_MUTEX_PATCH "\","
                   "\"allowed_modules\":[\"core\",\"avformat\"],"
                   "\"dependencies\":["
                   "{\"component\":\"FFmpeg\",\"version\":\"8.1.2\","
                   "\"source_identity\":\"sha256:464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c\",\"license\":\"LGPL-2.1-or-later\"},"
                   "{\"component\":\"zlib\",\"version\":\"1.3.2\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"Zlib\"},"
-                  "{\"component\":\"PThreads4W\",\"version\":\"3.0.0\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"Apache-2.0\"},"
+                  "{\"component\":\"PThreads4W\",\"version\":\"3.0.0\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e;patch:" CS_MLT_EXPECTED_MUTEX_PATCH "\",\"license\":\"Apache-2.0\"},"
                   "{\"component\":\"GNU libiconv\",\"version\":\"1.19\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"LGPL-2.1-or-later\"},"
                   "{\"component\":\"dlfcn-win32\",\"version\":\"1.4.2\",\"source_identity\":\"vcpkg:43643e1f5cf73db40d0d4bd610183348eb09b24e\",\"license\":\"MIT\"}],\"files\":[";
         for (std::size_t index = 0; index < entries_.size(); ++index) {

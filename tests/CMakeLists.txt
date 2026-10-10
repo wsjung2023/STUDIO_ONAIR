@@ -1285,6 +1285,8 @@ if(CS_ENABLE_MLT)
     )
     target_compile_definitions(cs_mlt_tests PRIVATE
         CS_TEST_MLT_ROOT="${CS_MLT_ROOT}"
+        # Must match cs_mlt_adapter's expected patch id (src/mlt_adapter/CMakeLists.txt).
+        CS_MLT_EXPECTED_MUTEX_PATCH="creator-studio-pthreads4w-v3.0.0-lazy-mutex-events-v1"
     )
     cs_apply_warnings(cs_mlt_tests)
     set_property(TARGET cs_mlt_tests PROPERTY TEST_LAUNCHER
