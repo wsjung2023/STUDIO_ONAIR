@@ -23,9 +23,11 @@ core::AppError unsupported() {
 
 ProjectExportEngine::ProjectExportEngine(
     std::filesystem::path mltRuntimeRoot,
-    ExportLoudnessSettingProvider loudnessSettingProvider)
+    ExportLoudnessSettingProvider loudnessSettingProvider,
+    ExportAudioChainFactory audioChainFactory)
     : mltRuntimeRoot_(std::move(mltRuntimeRoot)),
-      loudnessSettingProvider_(std::move(loudnessSettingProvider)) {}
+      loudnessSettingProvider_(std::move(loudnessSettingProvider)),
+      audioChainFactory_(std::move(audioChainFactory)) {}
 
 core::Result<void> ProjectExportEngine::load(
     const edit_engine::TimelineSnapshot&) {
@@ -79,10 +81,15 @@ ProjectExportEngine::render(const edit_engine::RenderRequest& request) {
     // on the next export without rebuilding the engine.
     std::optional<audio_dsp::ExportLoudnessAnalyzer::Parameters> loudness;
     if (loudnessSettingProvider_) loudness = loudnessSettingProvider_();
+    // Same cleanup chain the preview plays, so what the creator heard in the
+    // editor is what the export contains (a fresh instance for this render).
+    std::shared_ptr<audio_dsp::IAudioProcessor> audioChain;
+    if (audioChainFactory_) audioChain = audioChainFactory_();
     mlt_adapter::MltEditEngine engine{{.runtimeRoot = mltRuntimeRoot_,
                                       .previewWidth = request.preset().width(),
                                       .previewHeight = request.preset().height(),
                                       .renderLifecycle = lifecycle,
+                                      .audioProcessingChain = std::move(audioChain),
                                       .exportLoudness = loudness}};
     return engine.render(request);
 }

@@ -456,7 +456,11 @@ int main(int argc, char* argv[]) {
     creator::app::ShortcutSettingsController shortcutSettingsController{&app};
 #if defined(CS_APP_ENABLE_MLT)
     const auto mltRuntimeRoot = stagedMltRuntimeRoot();
-    std::shared_ptr<creator::audio_dsp::IAudioProcessor> audioProcessingChain;
+    // One factory for both engines: the preview takes one chain at startup,
+    // the export builds a fresh one per render (stateful processors).
+    const auto makeAudioProcessingChain =
+        []() -> std::shared_ptr<creator::audio_dsp::IAudioProcessor> {
+        std::shared_ptr<creator::audio_dsp::IAudioProcessor> audioProcessingChain;
 #if defined(CS_APP_ENABLE_RNNOISE)
     auto denoise = creator::rnnoise_adapter::createRnnoiseDenoiseProcessor(
         std::filesystem::path{CS_APP_RNNOISE_ROOT});
@@ -480,6 +484,9 @@ int main(int argc, char* argv[]) {
             denoise.error().message());
     }
 #endif
+        return audioProcessingChain;
+    };
+    auto audioProcessingChain = makeAudioProcessingChain();
     std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
         std::make_unique<creator::mlt_adapter::MltEditEngine>(
             creator::mlt_adapter::MltEditEngineConfig{
@@ -509,7 +516,8 @@ int main(int argc, char* argv[]) {
                 // Streaming/broadcast default: -14 LUFS integrated, -1 dBTP true
                 // peak (ExportLoudnessAnalyzer::Parameters defaults).
                 return creator::audio_dsp::ExportLoudnessAnalyzer::Parameters{};
-            });
+            },
+            makeAudioProcessingChain);
 #else
     std::unique_ptr<creator::edit_engine::IEditEngine> editEngine =
         std::make_unique<creator::edit_engine::UnavailableEditEngine>();

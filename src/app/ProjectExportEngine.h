@@ -1,11 +1,13 @@
 #pragma once
 
 #include "audio_dsp/ExportLoudnessAnalysis.h"
+#include "audio_dsp/IAudioProcessor.h"
 #include "edit_engine/IEditEngine.h"
 
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 
 namespace creator::app {
@@ -17,6 +19,13 @@ namespace creator::app {
 using ExportLoudnessSettingProvider =
     std::function<std::optional<audio_dsp::ExportLoudnessAnalyzer::Parameters>()>;
 
+/// Builds a fresh real-time audio cleanup chain (denoise -> compressor ->
+/// limiter) for one render, or nullptr for "no processing". A new instance per
+/// render because the processors carry state and a render may run while the
+/// preview engine uses its own chain.
+using ExportAudioChainFactory =
+    std::function<std::shared_ptr<audio_dsp::IAudioProcessor>()>;
+
 /// Export-only composition root. Each render reopens and identity-verifies the
 /// project package, recovers interrupted jobs, then creates an independent MLT
 /// graph backed by the project's durable render-job store.
@@ -27,7 +36,8 @@ public:
     /// behavior. It is called once per render so the setting is always current.
     explicit ProjectExportEngine(
         std::filesystem::path mltRuntimeRoot,
-        ExportLoudnessSettingProvider loudnessSettingProvider = {});
+        ExportLoudnessSettingProvider loudnessSettingProvider = {},
+        ExportAudioChainFactory audioChainFactory = {});
 
     [[nodiscard]] core::Result<void> load(
         const edit_engine::TimelineSnapshot&) override;
@@ -47,6 +57,7 @@ public:
 private:
     std::filesystem::path mltRuntimeRoot_;
     ExportLoudnessSettingProvider loudnessSettingProvider_;
+    ExportAudioChainFactory audioChainFactory_;
 };
 
 }  // namespace creator::app

@@ -1,4 +1,5 @@
 #include "app/ProjectExportEngine.h"
+#include "audio_dsp/IAudioProcessor.h"
 
 #include "core/Uuid.h"
 #include "domain/Timeline.h"
@@ -253,7 +254,16 @@ TEST(ProjectExportEngineIntegrationTest,
                     .value(),
                 "Creator Sans")
                 .value()}};
-    app::ProjectExportEngine engine{fs::path{CS_TEST_MLT_ROOT}};
+    // The audio cleanup chain (denoise -> compressor -> limiter) must reach the
+    // EXPORT graph, not only the preview: a fresh instance per render, because
+    // the processors carry state and renders may overlap the preview.
+    int audioChainFactoryCalls = 0;
+    app::ProjectExportEngine engine{
+        fs::path{CS_TEST_MLT_ROOT}, {},
+        [&audioChainFactoryCalls]() -> std::shared_ptr<audio_dsp::IAudioProcessor> {
+            ++audioChainFactoryCalls;
+            return nullptr;  // no RNNoise in this test build: an empty chain
+        }};
     ffmpeg_adapter::FfmpegMediaProbe probe;
     struct ProductCase final {
         edit_engine::RenderPreset preset;
@@ -296,6 +306,7 @@ TEST(ProjectExportEngineIntegrationTest,
         }
         ASSERT_EQ(state, edit_engine::RenderJobState::Completed);
         ASSERT_TRUE(fs::is_regular_file(product.destination));
+        EXPECT_EQ(audioChainFactoryCalls, static_cast<int>(&product - cases.data()) + 1);
 
         auto reopened = packages.open(packageRoot);
         ASSERT_TRUE(reopened.hasValue()) << reopened.error().message();
