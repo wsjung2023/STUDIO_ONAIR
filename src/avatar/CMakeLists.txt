@@ -33,6 +33,8 @@ cs_add_qtfree_library(cs_avatar
         CharacterAvatarRenderer.cpp
         SyntheticFaceTrackingProvider.h
         SyntheticFaceTrackingProvider.cpp
+        AudioLipSyncTrackingProvider.cpp
+        PortraitAvatarRenderer.cpp
         AvatarRenderPipeline.h
         AvatarRenderPipeline.cpp
         TrackingResult.h

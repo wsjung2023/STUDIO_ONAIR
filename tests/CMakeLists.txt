@@ -145,6 +145,8 @@ add_executable(cs_tests
     avatar/AvatarMotionNdjsonSinkTest.cpp
     avatar/FakeTrackingProviderTest.cpp
     avatar/SyntheticFaceTrackingProviderTest.cpp
+    avatar/AudioLipSyncTrackingProviderTest.cpp
+    avatar/PortraitAvatarRendererTest.cpp
     avatar/PlaceholderAvatarRendererTest.cpp
     avatar/CharacterAvatarRendererTest.cpp
     avatar/PipelineTest.cpp
