@@ -32,8 +32,20 @@ Item {
                 avatarSceneController.setAvatarEnabled(false)
             if (deviceCaptureController.cameraCanStop)
                 deviceCaptureController.setCameraEnabled(false)
+            // Audio too: nothing stays hot while the creator is on another
+            // page. Re-entry re-arms whatever they have not switched off.
+            if (deviceCaptureController.microphoneCanStop)
+                deviceCaptureController.setMicrophoneEnabled(false)
+            if (deviceCaptureController.systemAudioCanStop)
+                deviceCaptureController.setSystemAudioEnabled(false)
         }
     }
+
+    // The creator's explicit choice for each audio source. Auto-arm on entering
+    // Studio only turns on what they have not switched off themselves, so a
+    // microphone they muted is not quietly re-armed on the next visit.
+    property bool microphoneWantedByUser: true
+    property bool systemAudioWantedByUser: true
 
     // Phone layout below 600px. All automated smoke tests run at width >= 720, so
     // `compact` is always false under test and the desktop tree is what they see;
@@ -147,6 +159,15 @@ Item {
         if (visible) armLiveCapture()
     }
 
+    function setMicrophoneByUser(on) {
+        root.microphoneWantedByUser = on
+        deviceCaptureController.setMicrophoneEnabled(on)
+    }
+    function setSystemAudioByUser(on) {
+        root.systemAudioWantedByUser = on
+        deviceCaptureController.setSystemAudioEnabled(on)
+    }
+
     function armLiveCapture() {
         // Avatar discoverability: the VTuber avatar starts automatically on
         // entering Studio so creators see it immediately, instead of having to
@@ -192,8 +213,10 @@ Item {
                 }
             }
             // Microphone: pick a default device if none is selected yet, then arm
-            // it so the recording captures the creator's voice.
-            if (!deviceCaptureController.microphoneCanStop
+            // it so the recording captures the creator's voice -- unless the
+            // creator switched it off themselves.
+            if (root.microphoneWantedByUser
+                    && !deviceCaptureController.microphoneCanStop
                     && !deviceCaptureController.microphoneBusy) {
                 if (deviceCaptureController.microphonePermissionRequired) {
                     deviceCaptureController.requestMicrophonePermission()
@@ -206,15 +229,18 @@ Item {
                 }
             }
             // System audio (WASAPI loopback): captures game/video/app sound.
-            if (!deviceCaptureController.systemAudioCanStop
+            if (root.systemAudioWantedByUser
+                    && !deviceCaptureController.systemAudioCanStop
                     && !deviceCaptureController.systemAudioBusy) {
                 deviceCaptureController.setSystemAudioEnabled(true)
             }
             var screenOn = screenCaptureController.previewing
                     || screenCaptureController.canStopPreview
-            if ((screenOn && deviceCaptureController.microphoneCanStop
-                    && deviceCaptureController.systemAudioCanStop)
-                    || tries > 20) {
+            var microphoneSettled = deviceCaptureController.microphoneCanStop
+                    || !root.microphoneWantedByUser
+            var systemAudioSettled = deviceCaptureController.systemAudioCanStop
+                    || !root.systemAudioWantedByUser
+            if ((screenOn && microphoneSettled && systemAudioSettled) || tries > 20) {
                 stop()
             }
         }
@@ -962,6 +988,7 @@ Item {
                             onClicked: deviceCaptureController.requestMicrophonePermission()
                         }
                         Button {
+                            objectName: "studioMicrophoneButton"
                             Layout.fillWidth: true
                             text: deviceCaptureController.microphoneCanStop
                                   ? qsTr("Stop Mic") : qsTr("Start Mic")
@@ -969,7 +996,7 @@ Item {
                                      || (!deviceCaptureController.microphoneBusy
                                          && !deviceCaptureController.microphonePermissionRequired
                                          && deviceCaptureController.selectedMicrophoneId.length > 0)
-                            onClicked: deviceCaptureController.setMicrophoneEnabled(
+                            onClicked: root.setMicrophoneByUser(
                                            !deviceCaptureController.microphoneCanStop)
                         }
                     }
@@ -988,7 +1015,7 @@ Item {
                         enabled: deviceCaptureController.systemAudioCanStop
                                  || !deviceCaptureController.systemAudioBusy
                         Accessible.name: qsTr("Toggle system audio capture")
-                        onClicked: deviceCaptureController.setSystemAudioEnabled(
+                        onClicked: root.setSystemAudioByUser(
                                        !deviceCaptureController.systemAudioCanStop)
                     }
                     Label {
@@ -2041,7 +2068,7 @@ Item {
                                      || (!deviceCaptureController.microphoneBusy
                                          && !deviceCaptureController.microphonePermissionRequired
                                          && deviceCaptureController.selectedMicrophoneId.length > 0)
-                        onToggled: deviceCaptureController.setMicrophoneEnabled(
+                        onToggled: root.setMicrophoneByUser(
                                        !deviceCaptureController.microphoneCanStop)
                     }
                     SourceToggleChip {
@@ -2049,7 +2076,7 @@ Item {
                         on: deviceCaptureController.systemAudioCanStop
                         chipEnabled: deviceCaptureController.systemAudioCanStop
                                      || !deviceCaptureController.systemAudioBusy
-                        onToggled: deviceCaptureController.setSystemAudioEnabled(
+                        onToggled: root.setSystemAudioByUser(
                                        !deviceCaptureController.systemAudioCanStop)
                     }
                     SourceToggleChip {

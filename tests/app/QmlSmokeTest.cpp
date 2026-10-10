@@ -22,6 +22,7 @@
 #include <QAccessible>
 #include <QImage>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -32,6 +33,8 @@
 #include <QTemporaryDir>
 #include <QThread>
 #include <QUrl>
+
+#include <functional>
 #include <QVariantList>
 #include <QVariantMap>
 #include <qqml.h>
@@ -759,9 +762,9 @@ class FakeDeviceCaptureController final : public QObject {
     Q_PROPERTY(bool cameraCapturing READ cameraCapturing CONSTANT)
     Q_PROPERTY(bool microphoneCapturing READ microphoneCapturing CONSTANT)
     Q_PROPERTY(bool systemAudioCapturing READ systemAudioCapturing CONSTANT)
-    Q_PROPERTY(bool cameraCanStop READ cameraCanStop CONSTANT)
-    Q_PROPERTY(bool microphoneCanStop READ microphoneCanStop CONSTANT)
-    Q_PROPERTY(bool systemAudioCanStop READ systemAudioCanStop CONSTANT)
+    Q_PROPERTY(bool cameraCanStop READ cameraCanStop NOTIFY sourcesChanged)
+    Q_PROPERTY(bool microphoneCanStop READ microphoneCanStop NOTIFY sourcesChanged)
+    Q_PROPERTY(bool systemAudioCanStop READ systemAudioCanStop NOTIFY sourcesChanged)
     Q_PROPERTY(bool cameraBusy READ cameraBusy CONSTANT)
     Q_PROPERTY(bool microphoneBusy READ microphoneBusy CONSTANT)
     Q_PROPERTY(bool systemAudioBusy READ systemAudioBusy CONSTANT)
@@ -799,9 +802,9 @@ public:
     [[nodiscard]] bool cameraCapturing() const noexcept { return true; }
     [[nodiscard]] bool microphoneCapturing() const noexcept { return true; }
     [[nodiscard]] bool systemAudioCapturing() const noexcept { return true; }
-    [[nodiscard]] bool cameraCanStop() const noexcept { return true; }
-    [[nodiscard]] bool microphoneCanStop() const noexcept { return true; }
-    [[nodiscard]] bool systemAudioCanStop() const noexcept { return true; }
+    [[nodiscard]] bool cameraCanStop() const noexcept { return cameraOn; }
+    [[nodiscard]] bool microphoneCanStop() const noexcept { return microphoneOn; }
+    [[nodiscard]] bool systemAudioCanStop() const noexcept { return systemAudioOn; }
     [[nodiscard]] bool cameraBusy() const noexcept { return false; }
     [[nodiscard]] bool microphoneBusy() const noexcept { return false; }
     [[nodiscard]] bool systemAudioBusy() const noexcept { return false; }
@@ -830,9 +833,29 @@ public:
     Q_INVOKABLE void requestMicrophonePermission() {}
     Q_INVOKABLE void selectCamera(const QString&) {}
     Q_INVOKABLE void selectMicrophone(const QString&) {}
-    Q_INVOKABLE void setCameraEnabled(bool) {}
-    Q_INVOKABLE void setMicrophoneEnabled(bool) {}
-    Q_INVOKABLE void setSystemAudioEnabled(bool) {}
+    Q_INVOKABLE void setCameraEnabled(bool enabled) {
+        cameraOn = enabled;
+        emit sourcesChanged();
+    }
+    Q_INVOKABLE void setMicrophoneEnabled(bool enabled) {
+        microphoneOn = enabled;
+        if (enabled) ++microphoneEnableCalls;
+        emit sourcesChanged();
+    }
+    Q_INVOKABLE void setSystemAudioEnabled(bool enabled) {
+        systemAudioOn = enabled;
+        if (enabled) ++systemAudioEnableCalls;
+        emit sourcesChanged();
+    }
+
+    bool cameraOn{true};
+    bool microphoneOn{true};
+    bool systemAudioOn{true};
+    int microphoneEnableCalls{0};
+    int systemAudioEnableCalls{0};
+
+signals:
+    void sourcesChanged();
 };
 
 class FakeEditorController final : public QObject {
@@ -1704,6 +1727,90 @@ TEST(QmlSmokeTest, EditorPageProvidesCompleteAccessibleInspectorControls) {
         object->findChild<QObject*>(QStringLiteral("editorSplitShortcut"));
     ASSERT_NE(splitShortcut, nullptr);
     EXPECT_FALSE(splitShortcut->property("enabled").toBool());
+}
+
+namespace {
+// Pump the event loop until `done()` holds or `timeoutMs` passes.
+bool pumpUntil(const std::function<bool()>& done, int timeoutMs) {
+    QElapsedTimer clock;
+    clock.start();
+    while (!done()) {
+        if (clock.elapsed() > timeoutMs) return false;
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(5);
+    }
+    return true;
+}
+}  // namespace
+
+// Entering Studio arms the microphone and system audio so a take captures
+// voice. But a microphone the creator switched OFF must stay off on re-entry,
+// and leaving Studio (not recording) must stop the audio sources too -- no hot
+// microphone while the creator is on the Editor or Home page.
+TEST(QmlSmokeTest, StudioPageRespectsTheCreatorsMicrophoneChoiceAndStopsAudioOnLeave) {
+    QQmlEngine engine;
+    FakeStudioController studioController;
+    FakeScreenCaptureController screenCaptureController;
+    FakeDeviceCaptureController deviceCaptureController;
+    deviceCaptureController.cameraOn = false;
+    deviceCaptureController.microphoneOn = false;
+    deviceCaptureController.systemAudioOn = false;
+    FakeStudioWorkflowController studioWorkflowController;
+    FakeShortcutSettingsController shortcutSettingsController;
+    engine.rootContext()->setContextProperty(QStringLiteral("studioController"),
+                                             &studioController);
+    engine.rootContext()->setContextProperty(QStringLiteral("screenCaptureController"),
+                                             &screenCaptureController);
+    engine.rootContext()->setContextProperty(QStringLiteral("deviceCaptureController"),
+                                             &deviceCaptureController);
+    installAvatarController(engine);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("studioWorkflowController"), &studioWorkflowController);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("shortcutSettingsController"), &shortcutSettingsController);
+    FakeProjectController projectController;
+    engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
+                                             &projectController);
+    QQmlComponent component{
+        &engine, QUrl::fromLocalFile(QString::fromUtf8(CS_QML_SOURCE_DIR "/StudioPage.qml"))};
+    std::unique_ptr<QObject> object{component.createWithInitialProperties(
+        {{QStringLiteral("width"), 1200}, {QStringLiteral("height"), 800}})};
+    ASSERT_NE(object, nullptr) << component.errorString().toStdString();
+    // Qt 6 computes an item's effective visibility from its parent, so the
+    // page needs a parent item for visible=false/true round trips to apply.
+    QQuickWindow window;
+    window.setGeometry(0, 0, 1200, 800);
+    auto* rootItem = qobject_cast<QQuickItem*>(object.get());
+    ASSERT_NE(rootItem, nullptr);
+    rootItem->setParentItem(window.contentItem());
+
+    // Entering Studio arms both audio sources.
+    ASSERT_TRUE(pumpUntil(
+        [&] { return deviceCaptureController.microphoneOn && deviceCaptureController.systemAudioOn; },
+        3000));
+    EXPECT_EQ(deviceCaptureController.microphoneEnableCalls, 1);
+
+    // The creator switches the microphone off.
+    auto* microphoneButton =
+        object->findChild<QObject*>(QStringLiteral("studioMicrophoneButton"));
+    ASSERT_NE(microphoneButton, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(microphoneButton, "clicked"));
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(deviceCaptureController.microphoneOn);
+
+    // Leaving Studio stops system audio as well (no hot sources off-page).
+    object->setProperty("visible", false);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(deviceCaptureController.systemAudioOn);
+    EXPECT_FALSE(deviceCaptureController.microphoneOn);
+
+    // Coming back re-arms system audio but honours the creator's mic choice.
+    object->setProperty("visible", true);
+    ASSERT_TRUE(pumpUntil([&] { return deviceCaptureController.systemAudioOn; }, 3000))
+        << "visible=" << object->property("visible").toBool()
+        << " sysCalls=" << deviceCaptureController.systemAudioEnableCalls;
+    EXPECT_FALSE(pumpUntil([&] { return deviceCaptureController.microphoneOn; }, 1200));
+    EXPECT_EQ(deviceCaptureController.microphoneEnableCalls, 1);
 }
 
 TEST(QmlSmokeTest, StudioPageShowsCaptureTargetsAndTerminalError) {
