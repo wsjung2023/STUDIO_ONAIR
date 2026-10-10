@@ -70,8 +70,10 @@ recorded in `legal/THIRD_PARTY_NOTICES.md`.
 - 프로젝트 저장: 소스 분리 녹화 + SQLite/JSON/NDJSON 기반 프로젝트 패키지
 - 얼굴 추적: 현재는 OpenSeeFace(외부 Python 프로세스, UDP) 선택 사용, 기본은 합성 트래커.
   MediaPipe는 아직 연결되지 않았습니다(2026-10 진단: 아바타 기술 방향 재검토 중)
-- 아바타: 자체 소프트웨어 VRM 렌더러(.vrm/.glb 가져오기) + 그려진 2D 캐릭터. Inochi2D 런타임
-  경로는 남아 있으나 기본 번들 모델은 없습니다
+- 아바타(기본): **2.5D 초상 아바타 + 음성 립싱크** — `resources/avatar/portraits`의 초상 10종을
+  눈·입 영역 교체로 애니메이션하고, 마이크 레벨로 입을, 타이머로 깜빡임·호흡을 움직입니다
+  (`AudioLipSyncTrackingProvider`, `PortraitAvatarRenderer`). 카메라 얼굴 추적(MediaPipe, 앱 내장)은
+  다음 단계입니다. .vrm 가져오기(소프트웨어 렌더러)와 Inochi2D 경로는 선택 사항으로 남아 있습니다
 - 음성 인식: whisper.cpp (`CS_ENABLE_WHISPER`)
 - 노이즈 제거: RNNoise (`CS_ENABLE_RNNOISE`, 기본 OFF)
 
