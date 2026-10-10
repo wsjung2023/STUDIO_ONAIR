@@ -157,7 +157,10 @@ TEST(FfmpegLiveRecordingEngineTest,
 
     ASSERT_TRUE(completed.hasValue()) << completed.error().message();
     EXPECT_EQ(completed.value().trackCount, 2u);
-    EXPECT_GE(completed.value().segmentsPublished, 3u);
+    // Segments rotate every 30 s (one file per track per take, see
+    // FfmpegLiveRecordingEngine), so a ~3 s take publishes exactly one
+    // segment per track.
+    EXPECT_EQ(completed.value().segmentsPublished, 2u);
     EXPECT_EQ(completed.value().session.segmentCount(),
               completed.value().segmentsPublished);
     EXPECT_FALSE(completed.value().terminalError.has_value());
