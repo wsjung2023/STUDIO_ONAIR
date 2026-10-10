@@ -32,6 +32,10 @@ using creator::recorder::SegmentEncodeConfig;
 using creator::recorder::TrackRole;
 
 struct DecodedVideo final {
+    int colorPrimaries{AVCOL_PRI_UNSPECIFIED};
+    int colorTransfer{AVCOL_TRC_UNSPECIFIED};
+    int colorSpace{AVCOL_SPC_UNSPECIFIED};
+    int colorRange{AVCOL_RANGE_UNSPECIFIED};
     bool firstPacketIsKey{false};
     bool decodedFrame{false};
 };
@@ -81,6 +85,10 @@ Result<DecodedVideo> decodeVideo(const fs::path& path) {
     }
 
     DecodedVideo result;
+    result.colorPrimaries = input->streams[streamIndex]->codecpar->color_primaries;
+    result.colorTransfer = input->streams[streamIndex]->codecpar->color_trc;
+    result.colorSpace = input->streams[streamIndex]->codecpar->color_space;
+    result.colorRange = input->streams[streamIndex]->codecpar->color_range;
     bool sawPacket = false;
     while (av_read_frame(input, packet) >= 0) {
         if (packet->stream_index == streamIndex) {
@@ -182,6 +190,26 @@ TEST_F(FfmpegVideoSegmentEncoderTest, EncodesStandaloneMpeg4MatroskaSegment) {
     ASSERT_TRUE(decoded.hasValue()) << decoded.error().message();
     EXPECT_TRUE(decoded.value().firstPacketIsKey);
     EXPECT_TRUE(decoded.value().decodedFrame);
+}
+
+// Screen/camera frames are Rec.709 SDR and the export profile is 709. The
+// segment must say so (and be converted with the 709 matrix), otherwise
+// players and the export assume BT.601 for SD-sized tags and shift hues.
+TEST_F(FfmpegVideoSegmentEncoderTest, TagsAndConvertsOpaqueSegmentsAsRec709) {
+    auto mapper = std::make_unique<Mapper>();
+    FfmpegVideoSegmentEncoder encoder{
+        std::move(mapper), VideoEncoderOptions{.preferredEncoderNames = {"mpeg4"}}};
+    ASSERT_TRUE(encoder.start(config(path_)).hasValue());
+    ASSERT_TRUE(encoder.accept(frameAt(std::chrono::milliseconds{0}, 20)).hasValue());
+    ASSERT_TRUE(encoder.finish(creator::core::TimestampNs{std::chrono::milliseconds{33}})
+                    .hasValue());
+
+    const auto decoded = decodeVideo(path_);
+    ASSERT_TRUE(decoded.hasValue()) << decoded.error().message();
+    EXPECT_EQ(decoded.value().colorPrimaries, AVCOL_PRI_BT709);
+    EXPECT_EQ(decoded.value().colorTransfer, AVCOL_TRC_BT709);
+    EXPECT_EQ(decoded.value().colorSpace, AVCOL_SPC_BT709);
+    EXPECT_EQ(decoded.value().colorRange, AVCOL_RANGE_MPEG);
 }
 
 TEST_F(FfmpegVideoSegmentEncoderTest, MapperFailurePropagatesWithoutPublishingBytes) {

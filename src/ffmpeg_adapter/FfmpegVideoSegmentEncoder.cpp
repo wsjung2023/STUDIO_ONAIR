@@ -251,6 +251,15 @@ private:
                 static_cast<int>(options_.frameRateNumerator),
                 static_cast<int>(options_.frameRateDenominator)};
             if (!options_.preserveAlpha) {
+                // Screen/camera frames are Rec.709 SDR (the assemblers label
+                // them Rec709Sdr) and the export profile is 709. Say so in the
+                // stream, and convert with the matching matrix below; left
+                // unspecified, players and the export graph fall back to
+                // BT.601 heuristics and shift hues.
+                candidate->color_primaries = AVCOL_PRI_BT709;
+                candidate->color_trc = AVCOL_TRC_BT709;
+                candidate->colorspace = AVCOL_SPC_BT709;
+                candidate->color_range = AVCOL_RANGE_MPEG;
                 // Rate control / GOP tuning is meaningful only for the lossy
                 // delivery encoders; FFV1 is intra-only lossless.
                 candidate->bit_rate = options_.bitRate;
@@ -341,6 +350,17 @@ private:
             closeMedia();
             return core::AppError{core::ErrorCode::IoFailure,
                                   "Could not create FFmpeg BGRA converter"};
+        }
+        if (!options_.preserveAlpha) {
+            // Full-range RGB in -> limited-range BT.709 YUV out, matching the
+            // tags set on the codec context. swscale's default is BT.601.
+            if (sws_setColorspaceDetails(scaler_, sws_getCoefficients(SWS_CS_ITU709), 1,
+                                         sws_getCoefficients(SWS_CS_ITU709), 0, 0,
+                                         1 << 16, 1 << 16) < 0) {
+                closeMedia();
+                return core::AppError{core::ErrorCode::IoFailure,
+                                      "Could not configure the Rec.709 colour conversion"};
+            }
         }
         return core::ok();
     }
