@@ -7,7 +7,9 @@
 #include "app/AvatarSceneController.h"
 #include "app/DeviceCaptureController.h"
 #include "avatar/AvatarParameterMapper.h"
+#include "avatar/AudioLipSyncTrackingProvider.h"
 #include "avatar/CharacterAvatarRenderer.h"
+#include "avatar/PortraitAvatarRenderer.h"
 #include "avatar/IAvatarRenderer.h"
 #include "avatar/PlaceholderAvatarRenderer.h"
 #include "avatar/SyntheticFaceTrackingProvider.h"
@@ -16,6 +18,11 @@
 #include "avatar/vrm/GlbContainer.h"
 #include "avatar/vrm/GltfDocument.h"
 #include "avatar/vrm/VrmAvatarRenderer.h"
+
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSettings>
 #include "app/LiveRecordingController.h"
 #include "app/LiveRecordingEngineFactory.h"
 #include "app/ScreenCaptureController.h"
@@ -339,6 +346,73 @@ int main(int argc, char* argv[]) {
         }
     }
     if (!avatarRenderer) {
+        // Default avatar: a 2.5D portrait (three aligned images, eye/mouth region
+        // swaps) -- the same approach as a video-meeting avatar. Picked by the
+        // "avatar/portrait" setting; the first catalogue entry otherwise.
+        const std::filesystem::path appDir{
+            QGuiApplication::applicationDirPath().toStdWString()};
+        const auto portraitsDir = appDir / L"resources" / L"avatar" / L"portraits";
+        QFile manifestFile(QString::fromStdWString((portraitsDir / L"manifest.json").wstring()));
+        if (manifestFile.open(QIODevice::ReadOnly)) {
+            const auto manifest = QJsonDocument::fromJson(manifestFile.readAll()).object();
+            const auto portraits = manifest.value(QStringLiteral("portraits")).toArray();
+            QSettings settings;
+            const auto wanted =
+                settings.value(QStringLiteral("avatar/portrait"), QStringLiteral("human-amber"))
+                    .toString();
+            QJsonObject chosen;
+            for (const auto& entry : portraits) {
+                if (entry.toObject().value(QStringLiteral("id")).toString() == wanted) {
+                    chosen = entry.toObject();
+                }
+            }
+            if (chosen.isEmpty() && !portraits.isEmpty()) chosen = portraits.first().toObject();
+            if (!chosen.isEmpty()) {
+                const auto id = chosen.value(QStringLiteral("id")).toString();
+                const auto dir = portraitsDir / id.toStdWString();
+                const auto decode = [&dir](const wchar_t* name,
+                                           std::vector<std::uint8_t>& out,
+                                           std::uint32_t& w, std::uint32_t& h) {
+                    QImage image(QString::fromStdWString((dir / name).wstring()));
+                    if (image.isNull()) return false;
+                    image = image.convertToFormat(QImage::Format_ARGB32);  // BGRA bytes, straight alpha
+                    w = static_cast<std::uint32_t>(image.width());
+                    h = static_cast<std::uint32_t>(image.height());
+                    out.assign(image.constBits(), image.constBits() + image.sizeInBytes());
+                    return true;
+                };
+                creator::avatar::PortraitLayers layers;
+                std::uint32_t w1 = 0, h1 = 0, w2 = 0, h2 = 0, w3 = 0, h3 = 0;
+                const auto region = [&chosen](const char* key) {
+                    const auto a = chosen.value(QLatin1String(key)).toArray();
+                    return creator::avatar::PortraitRegion{
+                        static_cast<float>(a.at(0).toDouble()), static_cast<float>(a.at(1).toDouble()),
+                        static_cast<float>(a.at(2).toDouble()), static_cast<float>(a.at(3).toDouble())};
+                };
+                if (decode(L"neutral.png", layers.neutralBgra, w1, h1) &&
+                    decode(L"blink.png", layers.blinkBgra, w2, h2) &&
+                    decode(L"speak.png", layers.speakBgra, w3, h3) && w1 == w2 && w2 == w3 &&
+                    h1 == h2 && h2 == h3) {
+                    layers.width = w1;
+                    layers.height = h1;
+                    layers.eyes = region("eyes");
+                    layers.mouth = region("mouth");
+                    if (auto portrait = creator::avatar::PortraitAvatarRenderer::create(
+                            std::move(layers), kAvatarWidth, kAvatarHeight);
+                        portrait.hasValue()) {
+                        avatarRenderer = std::move(portrait).value();
+                        qInfo().noquote() << "Avatar: portrait" << id;
+                    } else {
+                        qWarning().noquote() << "Portrait avatar unavailable:"
+                                             << QString::fromStdString(portrait.error().message());
+                    }
+                } else {
+                    qWarning().noquote() << "Portrait avatar images missing or mismatched for" << id;
+                }
+            }
+        }
+    }
+    if (!avatarRenderer) {
         // Default to a bottom-right corner overlay so the live avatar behaves
         // like a picture-in-picture over the screen; 정면(front) is opt-in via
         // the placement toggle.
@@ -390,13 +464,14 @@ int main(int argc, char* argv[]) {
                 << QString::fromStdString(real.error().message());
         }
     }
+    creator::avatar::AudioLipSyncTrackingProvider* lipSync = nullptr;
     if (!avatarProvider) {
-        avatarProvider = std::make_unique<creator::avatar::SyntheticFaceTrackingProvider>();
-        // The synthetic tracker is a self-driving idle animation, not a real
-        // camera feed. Keep it "live" unconditionally so the avatar always
-        // breathes/blinks/sways -- otherwise, on Windows (which has no in-app
-        // camera capture) the avatar's expression phase would freeze and it would
-        // look like a dead, motionless picture.
+        // Voice lip-sync: the mouth follows the microphone, the eyes blink and
+        // the head breathes on their own. Reacts to the creator without a
+        // camera or a model. Always "live" so the idle motion never freezes.
+        auto voice = std::make_unique<creator::avatar::AudioLipSyncTrackingProvider>();
+        lipSync = voice.get();
+        avatarProvider = std::move(voice);
         avatarCameraLive = [] { return true; };
     }
     creator::app::AvatarSceneController avatarSceneController{
@@ -405,6 +480,17 @@ int main(int argc, char* argv[]) {
         kAvatarHeight, std::move(avatarCameraLive),
         avatarRealModel, avatarRealTracking, avatarCharacterControl,
         avatarInochiControl, &app};
+    if (lipSync != nullptr) {
+        // Feed the microphone level the device controller already measures
+        // every poll (UI thread) into the tracker (atomic). Scoped to the
+        // avatar controller's lifetime, which owns the provider.
+        QObject::connect(&deviceCaptureController,
+                         &creator::app::DeviceCaptureController::statsChanged,
+                         &avatarSceneController, [lipSync, &deviceCaptureController] {
+                             lipSync->setAudioLevelDbfs(static_cast<float>(
+                                 deviceCaptureController.microphoneRmsDbfs()));
+                         });
+    }
 
     auto recordingStore =
         std::make_shared<creator::project_store::ProjectPackageStore>();

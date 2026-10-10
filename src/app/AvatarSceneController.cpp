@@ -1,5 +1,7 @@
 #include "app/AvatarSceneController.h"
 
+#include "avatar/AudioLipSyncTrackingProvider.h"
+
 #include "avatar/AvatarMotionSample.h"
 #include "avatar/AvatarRenderFrame.h"
 #include "avatar/vrm/GlbContainer.h"
@@ -120,13 +122,21 @@ AvatarSceneController::AvatarSceneController(
             settings.value(QStringLiteral("avatar/posX"), posX_).toDouble(),
             settings.value(QStringLiteral("avatar/posY"), posY_).toDouble());
     }
-    const QString trackingKind = usingRealTracking
-                                     ? tr("live face tracking")
-                                     : tr("synthetic (fake) tracking");
+    // Say what really drives the avatar: a real face tracker, the voice
+    // lip-sync tracker (mouth from the microphone, auto blink/breathing), or
+    // the synthetic fake that reads nothing at all.
+    const bool voiceLipSync =
+        provider_ && provider_->providerId().value() ==
+                         avatar::AudioLipSyncTrackingProvider::kProviderId;
+    const QString trackingKind = usingRealTracking ? tr("live face tracking")
+                                 : voiceLipSync    ? tr("voice lip-sync")
+                                                   : tr("synthetic (fake) tracking");
+    // Without a real model or the drawn-character control the app renders the
+    // 2.5D portrait (tests may still hand in the placeholder renderer).
     const QString modelKind =
         usingRealModel ? tr("Inochi2D model")
                        : (characterControl_ != nullptr ? tr("built-in character")
-                                                       : tr("placeholder avatar"));
+                                                       : tr("portrait avatar"));
     trackingLabel_ = tr("%1 · %2").arg(trackingKind, modelKind);
     status_ = tr("Avatar idle");
 }

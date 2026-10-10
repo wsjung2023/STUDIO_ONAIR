@@ -484,6 +484,19 @@ endif()
 # executable. Only staged when a puppet is actually bundled under
 # resources/avatar; the default build ships the first-party drawn characters
 # (CharacterAvatarRenderer) and stages nothing here.
+
+# The 2.5D portrait avatars (resources/avatar/portraits) are the default avatar:
+# stage them beside the exe and ship them.
+add_custom_command(TARGET creator_studio POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/avatar/portraits"
+        "$<TARGET_FILE_DIR:creator_studio>/resources/avatar/portraits"
+    COMMENT "Staging portrait avatars (resources/avatar/portraits)"
+)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/resources/avatar/portraits/"
+    DESTINATION bin/resources/avatar/portraits
+)
+
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/avatar/model.inp")
     add_custom_command(TARGET creator_studio POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory

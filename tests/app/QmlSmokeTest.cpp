@@ -9,6 +9,7 @@
 #include "domain/StudioScene.h"
 #include "avatar/AvatarParameterMapper.h"
 #include "avatar/PlaceholderAvatarRenderer.h"
+#include "avatar/AudioLipSyncTrackingProvider.h"
 #include "avatar/SyntheticFaceTrackingProvider.h"
 
 #include "core/Timebase.h"
@@ -2380,6 +2381,22 @@ TEST(QmlSmokeTest, StudioPageProvidesModelDrivenAccessibleWorkflowAtAllSizes) {
                              .toBool());
         }
     }
+}
+
+// The status text must say what really drives the avatar: the voice
+// lip-sync tracker is neither "live face tracking" nor the synthetic fake.
+TEST(AvatarSceneControllerLabelTest, NamesVoiceLipSyncTrackingHonestly) {
+    auto mapper = creator::avatar::AvatarParameterMapper::create(
+                      creator::avatar::placeholderAvatarBindings())
+                      .value();
+    creator::app::AvatarSceneController controller{
+        std::make_unique<creator::avatar::AudioLipSyncTrackingProvider>(),
+        std::move(mapper),
+        std::make_unique<creator::avatar::PlaceholderAvatarRenderer>(64, 48), 64, 48,
+        [] { return true; }, false, false, nullptr, nullptr, nullptr};
+    EXPECT_TRUE(controller.trackingLabel().contains(QStringLiteral("voice lip-sync")))
+        << controller.trackingLabel().toStdString();
+    EXPECT_FALSE(controller.trackingLabel().contains(QStringLiteral("fake")));
 }
 
 TEST(AvatarImportTest, RejectsAFileThatIsNotAValidModel) {
