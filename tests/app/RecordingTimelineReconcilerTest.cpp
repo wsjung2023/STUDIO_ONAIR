@@ -259,6 +259,17 @@ protected:
     mutable ProjectPackageStore packages_;
 };
 
+// The importer and the editor open the same edit log. SqliteTimelineStore
+// validates the replayed history against the committed checkpoint under the
+// limit it is given, so two different limits made a project that had seen
+// more than 100 edits look corrupt to whichever side used the smaller one.
+TEST_F(RecordingTimelineReconcilerTest, DefaultsToTheSameHistoryLimitAsTheEditor) {
+    creator::fakes::FakeMediaProbe probe;
+    RecordingTimelineReconciler reconciler{
+        probe, [] { return std::string{"event"}; }, [] { return fixedUtc(); }};
+    EXPECT_EQ(reconciler.historyLimit(), creator::app::kTimelineEditHistoryLimit);
+}
+
 TEST_F(RecordingTimelineReconcilerTest,
        ImportsOnceAndReturnsPersistedResultWithoutProbingAgain) {
     creator::fakes::FakeMediaProbe probe;

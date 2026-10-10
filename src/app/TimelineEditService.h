@@ -19,6 +19,12 @@
 
 namespace creator::app {
 
+/// The one undo-history depth every opener of a project's edit log must use.
+/// The store validates the replayed log against the committed checkpoint under
+/// the limit it is handed, so the editor and the recording importer have to
+/// agree or one of them reports a healthy project as corrupt.
+inline constexpr std::size_t kTimelineEditHistoryLimit = 100;
+
 class TimelineEditService final {
 public:
     using EventIdFactory = std::function<std::string()>;

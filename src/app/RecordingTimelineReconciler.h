@@ -3,6 +3,7 @@
 #include "core/Result.h"
 #include "core/Utc.h"
 #include "domain/Identifiers.h"
+#include "app/TimelineEditService.h"
 #include "media/IMediaProbe.h"
 
 #include <cstddef>
@@ -41,7 +42,7 @@ public:
 
     RecordingTimelineReconciler(media::IMediaProbe& mediaProbe,
                                 EventIdFactory eventIdFactory, Clock clock,
-                                std::size_t historyLimit = 1'000)
+                                std::size_t historyLimit = kTimelineEditHistoryLimit)
         : mediaProbe_(&mediaProbe),
           eventIdFactory_(std::move(eventIdFactory)),
           clock_(std::move(clock)),
@@ -50,6 +51,7 @@ public:
     [[nodiscard]] core::Result<RecordingReconcileResult> reconcile(
         const std::filesystem::path& packageRoot,
         const domain::SessionId& sessionId) override;
+    [[nodiscard]] std::size_t historyLimit() const noexcept { return historyLimit_; }
 
 private:
     media::IMediaProbe* mediaProbe_;

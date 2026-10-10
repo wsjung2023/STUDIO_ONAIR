@@ -347,7 +347,8 @@ void EditorSessionWorker::openProject(quint64 generation,
     }
 
     auto service = TimelineEditService::open(
-        *timelineStore_, 100, [] { return core::generateUuidV4(); },
+        *timelineStore_, kTimelineEditHistoryLimit,
+        [] { return core::generateUuidV4(); },
         [] { return core::Utc::now(); });
     if (!service.hasValue()) {
         publishError(generation, service.error());

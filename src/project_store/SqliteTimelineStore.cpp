@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <string>
@@ -1024,9 +1025,11 @@ Result<domain::EditHistory> SqliteTimelineStore::decodeHistory(
         return AppError{ErrorCode::InvalidArgument,
                         "edit history limit must be positive"};
     }
-    if (persisted.historyCount > limit) {
-        return corrupt("history count exceeds configured limit");
-    }
+    // The checkpoint was committed under whatever limit the writer used.
+    // Replay with that (possibly larger) limit so the audit log can be
+    // validated against it; the surplus oldest entries are dropped afterwards
+    // instead of being reported as corruption.
+    const std::size_t replayLimit = std::max(limit, persisted.historyCount);
 
     std::vector<domain::EditCommandRecord> records;
     std::size_t cursor = 0;
@@ -1040,7 +1043,7 @@ Result<domain::EditHistory> SqliteTimelineStore::decodeHistory(
                 }
                 records.push_back(event.command);
                 cursor = records.size();
-                if (records.size() > limit) {
+                if (records.size() > replayLimit) {
                     records.erase(records.begin());
                     --cursor;
                 }
@@ -1104,8 +1107,24 @@ Result<domain::EditHistory> SqliteTimelineStore::decodeHistory(
     if (reconstructedAtCursor != persisted.timeline) {
         return corrupt("edit history does not reconstruct the persisted timeline");
     }
+    // Trim to this reader's limit: drop the oldest entries, keep the cursor on
+    // the same command. A clean cursor that pointed into the dropped prefix is
+    // no longer reachable, so the session simply starts out dirty.
+    auto restoredCursor = cursor;
+    auto cleanCursor = persisted.cleanCursor;
+    if (commands.size() > limit) {
+        const auto drop = commands.size() - limit;
+        commands.erase(commands.begin(),
+                       commands.begin() + static_cast<std::ptrdiff_t>(drop));
+        restoredCursor = cursor >= drop ? cursor - drop : 0;
+        if (cleanCursor.has_value() && *cleanCursor >= drop) {
+            *cleanCursor -= drop;
+        } else {
+            cleanCursor.reset();
+        }
+    }
     return domain::EditHistory::restore(
-        limit, std::move(commands), cursor, persisted.cleanCursor);
+        limit, std::move(commands), restoredCursor, cleanCursor);
 }
 
 Result<void> SqliteTimelineStore::commitEdit(const TimelineCommit& commit) {

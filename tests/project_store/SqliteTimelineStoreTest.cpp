@@ -402,6 +402,54 @@ TEST_F(SqliteTimelineStoreTest, RestoresImportRecordingHistoryAcrossReopen) {
     EXPECT_EQ(session.value().persisted.timeline, snapshot);
 }
 
+// A project whose edit log was committed under a larger history limit (an
+// older build, or a different code path) must still open: the oldest entries
+// beyond the limit are dropped, never reported as corruption.
+TEST_F(SqliteTimelineStoreTest, LoadsHistoryCommittedUnderALargerLimitByDroppingTheOldest) {
+    const auto base = populatedTimeline();
+    auto snapshot = base;
+    {
+        auto timelineStore = store();
+        ASSERT_TRUE(timelineStore.putAsset(videoAsset()).hasValue());
+        ASSERT_TRUE(timelineStore.putAsset(audioAsset()).hasValue());
+        ASSERT_TRUE(timelineStore.createTimeline(base).hasValue());
+        for (std::size_t step = 1; step <= 3; ++step) {
+            SetVisualTransformCommand command{
+                CommandId::create("transform-" + std::to_string(step)).value(),
+                TrackId::create("v1").value(), ClipId::create("video-clip").value(),
+                VisualTransform::create(0.1 * static_cast<double>(step), 0.2, 0.7, 0.6,
+                                        1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1)
+                    .value()};
+            ASSERT_TRUE(command.execute(snapshot).hasValue());
+            ASSERT_TRUE(timelineStore.commitEdit(TimelineCommit{
+                .snapshot = snapshot,
+                .expectedRevision = static_cast<std::int64_t>(step - 1),
+                .event = EditEventRecord{
+                    .eventId = "transform-event-" + std::to_string(step),
+                    .kind = EditEventKind::Apply,
+                    .command = command.record(),
+                    .createdAt = utc("2026-07-17T00:00:01Z")},
+                .historyCount = step,
+                .historyCursor = step,
+                .cleanCursor = std::size_t{0}}).hasValue());
+        }
+    }
+
+    auto reopened = store();
+    auto session = reopened.loadEditSession(2);
+
+    ASSERT_TRUE(session.hasValue()) << session.error().message();
+    EXPECT_EQ(session.value().persisted.timeline, snapshot);
+    auto& history = session.value().history;
+    EXPECT_EQ(history.size(), 2U);
+    EXPECT_EQ(history.cursor(), 2U);
+    // The clean state (before the first edit) is no longer reachable.
+    EXPECT_FALSE(history.cleanCursor().has_value());
+    ASSERT_TRUE(history.undo(session.value().persisted.timeline).hasValue());
+    ASSERT_TRUE(history.undo(session.value().persisted.timeline).hasValue());
+    EXPECT_FALSE(history.canUndo());
+}
+
 TEST_F(SqliteTimelineStoreTest, RejectsCorruptImportRecordingUndoPayload) {
     auto base = Timeline::create(TimelineId::create("main").value(), "Main",
                                  FrameRate::create(60000, 1001).value())
